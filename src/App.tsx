@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Truck, 
   Plus, 
   X, 
   RefreshCw, 
@@ -26,13 +25,33 @@ import {
   Menu,
   ChevronRight,
   Clock,
-  AlertTriangle
+  AlertTriangle,
+  Truck
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
 import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+// YENİ TAZEYOL DAİRESEL LOGO BİLEŞENİ
+function TazeyolLogo({ size = 24 }: { size?: number }) {
+  return (
+    <svg 
+      xmlns="http://www.w3.org/2000/svg" 
+      viewBox="0 0 512 512" 
+      width={size} 
+      height={size}
+      className="shrink-0"
+    >
+      <rect width="512" height="512" rx="110" fill="#0b1426"/>
+      <circle cx="256" cy="256" r="62" fill="#00a8fe"/>
+      <circle cx="256" cy="256" r="112" fill="none" stroke="#00a8fe" strokeWidth="28"/>
+      <path d="M 116 142 A 176 176 0 0 1 420 202" fill="none" stroke="#96dffe" strokeWidth="28" strokeLinecap="butt"/>
+      <path d="M 92 310 A 176 176 0 0 0 396 370" fill="none" stroke="#96dffe" strokeWidth="28" strokeLinecap="butt"/>
+    </svg>
+  );
+}
 
 export default function App() {
   // GÜVENLİK VE OTURUM
@@ -62,7 +81,7 @@ export default function App() {
     setIsAuthenticated(false);
   };
 
-  // YAN MENÜ (SIDEBAR / HAMBURGER) STATE
+  // YAN MENÜ STATE
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'subcontractors' | 'employees' | 'fleet' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
   
@@ -561,8 +580,8 @@ export default function App() {
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 font-sans text-slate-800">
         <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-2xl border border-slate-100">
           <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-blue-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
-              <Truck className="w-8 h-8" />
+            <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center drop-shadow-md">
+              <TazeyolLogo size={64} />
             </div>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">TAZEYOL ERP</h1>
             <p className="text-xs text-slate-500 mt-1.5 flex items-center justify-center gap-1">
@@ -727,7 +746,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
-      {/* ÜST BAR (SADE VE NET) */}
+      {/* ÜST BAR (YENİ LOGOLU VE SADE) */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -739,9 +758,10 @@ export default function App() {
               <span>MENÜ</span>
             </button>
 
-            <div className="flex items-center gap-2 border-l border-slate-200 pl-3">
-              <div className="bg-blue-600 text-white p-2 rounded-xl">
-                <Truck className="w-4 h-4" />
+            {/* YENİ LOGO VE BAŞLIK */}
+            <div className="flex items-center gap-2.5 border-l border-slate-200 pl-3">
+              <div className="rounded-xl overflow-hidden shadow-sm flex items-center justify-center">
+                <TazeyolLogo size={34} />
               </div>
               <span className="font-bold text-base text-slate-900 tracking-tight">TAZEYOL ERP</span>
             </div>
@@ -761,7 +781,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* SOLDAN AÇILIR ÇEKMECE MENÜ (İŞLEM BUTONLARI BURADA) */}
+      {/* SOLDAN AÇILIR ÇEKMECE MENÜ */}
       {isSidebarOpen && (
         <div className="fixed inset-0 z-50 flex">
           <div 
@@ -772,9 +792,7 @@ export default function App() {
           <div className="relative w-80 bg-white h-full shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-200">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="bg-blue-600 text-white p-2 rounded-xl">
-                  <Truck className="w-5 h-5" />
-                </div>
+                <TazeyolLogo size={36} />
                 <div>
                   <h3 className="font-bold text-slate-900 text-sm">TAZEYOL ERP</h3>
                   <span className="text-[11px] text-slate-400">Yönetim & Operasyon</span>
@@ -787,7 +805,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* MENÜ İÇİ HIZLI AKSİYON BUTONLARI */}
+            {/* MENÜ İÇİ HIZLI İŞLEM BUTONLARI */}
             <div className="p-4 border-b border-slate-100 space-y-2 bg-slate-50">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Hızlı İşlemler</span>
               <button 
@@ -863,7 +881,7 @@ export default function App() {
         {/* 1. GENEL & FİNANS KOKPİTİ */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            {/* DÖRT ANA FİNANSAL KART (DOĞRUDAN EN TEPEDE) */}
+            {/* DÖRT ANA FİNANSAL KART */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
@@ -980,7 +998,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. PERSONEL & BORDRO (KOMPAKT VE NET TABLO) */}
+        {/* 2. PERSONEL & BORDRO */}
         {activeTab === 'employees' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
