@@ -9,11 +9,7 @@ import {
   Lock,
   LogOut,
   ShieldCheck,
-  Edit2,
-  Calendar,
-  Fuel,
-  Radio,
-  FileText
+  Edit2
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -120,7 +116,7 @@ export default function App() {
     }
   }, [isAuthenticated]);
 
-  // TÜRKÇE PARA & SAYI TEMİZLEYİCİ
+  // PARA FORMATI
   const cleanNumber = (val: any): number => {
     if (val === null || val === undefined) return 0;
     if (typeof val === 'number') return val;
@@ -138,7 +134,7 @@ export default function App() {
     return isNaN(parsed) ? 0 : parsed;
   };
 
-  // KALAN GÜN VE MUAYENE DURUMU HESAPLAYICI
+  // KALAN GÜN VE MUAYENE HESABI
   const calculateDaysLeft = (targetDateStr: string | null) => {
     if (!targetDateStr) return { text: 'Belirtilmedi', color: 'text-slate-400 bg-slate-100' };
     const target = new Date(targetDateStr).getTime();
@@ -154,7 +150,6 @@ export default function App() {
     }
   };
 
-  // ARAÇ DÜZENLEME PENCERESİNİ AÇMA
   const openEditVehicleModal = (v: any) => {
     setEditingVehicleId(v.id);
     setVehicleFormData({
@@ -174,7 +169,6 @@ export default function App() {
     setIsVehicleModalOpen(true);
   };
 
-  // YENİ ARAÇ VEYA GÜNCELLEME KAYDI
   const handleSaveVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vehicleFormData.plateNumber.trim()) {
@@ -200,12 +194,10 @@ export default function App() {
       };
 
       if (editingVehicleId) {
-        // Güncelleme
         const { error } = await supabase.from('vehicles').update(payload).eq('id', editingVehicleId);
         if (error) throw error;
         alert('Araç bilgileri güncellendi!');
       } else {
-        // Yeni Ekleme
         const { error } = await supabase.from('vehicles').insert([payload]);
         if (error) throw error;
         alert('Yeni araç filoya eklendi!');
@@ -221,7 +213,6 @@ export default function App() {
     }
   };
 
-  // TOPLU SATIŞ EXCEL'İ YÜKLEME
   const handleDirectExcelImport = async (file: File) => {
     setIsImportingExcel(true);
     const reader = new FileReader();
@@ -287,7 +278,6 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TEKİL GİRİŞ KAYDET (MÜŞTERİ TAHSİLATI / TAŞERON / GİDERLER)
   const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.amount) {
@@ -358,7 +348,6 @@ export default function App() {
     }
   };
 
-  // BANKA TALİMATI EXCEL ÇIKTISI
   const handleExportBankExcel = () => {
     const pendingPayments: any[] = [];
 
@@ -406,7 +395,6 @@ export default function App() {
     XLSX.writeFile(wb, `Banka_Toplu_Odeme_${todayStr}.xlsx`);
   };
 
-  // GİRİŞ EKRANI
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 font-sans text-slate-800">
@@ -467,7 +455,6 @@ export default function App() {
     );
   }
 
-  // GERÇEK VERİTABANI HESAPLAMALARI
   const realSalesTotal = dbInvoices
     .filter(i => i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
@@ -496,7 +483,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
-      {/* ÜST BAŞLIK */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -542,7 +528,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* MENÜ TABLARI */}
         <div className="max-w-7xl mx-auto px-4 flex gap-8 text-sm font-medium border-t border-slate-100">
           <button onClick={() => setActiveTab('dashboard')} className={`py-3 border-b-2 ${activeTab === 'dashboard' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
             Genel Kokpit & Finans
@@ -565,7 +550,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
@@ -653,12 +637,12 @@ export default function App() {
           </div>
         )}
 
-        {/* ARAÇ FİLOSU & DETAYLI MUAYENE TABLOSU */}
+        {/* ARAÇ FİLOSU TABLOSU */}
         {activeTab === 'fleet' && (
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Alkan & Tazeyol Araç Filosu ({dbVehicles.length} Araç)</h3>
+                <h3 className="font-bold text-lg text-slate-900">Araç Filosu & Muayene Takibi ({dbVehicles.length} Araç)</h3>
                 <p className="text-xs text-slate-500 mt-1">Sürücü, marka, muayene kalan gün ve yakıt otomasyon dökümü.</p>
               </div>
               <button 
@@ -881,7 +865,7 @@ export default function App() {
         )}
       </main>
 
-      {/* ARAÇ EKLEME / DÜZENLEME PENCERESİ */}
+      {/* ARAÇ EKLEME / DÜZENLEME MODAL */}
       {isVehicleModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
@@ -1017,7 +1001,7 @@ export default function App() {
         </div>
       )}
 
-      {/* İŞLEM / FATURA GİRİŞ PENCERESİ */}
+      {/* İŞLEM / FATURA GİRİŞ MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100">
