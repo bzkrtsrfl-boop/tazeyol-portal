@@ -16,7 +16,12 @@ import {
   Users,
   Coins,
   Receipt,
-  FileCheck2
+  FileCheck2,
+  UserCheck,
+  CreditCard,
+  DollarSign,
+  ArrowDownCircle,
+  Award
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -53,13 +58,35 @@ export default function App() {
   };
 
   // PORTAL SEKMELERİ
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'subcontractors' | 'fleet' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'subcontractors' | 'employees' | 'fleet' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
   
   // Modal State'leri
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isImportingExcel, setIsImportingExcel] = useState(false);
   const [isImportingSubcontractors, setIsImportingSubcontractors] = useState(false);
+
+  // Personel Ekleme Modal
+  const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
+  const [employeeFormData, setEmployeeFormData] = useState({
+    fullName: '',
+    roleTitle: 'Tır Kaptanı',
+    baseSalary: '',
+    phone: '',
+    iban: ''
+  });
+
+  // Avans & Ödeme Modal State
+  const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
+  const [advanceFormData, setAdvanceFormData] = useState({
+    targetType: 'subcontractor', // 'subcontractor' | 'employee'
+    targetName: '',
+    paymentType: 'advance', // 'advance' | 'interim' | 'bonus' | 'special_bonus' | 'expense_reimbursement'
+    totalAmount: '',
+    installments: '1',
+    notes: '',
+    issueDate: new Date().toISOString().split('T')[0]
+  });
 
   // Araç Ekleme & Düzenleme Modal State
   const [isVehicleModalOpen, setIsVehicleModalOpen] = useState(false);
@@ -97,6 +124,8 @@ export default function App() {
 
   const [dbVehicles, setDbVehicles] = useState<any[]>([]);
   const [dbInvoices, setDbInvoices] = useState<any[]>([]);
+  const [dbEmployees, setDbEmployees] = useState<any[]>([]);
+  const [dbAdvances, setDbAdvances] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // SUPABASE'DEN VERİLERİ ÇEKME
@@ -104,15 +133,14 @@ export default function App() {
     setLoading(true);
     try {
       const { data: vData } = await supabase.from('vehicles').select('*').order('id', { ascending: true });
-      const { data: invData, error: invErr } = await supabase
-        .from('invoices')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (invErr) console.error('Fatura çekme hatası:', invErr);
+      const { data: invData } = await supabase.from('invoices').select('*').order('created_at', { ascending: false });
+      const { data: empData } = await supabase.from('employees').select('*').order('id', { ascending: true });
+      const { data: advData } = await supabase.from('advance_payments').select('*').order('created_at', { ascending: false });
 
       if (vData) setDbVehicles(vData);
       if (invData) setDbInvoices(invData);
+      if (empData) setDbEmployees(empData);
+      if (advData) setDbAdvances(advData);
     } catch (err) {
       console.error('Yükleme hatası:', err);
     } finally {
@@ -160,66 +188,106 @@ export default function App() {
     }
   };
 
-  const openEditVehicleModal = (v: any) => {
-    setEditingVehicleId(v.id);
-    setVehicleFormData({
-      plateNumber: v.plate_number || '',
-      driverName: v.driver_name || '',
-      brandModel: v.brand_model || '',
-      documentIncluded: v.document_included || 'VAR',
-      trackingSystem: v.tracking_system || 'Var',
-      fuelSystem: v.fuel_system || 'UTTS',
-      hgsSystem: v.hgs_system || 'SHELL',
-      nextInspectionDate: v.next_inspection_date || '',
-      insuranceCompany: v.insurance_company || '',
-      insuranceDate: v.insurance_date || '',
-      vehicleType: v.vehicle_type || 'Kamyon Frigo (10 Palet)',
-      ownershipType: v.ownership_type || 'Öz Mal'
-    });
-    setIsVehicleModalOpen(true);
+  // YENİ PERSONEL EKLEME
+  const handleSaveEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!employeeFormData.fullName.trim()) return;
+
+    try {
+      const { error } = await supabase.from('employees').insert([{
+        full_name: employeeFormData.fullName.trim(),
+        role_title: employeeFormData.roleTitle.trim(),
+        base_salary: cleanNumber(employeeFormData.baseSalary),
+        phone: employeeFormData.phone.trim(),
+        iban: employeeFormData.iban.trim()
+      }]);
+
+      if (error) throw error;
+      alert('Personel başarıyla kaydedildi!');
+      setIsEmployeeModalOpen(false);
+      setEmployeeFormData({ fullName: '', roleTitle: 'Tır Kaptanı', baseSalary: '', phone: '', iban: '' });
+      loadPortalData();
+    } catch (err: any) {
+      alert('Personel ekleme hatası: ' + err.message);
+    }
   };
 
-  const handleSaveVehicle = async (e: React.FormEvent) => {
+  // AVANS / ARA ÖDEME / PRİM KAYDETME
+  const handleSaveAdvancePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!vehicleFormData.plateNumber.trim()) {
-      alert('Lütfen araç plakasını giriniz.');
+    if (!advanceFormData.targetName.trim() || !advanceFormData.totalAmount) {
+      alert('Lütfen kişi/firma adı ve tutar giriniz.');
       return;
     }
 
-    setIsSavingVehicle(true);
     try {
-      const payload = {
-        plate_number: vehicleFormData.plateNumber.trim().toUpperCase(),
-        driver_name: vehicleFormData.driverName.trim(),
-        brand_model: vehicleFormData.brandModel.trim(),
-        document_included: vehicleFormData.documentIncluded,
-        tracking_system: vehicleFormData.trackingSystem,
-        fuel_system: vehicleFormData.fuelSystem,
-        hgs_system: vehicleFormData.hgsSystem,
-        next_inspection_date: vehicleFormData.nextInspectionDate || null,
-        insurance_company: vehicleFormData.insuranceCompany.trim() || null,
-        insurance_date: vehicleFormData.insuranceDate || null,
-        vehicle_type: vehicleFormData.vehicleType,
-        ownership_type: vehicleFormData.ownershipType
-      };
+      const amt = cleanNumber(advanceFormData.totalAmount);
+      const inst = parseInt(advanceFormData.installments) || 1;
 
-      if (editingVehicleId) {
-        const { error } = await supabase.from('vehicles').update(payload).eq('id', editingVehicleId);
-        if (error) throw error;
-        alert('Araç bilgileri güncellendi!');
-      } else {
-        const { error } = await supabase.from('vehicles').insert([payload]);
-        if (error) throw error;
-        alert('Yeni araç filoya eklendi!');
+      let documentUrl: string | null = null;
+      if (selectedFile) {
+        const fileExt = selectedFile.name.split('.').pop();
+        const fileName = `adv_${Date.now()}.${fileExt}`;
+        const { data: uploadData } = await supabase.storage.from('invoice_files').upload(fileName, selectedFile);
+        if (uploadData) {
+          const { data: pUrl } = supabase.storage.from('invoice_files').getPublicUrl(fileName);
+          documentUrl = pUrl?.publicUrl || null;
+        }
       }
 
-      setIsVehicleModalOpen(false);
-      setEditingVehicleId(null);
+      // 1. Avans/Ödeme tablosuna işle
+      const { error: advErr } = await supabase.from('advance_payments').insert([{
+        target_type: advanceFormData.targetType,
+        target_id: advanceFormData.targetName,
+        target_name: advanceFormData.targetName,
+        payment_type: advanceFormData.paymentType,
+        total_amount: amt,
+        total_installments: inst,
+        remaining_amount: amt,
+        issue_date: advanceFormData.issueDate,
+        document_url: documentUrl,
+        notes: advanceFormData.notes
+      }]);
+
+      if (advErr) throw advErr;
+
+      // 2. Kasadan düşmesi için faturaya/gidere ekle
+      await supabase.from('invoices').insert([{
+        invoice_no: `AVN-${Date.now().toString().slice(-6)}`,
+        direction: 'incoming',
+        category: advanceFormData.targetType === 'employee' ? 'salary_payroll' : 'subcontractor_invoice',
+        total_amount: amt,
+        issue_date: advanceFormData.issueDate,
+        due_date: advanceFormData.issueDate,
+        status: 'paid', // Ödendiği için kasadan düşecek
+        document_url: documentUrl
+      }]);
+
+      alert('Ödeme / Avans başarıyla işlendi ve kasadan düşürüldü!');
+      setIsAdvanceModalOpen(false);
+      setSelectedFile(null);
       loadPortalData();
     } catch (err: any) {
-      alert('Araç işlem hatası: ' + (err.message || err));
-    } finally {
-      setIsSavingVehicle(false);
+      alert('İşlem hatası: ' + err.message);
+    }
+  };
+
+  // HAKEDİŞİ PARÇA VEYA TAM KAPATMA
+  const handleMarkInvoicePaid = async (inv: any, term: 1 | 2) => {
+    const confirmPay = window.confirm(`${inv.invoice_no} faturasının ${term}. taksitini ödendi olarak işaretlemek istiyor musunuz?`);
+    if (!confirmPay) return;
+
+    try {
+      const updateData: any = {};
+      if (term === 1) updateData.term1_status = 'paid';
+      if (term === 2) updateData.term2_status = 'paid';
+
+      const { error } = await supabase.from('invoices').update(updateData).eq('id', inv.id);
+      if (error) throw error;
+      alert(`${term}. Taksit başarıyla ödendi olarak güncellendi!`);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Güncelleme hatası: ' + err.message);
     }
   };
 
@@ -288,7 +356,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME (ÇAKIŞMAYI KESİN ENGELLEYEN MOTOR)
+  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME
   const handleSubcontractorExcelImport = async (file: File) => {
     setIsImportingSubcontractors(true);
     const reader = new FileReader();
@@ -327,7 +395,6 @@ export default function App() {
             const totalAmt = cleanNumber(totalRaw);
             const halfAmt = totalAmt / 2;
 
-            // Fatura numarasını firma adıyla birleştirip benzersiz yapıyoruz
             let uniqueInvoiceNo = `${rawInvNo} - ${contractorName}`;
             if (seenInvoices.has(uniqueInvoiceNo)) {
               uniqueInvoiceNo = `${uniqueInvoiceNo} (#${idx + 1})`;
@@ -354,9 +421,7 @@ export default function App() {
         }
 
         if (invoicesToInsert.length > 0) {
-          // Mevcut alt yüklenici kayıtlarını önce silip temiz yüklüyoruz (Böylece ON CONFLICT hatası imkansız hale gelir)
           await supabase.from('invoices').delete().eq('category', 'subcontractor_invoice');
-
           const { error } = await supabase.from('invoices').insert(invoicesToInsert);
 
           if (error) throw error;
@@ -375,7 +440,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TEKİL GİRİŞ KAYDET
+  // TEKİL FATURA / MASRAF GİRİŞİ
   const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.amount) {
@@ -398,27 +463,11 @@ export default function App() {
           .from('invoice_files')
           .upload(fileName, selectedFile);
 
-        if (uploadError) {
-          console.warn('Dosya yüklenemedi:', uploadError.message);
-        } else if (uploadData) {
+        if (!uploadError && uploadData) {
           const { data: publicUrlData } = supabase.storage
             .from('invoice_files')
             .getPublicUrl(fileName);
           documentUrl = publicUrlData?.publicUrl || null;
-        }
-      }
-
-      let companyId: any = null;
-      if (formData.companyName) {
-        const { data: comp } = await supabase.from('companies').select('id').eq('name', formData.companyName).maybeSingle();
-        if (comp) {
-          companyId = comp.id;
-        } else {
-          const { data: newComp } = await supabase.from('companies').insert([{
-            name: formData.companyName,
-            type: isCollection ? 'customer' : (isSub ? 'subcontractor' : 'supplier')
-          }]).select();
-          if (newComp) companyId = newComp[0].id;
         }
       }
 
@@ -428,7 +477,6 @@ export default function App() {
 
       const { error } = await supabase.from('invoices').insert([{
         invoice_no: formData.invoiceNo || (isCollection ? `THS-${Date.now().toString().slice(-6)}` : `BLG-${Date.now().toString().slice(-6)}`),
-        company_id: companyId,
         vehicle_id: matchedVehicle ? matchedVehicle.id : null,
         direction: direction,
         category: formData.category,
@@ -448,17 +496,6 @@ export default function App() {
       alert(isCollection ? 'Tahsilat işlendi ve kasaya yansıtıldı!' : 'Kayıt başarıyla işlendi!');
       setIsModalOpen(false);
       setSelectedFile(null);
-      setFormData({
-        category: 'subcontractor_invoice',
-        companyName: '',
-        plateNumber: '',
-        invoiceNo: '',
-        amount: '',
-        paymentDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date().toISOString().split('T')[0],
-        term1Date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-        term2Date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0]
-      });
       loadPortalData();
     } catch (err: any) {
       alert('Kayıt hatası: ' + err.message);
@@ -574,6 +611,7 @@ export default function App() {
     );
   }
 
+  // GERÇEK HESAPLAMALAR
   const realSalesTotal = dbInvoices
     .filter(i => i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
@@ -615,6 +653,32 @@ export default function App() {
     setIsModalOpen(true);
   };
 
+  const openAdvanceForSubcontractor = (contractorName: string) => {
+    setAdvanceFormData({
+      targetType: 'subcontractor',
+      targetName: contractorName,
+      paymentType: 'advance',
+      totalAmount: '',
+      installments: '1',
+      notes: `${contractorName} hakediş mahsubu`,
+      issueDate: new Date().toISOString().split('T')[0]
+    });
+    setIsAdvanceModalOpen(true);
+  };
+
+  const openAdvanceForEmployee = (empName: string) => {
+    setAdvanceFormData({
+      targetType: 'employee',
+      targetName: empName,
+      paymentType: 'advance',
+      totalAmount: '',
+      installments: '1',
+      notes: `${empName} maaş avansı`,
+      issueDate: new Date().toISOString().split('T')[0]
+    });
+    setIsAdvanceModalOpen(true);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {/* ÜST BAŞLIK */}
@@ -654,6 +718,11 @@ export default function App() {
             onClick={() => setActiveTab('subcontractors')} 
             className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'subcontractors' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
             <Users className="w-4 h-4" /> Alt Yüklenici Hakedişleri ({dbInvoices.filter(i => i.category === 'subcontractor_invoice').length})
+          </button>
+          <button 
+            onClick={() => setActiveTab('employees')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'employees' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <UserCheck className="w-4 h-4" /> Personel & Bordro ({dbEmployees.length})
           </button>
           <button 
             onClick={() => setActiveTab('fleet')} 
@@ -738,7 +807,7 @@ export default function App() {
                 <div className="text-2xl font-bold text-rose-600 mt-2">
                   -{totalOutgoingExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-xs text-slate-400 mt-1 block">Taşeron + Araçlar + Şirket</span>
+                <span className="text-xs text-slate-400 mt-1 block">Taşeron + Araçlar + Personel + Şirket</span>
               </div>
 
               <div className="bg-blue-600 text-white p-5 rounded-2xl shadow-sm">
@@ -806,15 +875,31 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ */}
+        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ (AVANS DÜŞME / ÖDEME BUTONLU) */}
         {activeTab === 'subcontractors' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları ve taksitli ödeme takvimi.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları, taksit kapatma ve avans mahsupları.</p>
               </div>
               <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setAdvanceFormData({
+                      targetType: 'subcontractor',
+                      targetName: '',
+                      paymentType: 'advance',
+                      totalAmount: '',
+                      installments: '1',
+                      notes: '',
+                      issueDate: new Date().toISOString().split('T')[0]
+                    });
+                    setIsAdvanceModalOpen(true);
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
+                  <ArrowDownCircle className="w-4 h-4" /> Avans / Ara Ödeme Gir
+                </button>
                 <label className="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition">
                   <FileSpreadsheet className="w-4 h-4" /> 
                   {isImportingSubcontractors ? 'İşleniyor...' : 'Toplu Taşeron Exceli Yükle'}
@@ -842,11 +927,11 @@ export default function App() {
                 <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
                   <tr>
                     <th className="py-3 px-4">Fatura No / Taşeron</th>
-                    <th className="py-3 px-4">Fatura Tarihi</th>
+                    <th className="py-3 px-4">Tarih</th>
                     <th className="py-3 px-4">Toplam Tutar</th>
                     <th className="py-3 px-4">1. Vade</th>
                     <th className="py-3 px-4">2. Vade</th>
-                    <th className="py-3 px-4 text-center">Fatura Belgesi</th>
+                    <th className="py-3 px-4 text-center">İşlem / Avans</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
@@ -855,20 +940,57 @@ export default function App() {
                       <td className="py-3 px-4 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
                       <td className="py-3 px-4 text-slate-500">{inv.issue_date}</td>
                       <td className="py-3 px-4 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                      <td className="py-3 px-4 text-blue-700 font-semibold">{cleanNumber(inv.term1_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ <span className="text-[11px] text-slate-400">({inv.term1_due_date})</span></td>
-                      <td className="py-3 px-4 text-blue-700 font-semibold">{cleanNumber(inv.term2_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ <span className="text-[11px] text-slate-400">({inv.term2_due_date})</span></td>
+                      
+                      {/* 1. Taksit Durumu */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span className={inv.term1_status === 'paid' ? 'line-through text-slate-400' : 'text-blue-700 font-semibold'}>
+                            {cleanNumber(inv.term1_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          </span>
+                          {inv.term1_status === 'paid' ? (
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded font-bold">ÖDENDİ</span>
+                          ) : (
+                            <button 
+                              onClick={() => handleMarkInvoicePaid(inv, 1)}
+                              className="text-[10px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200 px-1.5 py-0.5 rounded transition">
+                              Öde
+                            </button>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400 block">{inv.term1_due_date}</span>
+                      </td>
+
+                      {/* 2. Taksit Durumu */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <span className={inv.term2_status === 'paid' ? 'line-through text-slate-400' : 'text-blue-700 font-semibold'}>
+                            {cleanNumber(inv.term2_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          </span>
+                          {inv.term2_status === 'paid' ? (
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] px-1.5 py-0.5 rounded font-bold">ÖDENDİ</span>
+                          ) : (
+                            <button 
+                              onClick={() => handleMarkInvoicePaid(inv, 2)}
+                              className="text-[10px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200 px-1.5 py-0.5 rounded transition">
+                              Öde
+                            </button>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400 block">{inv.term2_due_date}</span>
+                      </td>
+
                       <td className="py-3 px-4 text-center">
-                        {inv.document_url ? (
-                          <a href={inv.document_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 font-medium">
-                            <ExternalLink className="w-3.5 h-3.5" /> Görüntüle
-                          </a>
-                        ) : '-'}
+                        <button 
+                          onClick={() => openAdvanceForSubcontractor(inv.invoice_no)}
+                          className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold px-2 py-1 rounded text-[11px] inline-flex items-center gap-1 transition">
+                          <Coins className="w-3 h-3" /> Avans Düş
+                        </button>
                       </td>
                     </tr>
                   ))}
                   {dbInvoices.filter(i => i.category === 'subcontractor_invoice').length === 0 && (
                     <tr>
-                      <td colSpan={6} className="text-center py-8 text-slate-400">Henüz hakediş faturası yok. Yukarıdaki butondan Excel dosyanızı yükleyebilirsiniz.</td>
+                      <td colSpan={6} className="text-center py-8 text-slate-400">Henüz hakediş faturası yok.</td>
                     </tr>
                   )}
                 </tbody>
@@ -877,7 +999,139 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. ARAÇ FİLOSU */}
+        {/* 3. PERSONEL & BORDRO / AVANS / PRİM SEKMESİ */}
+        {activeTab === 'employees' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Personel & Maaş / Prim / Taksitli Avans Takibi</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Şoför ve ofis çalışanlarının bordro, taksitli avans, prim ve harcırah yönetimi.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setAdvanceFormData({
+                      targetType: 'employee',
+                      targetName: '',
+                      paymentType: 'advance',
+                      totalAmount: '',
+                      installments: '3',
+                      notes: 'Taksitli avans talebi',
+                      issueDate: new Date().toISOString().split('T')[0]
+                    });
+                    setIsAdvanceModalOpen(true);
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
+                  <CreditCard className="w-4 h-4" /> Taksitli Avans / Prim Gir
+                </button>
+                <button 
+                  onClick={() => setIsEmployeeModalOpen(true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
+                  <Plus className="w-4 h-4" /> Yeni Personel Ekle
+                </button>
+              </div>
+            </div>
+
+            {/* PERSONEL KARTLARI */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {dbEmployees.map(emp => {
+                const empAdvances = dbAdvances.filter(a => a.target_name === emp.full_name && a.target_type === 'employee');
+                const totalAdvances = empAdvances.filter(a => a.payment_type === 'advance').reduce((s, a) => s + cleanNumber(a.total_amount), 0);
+                const totalBonuses = empAdvances.filter(a => ['bonus', 'special_bonus'].includes(a.payment_type)).reduce((s, a) => s + cleanNumber(a.total_amount), 0);
+                const netPayable = cleanNumber(emp.base_salary) + totalBonuses - totalAdvances;
+
+                return (
+                  <div key={emp.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-base">{emp.full_name}</h4>
+                        <span className="text-xs text-slate-500">{emp.role_title}</span>
+                      </div>
+                      <span className="bg-emerald-50 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-full">Aktif</span>
+                    </div>
+
+                    <div className="bg-slate-50 p-3 rounded-xl space-y-1.5 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Sabit Net Maaş:</span>
+                        <span className="font-semibold text-slate-900">{cleanNumber(emp.base_salary).toLocaleString('tr-TR')} ₺</span>
+                      </div>
+                      <div className="flex justify-between text-emerald-600">
+                        <span>Hak Edilen Primler (+):</span>
+                        <span className="font-semibold">+{totalBonuses.toLocaleString('tr-TR')} ₺</span>
+                      </div>
+                      <div className="flex justify-between text-rose-600">
+                        <span>Kullanılan Avans (-):</span>
+                        <span className="font-semibold">-{totalAdvances.toLocaleString('tr-TR')} ₺</span>
+                      </div>
+                      <div className="border-t border-slate-200 pt-1.5 flex justify-between font-bold text-sm">
+                        <span className="text-blue-900">Ay Sonu Net Ödeme:</span>
+                        <span className="text-blue-700">{netPayable.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button 
+                        onClick={() => openAdvanceForEmployee(emp.full_name)}
+                        className="w-full py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold text-xs rounded-lg transition flex items-center justify-center gap-1">
+                        <DollarSign className="w-3.5 h-3.5" /> Avans / Prim Ekle
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {dbEmployees.length === 0 && (
+                <div className="col-span-3 text-center py-12 text-slate-400 bg-white rounded-2xl border-2 border-dashed border-slate-200">
+                  Henüz personel tanımlanmadı. Sağ üstteki butondan ilk personelinizi ekleyebilirsiniz.
+                </div>
+              )}
+            </div>
+
+            {/* PERSONEL AVANS VE PRİM HAREKETLERİ */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-3">
+              <h4 className="font-bold text-slate-800 text-sm">Son Personel Avans, Prim ve Masraf Kayıtları</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 font-semibold uppercase">
+                    <tr>
+                      <th className="py-2.5 px-3">Tarih</th>
+                      <th className="py-2.5 px-3">Personel</th>
+                      <th className="py-2.5 px-3">İşlem Türü</th>
+                      <th className="py-2.5 px-3">Taksit</th>
+                      <th className="py-2.5 px-3">Açıklama</th>
+                      <th className="py-2.5 px-3 text-right">Tutar</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {dbAdvances.filter(a => a.target_type === 'employee').map((adv, i) => (
+                      <tr key={i} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-3 text-slate-500">{adv.issue_date}</td>
+                        <td className="py-2.5 px-3 font-semibold text-slate-800">{adv.target_name}</td>
+                        <td className="py-2.5 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${adv.payment_type === 'advance' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                            {adv.payment_type === 'advance' ? 'Taksitli Avans' : (adv.payment_type === 'bonus' ? 'Sefer Primi' : 'Özel Prim')}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600">{adv.total_installments} Taksit</td>
+                        <td className="py-2.5 px-3 text-slate-500">{adv.notes || '-'}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">
+                          {cleanNumber(adv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        </td>
+                      </tr>
+                    ))}
+                    {dbAdvances.filter(a => a.target_type === 'employee').length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="text-center py-6 text-slate-400">Henüz personel avans veya prim hareketi yok.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 4. ARAÇ FİLOSU */}
         {activeTab === 'fleet' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -981,7 +1235,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MÜŞTERİ TAHSİLATLARI */}
+        {/* 5. MÜŞTERİ TAHSİLATLARI */}
         {activeTab === 'collections' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -1038,7 +1292,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. BANKA TALİMATI */}
+        {/* 6. BANKA TALİMATI */}
         {activeTab === 'payments' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -1051,18 +1305,18 @@ export default function App() {
               </button>
             </div>
             <p className="text-xs text-slate-500">
-              Bu ekran, sisteme işlenen alt yüklenici faturalarının 1. ve 2. taksitlerini banka transfer listesi olarak hazırlar.
+              Bu ekran, sisteme işlenen alt yüklenici faturalarının ödenmemiş taksitlerini banka transfer listesi olarak hazırlar.
             </p>
           </div>
         )}
 
-        {/* 6. GENEL GİDERLER & TEDARİK */}
+        {/* 7. GENEL GİDERLER & TEDARİK */}
         {activeTab === 'general_expenses' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Genel Giderler & Tedarik</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Ofis, kira, SGK, vergi ve genel şirket masrafları (Plakasız veya plakalı).</p>
+                <p className="text-xs text-slate-500 mt-0.5">Ofis, kira, SGK, vergi ve genel şirket masrafları.</p>
               </div>
               <button 
                 onClick={() => openActionModal('general_office')} 
@@ -1110,7 +1364,200 @@ export default function App() {
         )}
       </main>
 
-      {/* ARAÇ EKLEME / DÜZENLEME MODAL */}
+      {/* MODAL 1: PERSONEL EKLEME PENCERESİ */}
+      {isEmployeeModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-lg">Yeni Personel Kaydı</h3>
+              <button onClick={() => setIsEmployeeModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEmployee} className="mt-4 space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Ad Soyad</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: Ahmet Yılmaz"
+                  value={employeeFormData.fullName}
+                  onChange={e => setEmployeeFormData({ ...employeeFormData, fullName: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Görevi / Pozisyonu</label>
+                <select 
+                  value={employeeFormData.roleTitle}
+                  onChange={e => setEmployeeFormData({ ...employeeFormData, roleTitle: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                  <option value="Tır Kaptanı / Frigo">Tır Kaptanı / Frigo (-18 / +4)</option>
+                  <option value="Kamyon Şoförü">Kamyon Şoförü (10 Palet)</option>
+                  <option value="Kamyonet Şoförü / Dağıtım">Kamyonet Şoförü / Dağıtım</option>
+                  <option value="Operasyon Sorumlusu">Operasyon Sorumlusu</option>
+                  <option value="Filo & Bakım Sorumlusu">Filo & Bakım Sorumlusu</option>
+                  <option value="Muhasebe & Finans">Muhasebe & Finans</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Aylık Sabit Net Maaş (TL)</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: 45.000"
+                  value={employeeFormData.baseSalary}
+                  onChange={e => setEmployeeFormData({ ...employeeFormData, baseSalary: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Telefon</label>
+                  <input 
+                    type="text" 
+                    placeholder="0532..."
+                    value={employeeFormData.phone}
+                    onChange={e => setEmployeeFormData({ ...employeeFormData, phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">IBAN No</label>
+                  <input 
+                    type="text" 
+                    placeholder="TR..."
+                    value={employeeFormData.iban}
+                    onChange={e => setEmployeeFormData({ ...employeeFormData, iban: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg uppercase"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button type="button" onClick={() => setIsEmployeeModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">Personeli Kaydet</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: AVANS / ARA ÖDEME / PRİM PENCERESİ */}
+      {isAdvanceModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-lg">
+                {advanceFormData.targetType === 'employee' ? 'Personel Avans & Prim Girişi' : 'Taşeron Avans & Ara Ödeme'}
+              </h3>
+              <button onClick={() => setIsAdvanceModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAdvancePayment} className="mt-4 space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">İşlem Yapılan Kişi / Firma</label>
+                <input 
+                  type="text" 
+                  placeholder={advanceFormData.targetType === 'employee' ? 'Personel Adı' : 'Taşeron Adı / Fatura'}
+                  value={advanceFormData.targetName}
+                  onChange={e => setAdvanceFormData({ ...advanceFormData, targetName: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Ödeme Türü</label>
+                <select 
+                  value={advanceFormData.paymentType}
+                  onChange={e => setAdvanceFormData({ ...advanceFormData, paymentType: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                  <option value="advance">Avans (Gelecek Hakedişten/Maaştan Kesilecek)</option>
+                  <option value="interim">Ara Ödeme (Fatura Mahsubu)</option>
+                  <option value="bonus">Sefer / KM Primi</option>
+                  <option value="special_bonus">Özel Başarı / Bayram Primi</option>
+                  <option value="expense_reimbursement">Harcırah & Masraf İadesi</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Ödenen Tutar (TL)</label>
+                  <input 
+                    type="text" 
+                    placeholder="Örn: 25.000"
+                    value={advanceFormData.totalAmount}
+                    onChange={e => setAdvanceFormData({ ...advanceFormData, totalAmount: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-sm text-rose-600"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Kesinti Taksit Sayısı</label>
+                  <select 
+                    value={advanceFormData.installments}
+                    onChange={e => setAdvanceFormData({ ...advanceFormData, installments: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                    <option value="1">Tek Seferde (1 Ay / İlk Hakediş)</option>
+                    <option value="2">2 Taksit Halinde</option>
+                    <option value="3">3 Taksit Halinde</option>
+                    <option value="4">4 Taksit Halinde</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Ödeme / Dekont Tarihi</label>
+                <input 
+                  type="date" 
+                  value={advanceFormData.issueDate}
+                  onChange={e => setAdvanceFormData({ ...advanceFormData, issueDate: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Açıklama / Sefer Bilgisi</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: Antalya seferi mazot/harcırah avansı"
+                  value={advanceFormData.notes}
+                  onChange={e => setAdvanceFormData({ ...advanceFormData, notes: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                />
+              </div>
+
+              <div className="p-3 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                <label className="block font-semibold text-slate-700 mb-1 flex items-center gap-1">
+                  <Paperclip className="w-3.5 h-3.5 text-blue-600" /> Banka Dekontu / Fiş Ekle (Opsiyonel)
+                </label>
+                <input 
+                  type="file" 
+                  accept=".pdf,image/*" 
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) setSelectedFile(e.target.files[0]);
+                  }}
+                  className="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:bg-blue-50 file:text-blue-700"
+                />
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button type="button" onClick={() => setIsAdvanceModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-amber-600 text-white font-medium">Ödemeyi İşle & Kasadan Düş</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: ARAÇ EKLEME / DÜZENLEME */}
       {isVehicleModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
@@ -1246,7 +1693,7 @@ export default function App() {
         </div>
       )}
 
-      {/* İŞLEM / FATURA GİRİŞ MODAL */}
+      {/* MODAL 4: GENEL FATURA / GELİR / GİDER GİRİŞİ */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
@@ -1354,40 +1801,9 @@ export default function App() {
                   onChange={(e) => {
                     if (e.target.files?.[0]) setSelectedFile(e.target.files[0]);
                   }}
-                  className="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  className="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:bg-blue-50 file:text-blue-700"
                 />
-                {selectedFile && (
-                  <span className="text-[11px] text-emerald-600 font-medium block mt-1">
-                    Seçilen Dosya: {selectedFile.name}
-                  </span>
-                )}
               </div>
-
-              {formData.category === 'subcontractor_invoice' && (
-                <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 space-y-2">
-                  <span className="text-xs font-bold text-blue-900 block">Vadeli Ödeme Planı (Otomatik İki Taksit)</span>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">1. Taksit Vadesi</label>
-                      <input 
-                        type="date" 
-                        value={formData.term1Date}
-                        onChange={e => setFormData({ ...formData, term1Date: e.target.value })}
-                        className="w-full px-2 py-1.5 border border-slate-200 rounded text-xs bg-white" 
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">2. Taksit Vadesi</label>
-                      <input 
-                        type="date" 
-                        value={formData.term2Date}
-                        onChange={e => setFormData({ ...formData, term2Date: e.target.value })}
-                        className="w-full px-2 py-1.5 border border-slate-200 rounded text-xs bg-white" 
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
 
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200 text-xs">İptal</button>
