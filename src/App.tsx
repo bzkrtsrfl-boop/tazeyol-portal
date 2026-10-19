@@ -5,7 +5,10 @@ import {
   X, 
   RefreshCw, 
   FileSpreadsheet, 
-  FileUp 
+  FileUp,
+  Lock,
+  LogOut,
+  ShieldCheck
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -14,6 +17,35 @@ import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 export default function App() {
+  // GÜVENLİK VE OTURUM YÖNETİMİ
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return localStorage.getItem('tazeyol_auth') === 'true';
+  });
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
+  // YETKİLİ GİRİŞ BİLGİLERİ (İstediğiniz şifreyi buraya yazabilirsiniz)
+  const AUTH_USER = 'admin';
+  const AUTH_PASS = 'Flee3533!';
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loginUsername.trim().toLowerCase() === AUTH_USER && loginPassword === AUTH_PASS) {
+      localStorage.setItem('tazeyol_auth', 'true');
+      setIsAuthenticated(true);
+      setLoginError('');
+    } else {
+      setLoginError('Hatalı kullanıcı adı veya şifre girdiniz!');
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('tazeyol_auth');
+    setIsAuthenticated(false);
+  };
+
+  // PORTAL STATE'LERİ
   const [activeTab, setActiveTab] = useState<'dashboard' | 'fleet' | 'subcontractors' | 'payments' | 'general_expenses'>('dashboard');
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -59,8 +91,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadPortalData();
-  }, []);
+    if (isAuthenticated) {
+      loadPortalData();
+    }
+  }, [isAuthenticated]);
 
   // TÜRKÇE PARA & SAYI TEMİZLEYİCİ
   const cleanNumber = (val: any): number => {
@@ -80,7 +114,7 @@ export default function App() {
     return isNaN(parsed) ? 0 : parsed;
   };
 
-  // TOPLU SATIŞ EXCEL'İ YÜKLEME (MÜKERRER KORUMALI / UPSERT)
+  // TOPLU SATIŞ EXCEL'İ YÜKLEME (MÜKERRER KORUMALI)
   const handleDirectExcelImport = async (file: File) => {
     setIsImportingExcel(true);
     const reader = new FileReader();
@@ -146,7 +180,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TEKİL GİRİŞ KAYDET (ALT YÜKLENİCİ VEYA ÖZ MAL)
+  // TEKİL GİRİŞ KAYDET
   const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.amount) {
@@ -262,6 +296,67 @@ export default function App() {
     XLSX.writeFile(wb, `Banka_Toplu_Odeme_${todayStr}.xlsx`);
   };
 
+  // GİRİŞ EKRANI (OTURUM AÇIK DEĞİLSE GÖRÜNÜR)
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 font-sans text-slate-800">
+        <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-2xl border border-slate-100">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-blue-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
+              <Truck className="w-8 h-8" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">OPERASYON PORTALI</h1>
+            <p className="text-xs text-slate-500 mt-1.5 flex items-center justify-center gap-1">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" /> Yetkili Yönetim Girişi
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Kullanıcı Adı</label>
+              <input 
+                type="text" 
+                value={loginUsername}
+                onChange={e => setLoginUsername(e.target.value)}
+                placeholder="yonetim"
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition" 
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Şifre</label>
+              <input 
+                type="password" 
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition" 
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
+                {loginError}
+              </div>
+            )}
+
+            <button 
+              type="submit" 
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl text-sm shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2">
+              <Lock className="w-4 h-4" /> Güvenli Giriş Yap
+            </button>
+          </form>
+
+          <div className="mt-8 pt-6 border-t border-slate-100 text-center">
+            <span className="text-[11px] text-slate-400">Tazeyol & Alkan Nakliyat Operasyon ERP Sistemi</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // GERÇEK VERİTABANI HESAPLAMALARI
   const realSalesTotal = dbInvoices
     .filter(i => i.direction === 'outgoing')
@@ -294,7 +389,7 @@ export default function App() {
             </div>
             <div>
               <span className="font-bold text-lg text-slate-900 tracking-tight">OPERASYON ERP</span>
-              <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded-full ml-2">Canlı Sistem</span>
+              <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded-full ml-2">Yetkili Oturumu</span>
             </div>
           </div>
           
@@ -321,6 +416,12 @@ export default function App() {
               onClick={() => setIsModalOpen(true)}
               className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition shadow-sm">
               <Plus className="w-4 h-4" /> Masraf / Fatura Girişi
+            </button>
+            <button 
+              onClick={handleLogout}
+              title="Çıkış Yap"
+              className="p-2 text-rose-500 hover:bg-rose-50 hover:text-rose-700 rounded-lg transition ml-1">
+              <LogOut className="w-5 h-5" />
             </button>
           </div>
         </div>
