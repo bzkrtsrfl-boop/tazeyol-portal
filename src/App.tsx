@@ -256,7 +256,6 @@ export default function App() {
 
       if (advErr) throw advErr;
 
-      // Fiilen ödendiği için kasadan düşer
       await supabase.from('invoices').insert([{
         invoice_no: `ODM-${Date.now().toString().slice(-6)}`,
         direction: 'incoming',
@@ -277,7 +276,7 @@ export default function App() {
     }
   };
 
-  // TAKSİTİ ÖDENDİ OLARAK KAPATMA (KASADAN DÜŞME)
+  // TAKSİTİ ÖDENDİ OLARAK KAPATMA
   const handleMarkInvoicePaid = async (inv: any, term: 1 | 2) => {
     const termAmount = term === 1 ? cleanNumber(inv.term1_amount) : cleanNumber(inv.term2_amount);
     const confirmPay = window.confirm(`${inv.invoice_no} belgesinin ${term}. taksiti olan ${termAmount.toLocaleString('tr-TR')} ₺ ödendi olarak işaretlensin ve kasadan düşülsün mü?`);
@@ -565,7 +564,7 @@ export default function App() {
             <div className="w-16 h-16 bg-blue-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
               <Truck className="w-8 h-8" />
             </div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">OPERASYON PORTALI</h1>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">TAZEYOL ERP</h1>
             <p className="text-xs text-slate-500 mt-1.5 flex items-center justify-center gap-1">
               <ShieldCheck className="w-4 h-4 text-emerald-600" /> Yetkili Yönetim Girişi
             </p>
@@ -617,9 +616,7 @@ export default function App() {
     );
   }
 
-  // ==========================================
-  // CANLI GERÇEK ERP HESAPLAMA MOTORU
-  // ==========================================
+  // GERÇEK ERP HESAPLAMALARI
   const totalSalesRevenue = dbInvoices
     .filter(i => i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
@@ -667,12 +664,10 @@ export default function App() {
 
   const currentRealCash = baseCash + totalCollectedCash - actualPaidOutflows;
 
-  // Kritik Ödemeler (En yakın 5 ödeme)
   const upcomingPayments = dbInvoices
     .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
     .slice(0, 5);
 
-  // Muayenesi yaklaşan araçlar
   const urgentVehicles = dbVehicles
     .map(v => ({ ...v, daysInfo: calculateDaysLeft(v.next_inspection_date) }))
     .filter(v => v.daysInfo.diff <= 45)
@@ -732,7 +727,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
-      {/* ÜST BAR (TEMİZ, SADELİK ODAKLI) */}
+      {/* ÜST BAR (SADE VE NET) */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -748,7 +743,7 @@ export default function App() {
               <div className="bg-blue-600 text-white p-2 rounded-xl">
                 <Truck className="w-4 h-4" />
               </div>
-              <span className="font-bold text-base text-slate-900 tracking-tight">OPERASYON ERP</span>
+              <span className="font-bold text-base text-slate-900 tracking-tight">TAZEYOL ERP</span>
             </div>
           </div>
           
@@ -766,16 +761,14 @@ export default function App() {
         </div>
       </header>
 
-      {/* SOLDAN AÇILIR ÇEKMECE MENÜ (DRAWER SIDEBAR) */}
+      {/* SOLDAN AÇILIR ÇEKMECE MENÜ (İŞLEM BUTONLARI BURADA) */}
       {isSidebarOpen && (
         <div className="fixed inset-0 z-50 flex">
-          {/* Arka plan karartması */}
           <div 
             onClick={() => setIsSidebarOpen(false)} 
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
           />
 
-          {/* Menü Paneli */}
           <div className="relative w-80 bg-white h-full shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-200">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -783,8 +776,8 @@ export default function App() {
                   <Truck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm">ERP MODÜLLERİ</h3>
-                  <span className="text-[11px] text-slate-400">Hızlı ve Kolay Navigasyon</span>
+                  <h3 className="font-bold text-slate-900 text-sm">TAZEYOL ERP</h3>
+                  <span className="text-[11px] text-slate-400">Yönetim & Operasyon</span>
                 </div>
               </div>
               <button 
@@ -794,7 +787,40 @@ export default function App() {
               </button>
             </div>
 
+            {/* MENÜ İÇİ HIZLI AKSİYON BUTONLARI */}
+            <div className="p-4 border-b border-slate-100 space-y-2 bg-slate-50">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Hızlı İşlemler</span>
+              <button 
+                onClick={() => {
+                  setIsSidebarOpen(false);
+                  openActionModal('customer_collection');
+                }}
+                className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition shadow-sm">
+                <Plus className="w-4 h-4" /> Yeni İşlem Ekle
+              </button>
+
+              <label className="cursor-pointer w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition shadow-sm">
+                <FileUp className="w-4 h-4" /> 
+                {isImportingExcel ? 'Aktarılıyor...' : 'Satış Exceli Yükle'}
+                <input 
+                  type="file" 
+                  accept=".xlsx,.xls" 
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setIsSidebarOpen(false);
+                      handleDirectExcelImport(f);
+                    }
+                  }} 
+                  disabled={isImportingExcel}
+                  className="hidden" 
+                />
+              </label>
+            </div>
+
+            {/* SAYFA MENÜLERİ */}
             <nav className="p-3 space-y-1 flex-1 overflow-y-auto text-xs">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block px-3 py-1">Modüller</span>
               {menuItems.map(item => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
@@ -834,38 +860,10 @@ export default function App() {
       {/* ANA İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
         
-        {/* 1. GENEL & FİNANS KOKPİTİ (GÖZÜ DİNLENDİREN TEMİZ GÖRÜNÜM) */}
+        {/* 1. GENEL & FİNANS KOKPİTİ */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Yönetici Finans ve Nakit Kokpiti</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Anlık kullanılabilir kasa, bekleyen alacak ve toplam borç durumu.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3.5 py-2.5 rounded-xl font-semibold flex items-center gap-2 transition shadow-sm">
-                  <FileUp className="w-4 h-4" /> 
-                  {isImportingExcel ? 'Aktarılıyor...' : 'Satış Exceli Yükle'}
-                  <input 
-                    type="file" 
-                    accept=".xlsx,.xls" 
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) handleDirectExcelImport(f);
-                    }} 
-                    disabled={isImportingExcel}
-                    className="hidden" 
-                  />
-                </label>
-                <button 
-                  onClick={() => openActionModal('customer_collection')}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3.5 py-2.5 rounded-xl font-semibold flex items-center gap-1.5 transition shadow-sm">
-                  <Plus className="w-4 h-4" /> Yeni İşlem Ekle
-                </button>
-              </div>
-            </div>
-
-            {/* DÖRT ANA FİNANSAL KART */}
+            {/* DÖRT ANA FİNANSAL KART (DOĞRUDAN EN TEPEDE) */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
@@ -912,7 +910,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* İLK EKRANDA GÖZÜ YORMAYAN İKİ KRİTİK ÖZET ALANI (DEV TABLOLAR YERİNE) */}
+            {/* İKİ KRİTİK KONTROL KUTUSU */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               
               {/* KUTU 1: YAKLAŞAN KRİTİK ÖDEMELER */}
@@ -947,7 +945,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* KUTU 2: KRİTİK MUAYENE VE SİGORTA UYARILARI */}
+              {/* KUTU 2: KRİTİK MUAYENE UYARILARI */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
                 <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
@@ -982,7 +980,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. PERSONEL & BORDRO (EKRANA ÇOK PERSONEL SIĞDIRAN KOMPAKT TABLO) */}
+        {/* 2. PERSONEL & BORDRO (KOMPAKT VE NET TABLO) */}
         {activeTab === 'employees' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
@@ -1017,7 +1015,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* KOMPAKT, ÇOK SATIR GÖSTEREN PERSONEL TABLOSU */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
@@ -1084,7 +1081,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. ALT YÜKLENİCİ HAKEDİŞLERİ (MEVCUT GÜÇLÜ HALİYLE) */}
+        {/* 3. ALT YÜKLENİCİ HAKEDİŞLERİ */}
         {activeTab === 'subcontractors' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -1439,7 +1436,7 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL 1: PERSONEL EKLEME PENCERESİ */}
+      {/* MODAL 1: PERSONEL EKLEME */}
       {isEmployeeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
@@ -1522,7 +1519,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 2: AVANS / ARA ÖDEME / PRİM PENCERESİ */}
+      {/* MODAL 2: AVANS / ARA ÖDEME / PRİM */}
       {isAdvanceModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
