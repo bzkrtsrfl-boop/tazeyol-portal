@@ -283,7 +283,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TOPLU ALT YÜKLENİCİ (TAŞERON) EXCEL'İ YÜKLEME (1/2 VADELİ)
+  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME (BENZERSİZLEŞTİRİLMİŞ FATURA NO & 1/2 VADELİ)
   const handleSubcontractorExcelImport = async (file: File) => {
     setIsImportingSubcontractors(true);
     const reader = new FileReader();
@@ -309,24 +309,31 @@ export default function App() {
         };
 
         const invoicesToInsert = [];
+        const seenInvoices = new Set<string>();
 
-        for (const row of data) {
-          // 'Unvanı/Adı Soyadı', 'Fatura No', 'Ödenecek Tutar', 'Tarih'
-          const title = row['Unvanı/Adı Soyadı'] || row['Unvanı'] || row['Tedarikçi'] || row['Firma'];
-          const invNo = row['Fatura No'] || row['fatura_no'] || row['Belge No'];
+        for (let idx = 0; idx < data.length; idx++) {
+          const row = data[idx];
+          const contractorName = String(row['Unvanı/Adı Soyadı'] || row['Unvanı'] || row['Tedarikçi'] || '').trim();
+          let rawInvNo = String(row['Fatura No'] || row['fatura_no'] || '').trim();
           const totalRaw = row['Ödenecek Tutar'] || row['Tutar'] || row['Genel Toplam'];
           const issueDate = parseDate(row['Tarih'] || row['Fatura Tarihi']);
 
-          if (invNo && totalRaw !== undefined && cleanNumber(totalRaw) > 0) {
+          if (contractorName && rawInvNo && totalRaw !== undefined && cleanNumber(totalRaw) > 0) {
             const totalAmt = cleanNumber(totalRaw);
             const halfAmt = totalAmt / 2;
 
-            // 1. Taksit 15 gün sonra, 2. Taksit 30 gün sonra
+            // Benzersiz Fatura No Üret (Mükerrer GIB serisi çakışmasını engellemek için)
+            let uniqueInvoiceNo = `${rawInvNo} - ${contractorName}`;
+            if (seenInvoices.has(uniqueInvoiceNo)) {
+              uniqueInvoiceNo = `${uniqueInvoiceNo} (#${idx + 1})`;
+            }
+            seenInvoices.add(uniqueInvoiceNo);
+
             const t1 = new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0];
             const t2 = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
 
             invoicesToInsert.push({
-              invoice_no: String(invNo).trim(),
+              invoice_no: uniqueInvoiceNo,
               direction: 'incoming',
               category: 'subcontractor_invoice',
               total_amount: totalAmt,
@@ -362,7 +369,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TEKİL GİRİŞ KAYDET (PDF YÜKLEMELİ VE PLAKASIZ DESTEKLİ)
+  // TEKİL GİRİŞ KAYDET
   const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.amount) {
@@ -378,7 +385,6 @@ export default function App() {
       
       let documentUrl: string | null = null;
 
-      // Dosya Seçildiyse Supabase Storage'a Yükle
       if (selectedFile) {
         const fileExt = selectedFile.name.split('.').pop();
         const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
@@ -486,7 +492,7 @@ export default function App() {
 
     const excelData = pendingPayments.map((p, idx) => ({
       'Sıra No': idx + 1,
-      'Açıklama / Belge': p.subcontractor,
+      'Açıklama / Belge / Taşeron': p.subcontractor,
       'Ödeme Dilimi': p.term,
       'Vade Tarihi': p.dueDate,
       'Net Transfer Tutarı (TL)': p.amount,
@@ -496,7 +502,7 @@ export default function App() {
     const ws = XLSX.utils.json_to_sheet(excelData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Banka Talimati');
-    ws['!cols'] = [{ wch: 8 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 25 }, { wch: 15 }];
+    ws['!cols'] = [{ wch: 8 }, { wch: 45 }, { wch: 15 }, { wch: 15 }, { wch: 25 }, { wch: 15 }];
 
     const todayStr = new Date().toISOString().split('T')[0];
     XLSX.writeFile(wb, `Banka_Toplu_Odeme_${todayStr}.xlsx`);
@@ -622,7 +628,7 @@ export default function App() {
             {/* TOPLU TAŞERON EXCEL */}
             <label className="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-2 rounded-lg font-medium flex items-center gap-1.5 transition shadow-sm">
               <FileSpreadsheet className="w-3.5 h-3.5" /> 
-              {isImportingSubcontractors ? 'Aktarılıyor...' : 'Taşeron Exceli'}
+              {isImportingSubcontractors ? 'İşleniyor...' : 'Taşeron Exceli'}
               <input 
                 type="file" 
                 accept=".xlsx,.xls" 
@@ -905,7 +911,7 @@ export default function App() {
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
                   <tr>
-                    <th className="py-3 px-4">Fatura No</th>
+                    <th className="py-3 px-4">Fatura No / Taşeron</th>
                     <th className="py-3 px-4">Tarih</th>
                     <th className="py-3 px-4">Toplam Tutar</th>
                     <th className="py-3 px-4">1. Vade (1/2)</th>
@@ -1201,7 +1207,7 @@ export default function App() {
         </div>
       )}
 
-      {/* İŞLEM / FATURA GİRİŞ MODAL (PLAKASIZ VE PDF YÜKLEME DESTEKLİ) */}
+      {/* İŞLEM / FATURA GİRİŞ MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
@@ -1243,7 +1249,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* PLAKA SEÇİMİ (Yalnızca araç masraflarında veya opsiyonel olarak çıkar) */}
               {['fuel', 'maintenance_repair', 'driver_expense', 'traffic_fines'].includes(formData.category) && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">İlgili Araç Plakası (Opsiyonel)</label>
@@ -1300,7 +1305,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* FATURA PDF / GÖRSEL YÜKLEME */}
               <div className="p-3 bg-slate-50 rounded-xl border border-dashed border-slate-300">
                 <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1">
                   <Paperclip className="w-3.5 h-3.5 text-blue-600" /> Fatura Görseli / PDF Ekleyin (Opsiyonel)
