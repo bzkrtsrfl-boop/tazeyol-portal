@@ -21,7 +21,8 @@ import {
   CreditCard,
   DollarSign,
   ArrowDownCircle,
-  Award
+  TrendingUp,
+  AlertCircle
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -70,7 +71,7 @@ export default function App() {
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
   const [employeeFormData, setEmployeeFormData] = useState({
     fullName: '',
-    roleTitle: 'Tır Kaptanı',
+    roleTitle: 'Tır Kaptanı / Frigo',
     baseSalary: '',
     phone: '',
     iban: ''
@@ -79,9 +80,9 @@ export default function App() {
   // Avans & Ödeme Modal State
   const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
   const [advanceFormData, setAdvanceFormData] = useState({
-    targetType: 'subcontractor', // 'subcontractor' | 'employee'
+    targetType: 'subcontractor',
     targetName: '',
-    paymentType: 'advance', // 'advance' | 'interim' | 'bonus' | 'special_bonus' | 'expense_reimbursement'
+    paymentType: 'advance',
     totalAmount: '',
     installments: '1',
     notes: '',
@@ -188,7 +189,7 @@ export default function App() {
     }
   };
 
-  // YENİ PERSONEL EKLEME
+  // PERSONEL EKLEME
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!employeeFormData.fullName.trim()) return;
@@ -205,14 +206,14 @@ export default function App() {
       if (error) throw error;
       alert('Personel başarıyla kaydedildi!');
       setIsEmployeeModalOpen(false);
-      setEmployeeFormData({ fullName: '', roleTitle: 'Tır Kaptanı', baseSalary: '', phone: '', iban: '' });
+      setEmployeeFormData({ fullName: '', roleTitle: 'Tır Kaptanı / Frigo', baseSalary: '', phone: '', iban: '' });
       loadPortalData();
     } catch (err: any) {
       alert('Personel ekleme hatası: ' + err.message);
     }
   };
 
-  // AVANS / ARA ÖDEME / PRİM KAYDETME
+  // AVANS / ÖDEME / PRİM GİRİŞİ
   const handleSaveAdvancePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!advanceFormData.targetName.trim() || !advanceFormData.totalAmount) {
@@ -235,7 +236,6 @@ export default function App() {
         }
       }
 
-      // 1. Avans/Ödeme tablosuna işle
       const { error: advErr } = await supabase.from('advance_payments').insert([{
         target_type: advanceFormData.targetType,
         target_id: advanceFormData.targetName,
@@ -251,19 +251,19 @@ export default function App() {
 
       if (advErr) throw advErr;
 
-      // 2. Kasadan düşmesi için faturaya/gidere ekle
+      // Fiilen ödendiği için kasadan düşer
       await supabase.from('invoices').insert([{
-        invoice_no: `AVN-${Date.now().toString().slice(-6)}`,
+        invoice_no: `ODM-${Date.now().toString().slice(-6)}`,
         direction: 'incoming',
         category: advanceFormData.targetType === 'employee' ? 'salary_payroll' : 'subcontractor_invoice',
         total_amount: amt,
         issue_date: advanceFormData.issueDate,
         due_date: advanceFormData.issueDate,
-        status: 'paid', // Ödendiği için kasadan düşecek
+        status: 'paid',
         document_url: documentUrl
       }]);
 
-      alert('Ödeme / Avans başarıyla işlendi ve kasadan düşürüldü!');
+      alert('Ödeme başarıyla işlendi ve kasadan düşürüldü!');
       setIsAdvanceModalOpen(false);
       setSelectedFile(null);
       loadPortalData();
@@ -272,9 +272,10 @@ export default function App() {
     }
   };
 
-  // HAKEDİŞİ PARÇA VEYA TAM KAPATMA
+  // TAKSİTİ ÖDENDİ OLARAK KAPATMA (KASADAN DÜŞME)
   const handleMarkInvoicePaid = async (inv: any, term: 1 | 2) => {
-    const confirmPay = window.confirm(`${inv.invoice_no} faturasının ${term}. taksitini ödendi olarak işaretlemek istiyor musunuz?`);
+    const termAmount = term === 1 ? cleanNumber(inv.term1_amount) : cleanNumber(inv.term2_amount);
+    const confirmPay = window.confirm(`${inv.invoice_no} belgesinin ${term}. taksiti olan ${termAmount.toLocaleString('tr-TR')} ₺ ödendi olarak işaretlensin ve kasadan düşülsün mü?`);
     if (!confirmPay) return;
 
     try {
@@ -282,16 +283,22 @@ export default function App() {
       if (term === 1) updateData.term1_status = 'paid';
       if (term === 2) updateData.term2_status = 'paid';
 
+      // Eğer iki taksit de ödendiyse ana faturayı 'paid' yap
+      const otherPaid = term === 1 ? inv.term2_status === 'paid' : inv.term1_status === 'paid';
+      if (otherPaid) {
+        updateData.status = 'paid';
+      }
+
       const { error } = await supabase.from('invoices').update(updateData).eq('id', inv.id);
       if (error) throw error;
-      alert(`${term}. Taksit başarıyla ödendi olarak güncellendi!`);
+      alert(`${term}. Taksit başarıyla ödendi!`);
       loadPortalData();
     } catch (err: any) {
       alert('Güncelleme hatası: ' + err.message);
     }
   };
 
-  // TOPLU SATIŞ EXCEL'İ YÜKLEME
+  // TOPLU SATIŞ EXCEL'İ
   const handleDirectExcelImport = async (file: File) => {
     setIsImportingExcel(true);
     const reader = new FileReader();
@@ -356,7 +363,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME
+  // TOPLU TAŞERON EXCEL'İ
   const handleSubcontractorExcelImport = async (file: File) => {
     setIsImportingSubcontractors(true);
     const reader = new FileReader();
@@ -425,10 +432,8 @@ export default function App() {
           const { error } = await supabase.from('invoices').insert(invoicesToInsert);
 
           if (error) throw error;
-          alert(`Harika! ${invoicesToInsert.length} adet Alt Yüklenici faturası başarıyla işlendi ve taksitlendirildi.`);
+          alert(`Harika! ${invoicesToInsert.length} adet Alt Yüklenici faturası borç olarak işlendi.`);
           loadPortalData();
-        } else {
-          alert('Ödenecek tutarı olan geçerli fatura satırı bulunamadı.');
         }
       } catch (err: any) {
         alert('Taşeron aktarım hatası: ' + (err.message || err));
@@ -440,7 +445,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TEKİL FATURA / MASRAF GİRİŞİ
+  // TEKİL FATURA / MASRAF
   const handleSaveInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.amount) {
@@ -459,14 +464,9 @@ export default function App() {
       if (selectedFile) {
         const fileExt = selectedFile.name.split('.').pop();
         const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('invoice_files')
-          .upload(fileName, selectedFile);
-
-        if (!uploadError && uploadData) {
-          const { data: publicUrlData } = supabase.storage
-            .from('invoice_files')
-            .getPublicUrl(fileName);
+        const { data: uploadData } = await supabase.storage.from('invoice_files').upload(fileName, selectedFile);
+        if (uploadData) {
+          const { data: publicUrlData } = supabase.storage.from('invoice_files').getPublicUrl(fileName);
           documentUrl = publicUrlData?.publicUrl || null;
         }
       }
@@ -475,6 +475,7 @@ export default function App() {
       const halfAmount = parsedAmount / 2;
       const direction = isCollection ? 'incoming' : (formData.category === 'freight_sales' ? 'outgoing' : 'incoming');
 
+      // Eğer müşteri tahsilatıysa ödendi (paid), diğerleri ödendi seçilmediyse borç (unpaid) olarak kaydolur
       const { error } = await supabase.from('invoices').insert([{
         invoice_no: formData.invoiceNo || (isCollection ? `THS-${Date.now().toString().slice(-6)}` : `BLG-${Date.now().toString().slice(-6)}`),
         vehicle_id: matchedVehicle ? matchedVehicle.id : null,
@@ -493,7 +494,7 @@ export default function App() {
 
       if (error) throw error;
 
-      alert(isCollection ? 'Tahsilat işlendi ve kasaya yansıtıldı!' : 'Kayıt başarıyla işlendi!');
+      alert(isCollection ? 'Tahsilat işlendi ve kasaya eklendi!' : 'Fatura borç olarak kaydedildi!');
       setIsModalOpen(false);
       setSelectedFile(null);
       loadPortalData();
@@ -611,32 +612,69 @@ export default function App() {
     );
   }
 
-  // GERÇEK HESAPLAMALAR
-  const realSalesTotal = dbInvoices
+  // ==========================================
+  // CANLI GERÇEK ERP HESAPLAMA MOTORU (DÜZELTİLDİ)
+  // ==========================================
+
+  // 1. SATIŞ VE MÜŞTERİ ALACAKLARI
+  const totalSalesRevenue = dbInvoices
     .filter(i => i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const realCollectionsTotal = dbInvoices
+  const totalCollectedCash = dbInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const pendingSalesReceivable = Math.max(0, realSalesTotal - realCollectionsTotal);
+  // Bekleyen Alacaklarımız (~16.7 Milyon TL)
+  const pendingReceivables = Math.max(0, totalSalesRevenue - totalCollectedCash);
 
-  const realSubcontractorDebt = dbInvoices
+  // 2. BORÇLARIMIZ (Henüz Ödenmemiş Olanlar)
+  // Taşeron fatura borçları (taksit bazlı ödenmemiş kalanlar)
+  let unpaidSubcontractorDebt = 0;
+  dbInvoices
     .filter(i => i.category === 'subcontractor_invoice')
+    .forEach(inv => {
+      if (inv.term1_status !== 'paid') unpaidSubcontractorDebt += cleanNumber(inv.term1_amount || (inv.total_amount / 2));
+      if (inv.term2_status !== 'paid') unpaidSubcontractorDebt += cleanNumber(inv.term2_amount || (inv.total_amount / 2));
+    });
+
+  // Genel giderler & Araç masraflarından henüz ödenmemiş olanlar
+  const unpaidGeneralExpensesDebt = dbInvoices
+    .filter(i => i.status !== 'paid' && i.category !== 'freight_sales' && i.category !== 'subcontractor_invoice' && i.category !== 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const realFleetExpenses = dbInvoices
-    .filter(i => i.vehicle_id !== null && i.category !== 'customer_collection')
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  // 3. CANLI PERSONEL MAAŞ & PRİM BORÇ TAHAKKUKU
+  const now = new Date();
+  const currentDay = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const monthProgressRatio = Math.min(1, currentDay / daysInMonth); // Ayın kaçıncı günündeysek o oranda tahakkuk eder
 
-  const realGeneralExpenses = dbInvoices
-    .filter(i => ['taxes_sgk', 'salary_payroll', 'traffic_fines', 'general_office'].includes(i.category))
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  let accruedEmployeeSalaryDebt = 0;
+  dbEmployees.forEach(emp => {
+    const salary = cleanNumber(emp.base_salary);
+    // Canlı gün bazlı tahakkuk eden maaş borcu
+    accruedEmployeeSalaryDebt += (salary * monthProgressRatio);
+  });
 
+  // Personele eklenen ödenmemiş primler de borca eklenir
+  const accruedEmployeeBonusesDebt = dbAdvances
+    .filter(a => a.target_type === 'employee' && ['bonus', 'special_bonus'].includes(a.payment_type))
+    .reduce((sum, a) => sum + cleanNumber(a.total_amount), 0);
+
+  // Personel toplam anlık borcumuz
+  const totalEmployeeDebt = accruedEmployeeSalaryDebt + accruedEmployeeBonusesDebt;
+
+  // TOPLAM ŞİRKET BORÇLARI
+  const totalPayableDebt = unpaidSubcontractorDebt + unpaidGeneralExpensesDebt + totalEmployeeDebt;
+
+  // 4. GERÇEK KASA / BANKA NAKİT AKIŞI
+  // Başlangıç parası + Kasaya fiilen giren tahsilatlar - Fiilen ödenmiş (status = 'paid') çıkışlar
   const baseCash = 845200;
-  const totalOutgoingExpenses = realSubcontractorDebt + realFleetExpenses + realGeneralExpenses;
-  const currentActualCash = baseCash + realCollectionsTotal - totalOutgoingExpenses;
+  const actualPaidOutflows = dbInvoices
+    .filter(i => i.status === 'paid' && i.category !== 'customer_collection' && i.category !== 'freight_sales')
+    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+  const currentRealCash = baseCash + totalCollectedCash - actualPaidOutflows;
 
   const openActionModal = (cat: string) => {
     setFormData({
@@ -660,7 +698,7 @@ export default function App() {
       paymentType: 'advance',
       totalAmount: '',
       installments: '1',
-      notes: `${contractorName} hakediş mahsubu`,
+      notes: `${contractorName} avans ödemesi`,
       issueDate: new Date().toISOString().split('T')[0]
     });
     setIsAdvanceModalOpen(true);
@@ -750,13 +788,13 @@ export default function App() {
       {/* İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         
-        {/* 1. GENEL & FİNANS */}
+        {/* 1. GENEL & FİNANS KOKPİTİ (REEL KAVRAMLARLA YENİLENDİ) */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
               <div>
-                <h2 className="text-xl font-bold text-slate-900">Genel Finans ve Operasyon Kokpiti</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Şirketin anlık nakit durumu, toplam cirosu ve gider dökümü.</p>
+                <h2 className="text-xl font-bold text-slate-900">Genel Finans ve Nakit Akışı Kokpiti</h2>
+                <p className="text-xs text-slate-500 mt-0.5">Gerçek kasa durumu, tahsilatlar, bekleyen alacaklar ve ödenecek toplam borçlar.</p>
               </div>
               <div className="flex items-center gap-2">
                 <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3.5 py-2.5 rounded-xl font-semibold flex items-center gap-2 transition shadow-sm">
@@ -781,49 +819,64 @@ export default function App() {
               </div>
             </div>
 
+            {/* DÖRT ANA FİNANSAL KART (DOĞRU MUHASEBE YAPISI) */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              
+              {/* 1. KART: ALINAN TAHSİLATLAR */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Toplam Satış Cirosu</span>
-                <div className="text-2xl font-bold text-slate-900 mt-2">
-                  {realSalesTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </div>
-                <span className="text-xs text-slate-400 mt-1 block">
-                  {dbInvoices.filter(i => i.category === 'freight_sales').length} Adet Kesilen Satış Faturası
+                <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
+                  <Coins className="w-3.5 h-3.5" /> Alınan Tahsilatlar
                 </span>
-              </div>
-
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase">Alınan Tahsilatlar</span>
                 <div className="text-2xl font-bold text-emerald-600 mt-2">
-                  +{realCollectionsTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  +{totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </div>
+                <span className="text-xs text-slate-400 mt-1 block">Kasaya Fiilen Giren Tutar</span>
+              </div>
+
+              {/* 2. KART: BEKLEYEN ALACAKLARIMIZ */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                <span className="text-xs text-blue-600 font-semibold tracking-wider uppercase flex items-center gap-1">
+                  <TrendingUp className="w-3.5 h-3.5" /> Bekleyen Müşteri Alacakları
+                </span>
+                <div className="text-2xl font-bold text-slate-900 mt-2">
+                  {pendingReceivables.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-xs text-slate-400 mt-1 block">
-                  Kalan Alacak: {pendingSalesReceivable.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  Toplam Satış Cirosu: {totalSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
               </div>
 
+              {/* 3. KART: ÖDENECEK TOPLAM BORÇLARIMIZ (GİDER DEĞİL BORÇ) */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                <span className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Toplam Gider & Masraf</span>
+                <span className="text-xs text-rose-600 font-semibold tracking-wider uppercase flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" /> Ödenecek Toplam Borçlar
+                </span>
                 <div className="text-2xl font-bold text-rose-600 mt-2">
-                  -{totalOutgoingExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {totalPayableDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-xs text-slate-400 mt-1 block">Taşeron + Araçlar + Personel + Şirket</span>
+                <span className="text-xs text-slate-400 mt-1 block">
+                  Taşeron: {unpaidSubcontractorDebt.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ | Personel: {totalEmployeeDebt.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺
+                </span>
               </div>
 
+              {/* 4. KART: GÜNCEL KASA / BANKA (GERÇEK MEVCUT NAKİT) */}
               <div className="bg-blue-600 text-white p-5 rounded-2xl shadow-sm">
-                <span className="text-xs text-blue-200 font-semibold tracking-wider uppercase">Güncel Kasa / Banka</span>
+                <span className="text-xs text-blue-200 font-semibold tracking-wider uppercase flex items-center gap-1">
+                  <DollarSign className="w-3.5 h-3.5" /> Güncel Kasa / Banka
+                </span>
                 <div className="text-2xl font-bold mt-2">
-                  {currentActualCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-xs text-blue-100 mt-1 block">Net Mevcut Nakit</span>
+                <span className="text-xs text-blue-100 mt-1 block">Fiili Kullanılabilir Nakit</span>
               </div>
             </div>
 
+            {/* TÜM FATURALAR VE TAHAKKUK LİSTESİ */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                 <div>
-                  <h3 className="font-bold text-slate-800 text-sm">Tüm Faturalar & Tahsilatlar</h3>
-                  <span className="text-xs text-slate-400">Veritabanına işlenen satış, taşeron ve masraf kayıtları</span>
+                  <h3 className="font-bold text-slate-800 text-sm">Finansal Kayıtlar & Fatura Durumları</h3>
+                  <span className="text-xs text-slate-400">Veritabanına işlenen satış, taşeron borçları ve tahsilat hareketleri</span>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
                   Toplam {dbInvoices.length} Kayıt
@@ -836,7 +889,7 @@ export default function App() {
                       <th className="py-3 px-4">Belge / Fatura No</th>
                       <th className="py-3 px-4">Kategori</th>
                       <th className="py-3 px-4">Tarih</th>
-                      <th className="py-3 px-4">Vade</th>
+                      <th className="py-3 px-4">Ödeme Durumu</th>
                       <th className="py-3 px-4 text-center">Dosya / PDF</th>
                       <th className="py-3 px-4 text-right">Tutar</th>
                     </tr>
@@ -844,16 +897,26 @@ export default function App() {
                   <tbody className="divide-y divide-slate-100 text-xs">
                     {dbInvoices.map((inv, i) => (
                       <tr key={i} className="hover:bg-slate-50">
-                        <td className="py-3 px-4 font-mono font-medium">{inv.invoice_no}</td>
+                        <td className="py-3 px-4 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
                         <td className="py-3 px-4 capitalize text-slate-600">
                           {inv.category === 'customer_collection' ? (
                             <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-semibold">Müşteri Tahsilatı</span>
                           ) : (
-                            inv.category.replace('_', ' ')
+                            inv.category === 'subcontractor_invoice' ? 'Alt Yüklenici Hakedişi' : inv.category.replace('_', ' ')
                           )}
                         </td>
                         <td className="py-3 px-4 text-slate-500">{inv.issue_date}</td>
-                        <td className="py-3 px-4 text-slate-500">{inv.due_date || '-'}</td>
+                        <td className="py-3 px-4">
+                          {inv.category === 'customer_collection' ? (
+                            <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full">TAHSİL EDİLDİ</span>
+                          ) : (
+                            inv.status === 'paid' ? (
+                              <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full">ÖDENDİ</span>
+                            ) : (
+                              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full">BEKLEYEN BORÇ</span>
+                            )
+                          )}
+                        </td>
                         <td className="py-3 px-4 text-center">
                           {inv.document_url ? (
                             <a href={inv.document_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium">
@@ -863,8 +926,8 @@ export default function App() {
                             <span className="text-slate-300">-</span>
                           )}
                         </td>
-                        <td className={`py-3 px-4 text-right font-bold ${inv.category === 'customer_collection' || inv.category === 'freight_sales' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {inv.category === 'customer_collection' ? '+' : (inv.category === 'freight_sales' ? '' : '-')}{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        <td className={`py-3 px-4 text-right font-bold ${inv.category === 'customer_collection' || inv.category === 'freight_sales' ? 'text-emerald-600' : 'text-slate-800'}`}>
+                          {inv.category === 'customer_collection' ? '+' : ''}{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                         </td>
                       </tr>
                     ))}
@@ -875,13 +938,13 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ (AVANS DÜŞME / ÖDEME BUTONLU) */}
+        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ (TAKSİTLİ AVANS VE ÖDEME MOTORU) */}
         {activeTab === 'subcontractors' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları, taksit kapatma ve avans mahsupları.</p>
+                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri (Ödenecek Borçlarımız)</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Ödenmemiş faturalar borç hanesinde durur; 'Öde' butonuna basılınca veya avans girilince kasadan düşer.</p>
               </div>
               <div className="flex items-center gap-2">
                 <button 
@@ -892,13 +955,13 @@ export default function App() {
                       paymentType: 'advance',
                       totalAmount: '',
                       installments: '1',
-                      notes: '',
+                      notes: 'Taşeron avans ödemesi',
                       issueDate: new Date().toISOString().split('T')[0]
                     });
                     setIsAdvanceModalOpen(true);
                   }}
                   className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
-                  <ArrowDownCircle className="w-4 h-4" /> Avans / Ara Ödeme Gir
+                  <ArrowDownCircle className="w-4 h-4" /> Avans / Ara Ödeme Düş
                 </button>
                 <label className="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition">
                   <FileSpreadsheet className="w-4 h-4" /> 
@@ -999,13 +1062,15 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. PERSONEL & BORDRO / AVANS / PRİM SEKMESİ */}
+        {/* 3. PERSONEL & BORDRO / CANLI GÜN SAYACLI MAAŞ TAHAKKUKU */}
         {activeTab === 'employees' && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Personel & Maaş / Prim / Taksitli Avans Takibi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Şoför ve ofis çalışanlarının bordro, taksitli avans, prim ve harcırah yönetimi.</p>
+                <h3 className="font-bold text-lg text-slate-900">Personel & Bordro (Canlı Gün Sayacı ve Borç Tahakkuku)</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Bugün ayın <b>{currentDay}.</b> günü. Ay sonu kesinleşecek maaşlar ve primler gün bazında canlı borç olarak işlenir.
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <button 
@@ -1038,7 +1103,8 @@ export default function App() {
                 const empAdvances = dbAdvances.filter(a => a.target_name === emp.full_name && a.target_type === 'employee');
                 const totalAdvances = empAdvances.filter(a => a.payment_type === 'advance').reduce((s, a) => s + cleanNumber(a.total_amount), 0);
                 const totalBonuses = empAdvances.filter(a => ['bonus', 'special_bonus'].includes(a.payment_type)).reduce((s, a) => s + cleanNumber(a.total_amount), 0);
-                const netPayable = cleanNumber(emp.base_salary) + totalBonuses - totalAdvances;
+                const currentAccrued = (cleanNumber(emp.base_salary) * monthProgressRatio);
+                const netPayableEndOfMonth = cleanNumber(emp.base_salary) + totalBonuses - totalAdvances;
 
                 return (
                   <div key={emp.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
@@ -1052,20 +1118,24 @@ export default function App() {
 
                     <div className="bg-slate-50 p-3 rounded-xl space-y-1.5 text-xs">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Sabit Net Maaş:</span>
+                        <span className="text-slate-500">Aylık Sabit Net Maaş:</span>
                         <span className="font-semibold text-slate-900">{cleanNumber(emp.base_salary).toLocaleString('tr-TR')} ₺</span>
+                      </div>
+                      <div className="flex justify-between text-amber-700">
+                        <span>{currentDay} Günlük İşleyen Borç:</span>
+                        <span className="font-semibold">{currentAccrued.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</span>
                       </div>
                       <div className="flex justify-between text-emerald-600">
                         <span>Hak Edilen Primler (+):</span>
                         <span className="font-semibold">+{totalBonuses.toLocaleString('tr-TR')} ₺</span>
                       </div>
                       <div className="flex justify-between text-rose-600">
-                        <span>Kullanılan Avans (-):</span>
+                        <span>Ödenen Avans (-):</span>
                         <span className="font-semibold">-{totalAdvances.toLocaleString('tr-TR')} ₺</span>
                       </div>
                       <div className="border-t border-slate-200 pt-1.5 flex justify-between font-bold text-sm">
-                        <span className="text-blue-900">Ay Sonu Net Ödeme:</span>
-                        <span className="text-blue-700">{netPayable.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                        <span className="text-blue-900">Ay Sonu Kalan Maaş:</span>
+                        <span className="text-blue-700">{netPayableEndOfMonth.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
                       </div>
                     </div>
 
@@ -1073,7 +1143,7 @@ export default function App() {
                       <button 
                         onClick={() => openAdvanceForEmployee(emp.full_name)}
                         className="w-full py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold text-xs rounded-lg transition flex items-center justify-center gap-1">
-                        <DollarSign className="w-3.5 h-3.5" /> Avans / Prim Ekle
+                        <DollarSign className="w-3.5 h-3.5" /> Avans / Prim / Ödeme Yap
                       </button>
                     </div>
                   </div>
@@ -1082,51 +1152,9 @@ export default function App() {
 
               {dbEmployees.length === 0 && (
                 <div className="col-span-3 text-center py-12 text-slate-400 bg-white rounded-2xl border-2 border-dashed border-slate-200">
-                  Henüz personel tanımlanmadı. Sağ üstteki butondan ilk personelinizi ekleyebilirsiniz.
+                  Henüz personel tanımlanmadı. Sağ üstteki butondan personellerinizi ekleyebilirsiniz.
                 </div>
               )}
-            </div>
-
-            {/* PERSONEL AVANS VE PRİM HAREKETLERİ */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-3">
-              <h4 className="font-bold text-slate-800 text-sm">Son Personel Avans, Prim ve Masraf Kayıtları</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500 font-semibold uppercase">
-                    <tr>
-                      <th className="py-2.5 px-3">Tarih</th>
-                      <th className="py-2.5 px-3">Personel</th>
-                      <th className="py-2.5 px-3">İşlem Türü</th>
-                      <th className="py-2.5 px-3">Taksit</th>
-                      <th className="py-2.5 px-3">Açıklama</th>
-                      <th className="py-2.5 px-3 text-right">Tutar</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {dbAdvances.filter(a => a.target_type === 'employee').map((adv, i) => (
-                      <tr key={i} className="hover:bg-slate-50">
-                        <td className="py-2.5 px-3 text-slate-500">{adv.issue_date}</td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-800">{adv.target_name}</td>
-                        <td className="py-2.5 px-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${adv.payment_type === 'advance' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                            {adv.payment_type === 'advance' ? 'Taksitli Avans' : (adv.payment_type === 'bonus' ? 'Sefer Primi' : 'Özel Prim')}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-600">{adv.total_installments} Taksit</td>
-                        <td className="py-2.5 px-3 text-slate-500">{adv.notes || '-'}</td>
-                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                          {cleanNumber(adv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                        </td>
-                      </tr>
-                    ))}
-                    {dbAdvances.filter(a => a.target_type === 'employee').length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="text-center py-6 text-slate-400">Henüz personel avans veya prim hareketi yok.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
         )}
@@ -1349,7 +1377,7 @@ export default function App() {
                           </a>
                         ) : '-'}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-rose-600">-{cleanNumber(g.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                      <td className="py-3 px-4 text-right font-bold text-rose-600">{cleanNumber(g.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                     </tr>
                   ))}
                   {dbInvoices.filter(i => ['taxes_sgk', 'salary_payroll', 'traffic_fines', 'general_office'].includes(i.category)).length === 0 && (
@@ -1693,7 +1721,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 4: GENEL FATURA / GELİR / GİDER GİRİŞİ */}
+      {/* MODAL 4: GENEL FATURA GİRİŞİ */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
@@ -1804,6 +1832,32 @@ export default function App() {
                   className="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:bg-blue-50 file:text-blue-700"
                 />
               </div>
+
+              {formData.category === 'subcontractor_invoice' && (
+                <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 space-y-2">
+                  <span className="text-xs font-bold text-blue-900 block">Vadeli Ödeme Planı (Otomatik İki Taksit)</span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-1">1. Taksit Vadesi</label>
+                      <input 
+                        type="date" 
+                        value={formData.term1Date}
+                        onChange={e => setFormData({ ...formData, term1Date: e.target.value })}
+                        className="w-full px-2 py-1.5 border border-slate-200 rounded text-xs bg-white" 
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-1">2. Taksit Vadesi</label>
+                      <input 
+                        type="date" 
+                        value={formData.term2Date}
+                        onChange={e => setFormData({ ...formData, term2Date: e.target.value })}
+                        className="w-full px-2 py-1.5 border border-slate-200 rounded text-xs bg-white" 
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200 text-xs">İptal</button>
