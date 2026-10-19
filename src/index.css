@@ -72,6 +72,14 @@ h2 {
   font-weight: 500;
   color: var(--text-h);
 }
+<!-- Tarayıcı Sekme İkonu (Favicon) -->
+<link rel="icon" type="image/png" href="/icon.png" />
+
+<!-- Mobil Ana Ekran İkonu (iPhone / iPad / Android) -->
+<link rel="apple-touch-icon" href="/icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Tazeyol ERP" />
 
 h1 {
   font-size: 56px;
