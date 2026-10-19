@@ -34,7 +34,6 @@ import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-// YENİ TAZEYOL DAİRESEL LOGO BİLEŞENİ
 function TazeyolLogo({ size = 24 }: { size?: number }) {
   return (
     <svg 
@@ -197,10 +196,21 @@ export default function App() {
     return isNaN(parsed) ? 0 : parsed;
   };
 
+  // TARİH FORMATLAYICI (GÜVENLİ YYYY-MM-DD ÇEVİRİCİ)
+  const sanitizeDate = (d: any) => {
+    if (!d) return '';
+    try {
+      return String(d).split('T')[0];
+    } catch {
+      return '';
+    }
+  };
+
   // KALAN GÜN VE MUAYENE HESABI
   const calculateDaysLeft = (targetDateStr: string | null) => {
     if (!targetDateStr) return { diff: 999, text: 'Belirtilmedi', color: 'text-slate-400 bg-slate-100' };
-    const target = new Date(targetDateStr).getTime();
+    const cleanDate = sanitizeDate(targetDateStr);
+    const target = new Date(cleanDate).getTime();
     const today = new Date().setHours(0, 0, 0, 0);
     const diff = Math.ceil((target - today) / (1000 * 60 * 60 * 24));
 
@@ -210,6 +220,72 @@ export default function App() {
       return { diff, text: `${diff} gün kaldı`, color: 'text-amber-800 bg-amber-100 font-bold' };
     } else {
       return { diff, text: `Geçerli (${diff} gün)`, color: 'text-emerald-800 bg-emerald-100 font-semibold' };
+    }
+  };
+
+  // ARAÇ DÜZENLEME MODALINI AÇMA (HATASIZ VE GÜVENLİ)
+  const openEditVehicleModal = (v: any) => {
+    if (!v) return;
+    setEditingVehicleId(v.id || null);
+    setVehicleFormData({
+      plateNumber: v.plate_number || '',
+      driverName: v.driver_name || '',
+      brandModel: v.brand_model || '',
+      documentIncluded: v.document_included || 'VAR',
+      trackingSystem: v.tracking_system || 'Var',
+      fuelSystem: v.fuel_system || 'UTTS',
+      hgsSystem: v.hgs_system || 'SHELL',
+      nextInspectionDate: sanitizeDate(v.next_inspection_date),
+      insuranceCompany: v.insurance_company || '',
+      insuranceDate: sanitizeDate(v.insurance_date),
+      vehicleType: v.vehicle_type || 'Kamyon Frigo (10 Palet)',
+      ownershipType: v.ownership_type || 'Öz Mal'
+    });
+    setIsVehicleModalOpen(true);
+  };
+
+  // ARAÇ KAYDETME / GÜNCELLEME
+  const handleSaveVehicle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vehicleFormData.plateNumber.trim()) {
+      alert('Lütfen araç plakasını giriniz.');
+      return;
+    }
+
+    setIsSavingVehicle(true);
+    try {
+      const payload = {
+        plate_number: vehicleFormData.plateNumber.trim().toUpperCase(),
+        driver_name: vehicleFormData.driverName.trim(),
+        brand_model: vehicleFormData.brandModel.trim(),
+        document_included: vehicleFormData.documentIncluded,
+        tracking_system: vehicleFormData.trackingSystem,
+        fuel_system: vehicleFormData.fuelSystem,
+        hgs_system: vehicleFormData.hgsSystem,
+        next_inspection_date: vehicleFormData.nextInspectionDate || null,
+        insurance_company: vehicleFormData.insuranceCompany.trim() || null,
+        insurance_date: vehicleFormData.insuranceDate || null,
+        vehicle_type: vehicleFormData.vehicleType,
+        ownership_type: vehicleFormData.ownershipType
+      };
+
+      if (editingVehicleId) {
+        const { error } = await supabase.from('vehicles').update(payload).eq('id', editingVehicleId);
+        if (error) throw error;
+        alert('Araç bilgileri güncellendi!');
+      } else {
+        const { error } = await supabase.from('vehicles').insert([payload]);
+        if (error) throw error;
+        alert('Yeni araç filoya eklendi!');
+      }
+
+      setIsVehicleModalOpen(false);
+      setEditingVehicleId(null);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Araç işlem hatası: ' + (err.message || err));
+    } finally {
+      setIsSavingVehicle(false);
     }
   };
 
@@ -746,11 +822,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
-      {/* ÜST BAR (YENİ LOGOLU VE SADE) */}
+      {/* ÜST BAR */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* 3 ÇİZGİ / HAMBURGER MENÜ BUTONU */}
             <button 
               onClick={() => setIsSidebarOpen(true)}
               className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition flex items-center gap-2 font-bold text-xs shadow-sm">
@@ -758,7 +833,6 @@ export default function App() {
               <span>MENÜ</span>
             </button>
 
-            {/* YENİ LOGO VE BAŞLIK */}
             <div className="flex items-center gap-2.5 border-l border-slate-200 pl-3">
               <div className="rounded-xl overflow-hidden shadow-sm flex items-center justify-center">
                 <TazeyolLogo size={34} />
@@ -805,7 +879,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* MENÜ İÇİ HIZLI İŞLEM BUTONLARI */}
             <div className="p-4 border-b border-slate-100 space-y-2 bg-slate-50">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Hızlı İşlemler</span>
               <button 
@@ -836,7 +909,6 @@ export default function App() {
               </label>
             </div>
 
-            {/* SAYFA MENÜLERİ */}
             <nav className="p-3 space-y-1 flex-1 overflow-y-auto text-xs">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block px-3 py-1">Modüller</span>
               {menuItems.map(item => {
@@ -881,7 +953,6 @@ export default function App() {
         {/* 1. GENEL & FİNANS KOKPİTİ */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            {/* DÖRT ANA FİNANSAL KART */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
@@ -928,10 +999,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* İKİ KRİTİK KONTROL KUTUSU */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* KUTU 1: YAKLAŞAN KRİTİK ÖDEMELER */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
                 <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
@@ -963,7 +1031,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* KUTU 2: KRİTİK MUAYENE UYARILARI */}
+              {/* KUTU 2: KRİTİK MUAYENE UYARILARI (KARTTAN DOĞRUDAN DÜZENLEME AÇILIR) */}
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
                 <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
@@ -979,14 +1047,21 @@ export default function App() {
 
                 <div className="space-y-2">
                   {urgentVehicles.map((v, idx) => (
-                    <div key={idx} className="flex justify-between items-center p-2.5 rounded-xl bg-slate-50 text-xs">
+                    <div 
+                      key={idx} 
+                      onClick={() => openEditVehicleModal(v)}
+                      title="Düzenlemek için tıklayın"
+                      className="flex justify-between items-center p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50/70 border border-transparent hover:border-blue-200 text-xs cursor-pointer transition">
                       <div>
                         <span className="font-mono font-bold text-blue-700 block">{v.plate_number}</span>
                         <span className="text-[11px] text-slate-500">{v.driver_name || 'Şoför Atanmadı'} • {v.brand_model || v.vehicle_type}</span>
                       </div>
-                      <span className={`px-2 py-0.5 rounded-full text-[11px] ${v.daysInfo.color}`}>
-                        {v.daysInfo.text}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] ${v.daysInfo.color}`}>
+                          {v.daysInfo.text}
+                        </span>
+                        <Edit2 className="w-3.5 h-3.5 text-slate-400 hover:text-blue-600" />
+                      </div>
                     </div>
                   ))}
                   {urgentVehicles.length === 0 && (
@@ -1295,7 +1370,7 @@ export default function App() {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
-                          {v.next_inspection_date || '-'}
+                          {sanitizeDate(v.next_inspection_date) || '-'}
                         </td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           <span className={`px-2.5 py-1 rounded-full text-[11px] ${daysInfo.color}`}>
@@ -1303,16 +1378,17 @@ export default function App() {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
-                          {v.insurance_company ? `${v.insurance_company} (${v.insurance_date || ''})` : '-'}
+                          {v.insurance_company ? `${v.insurance_company} (${sanitizeDate(v.insurance_date) || ''})` : '-'}
                         </td>
                         <td className="py-3 px-3 text-right font-bold text-rose-600 whitespace-nowrap">
                           {totalCost > 0 ? `-${totalCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '0,00 ₺'}
                         </td>
                         <td className="py-3 px-3 text-center whitespace-nowrap">
                           <button 
+                            type="button"
                             onClick={() => openEditVehicleModal(v)}
                             title="Bilgileri Düzenle"
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition inline-flex items-center gap-1 font-medium">
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition inline-flex items-center gap-1 font-medium cursor-pointer">
                             <Edit2 className="w-3.5 h-3.5" /> Düzenle
                           </button>
                         </td>
@@ -1647,7 +1723,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 3: ARAÇ EKLEME / DÜZENLEME */}
+      {/* MODAL 3: ARAÇ EKLEME / DÜZENLEME PENCERESİ */}
       {isVehicleModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
