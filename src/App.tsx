@@ -55,7 +55,7 @@ export default function App() {
   // PORTAL SEKMELERİ
   const [activeTab, setActiveTab] = useState<'dashboard' | 'subcontractors' | 'fleet' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
   
-  // Masraf & Fatura Modal State
+  // Modal State'leri
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isImportingExcel, setIsImportingExcel] = useState(false);
@@ -288,7 +288,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME
+  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME (ÇAKIŞMAYI KESİN ENGELLEYEN MOTOR)
   const handleSubcontractorExcelImport = async (file: File) => {
     setIsImportingSubcontractors(true);
     const reader = new FileReader();
@@ -327,6 +327,7 @@ export default function App() {
             const totalAmt = cleanNumber(totalRaw);
             const halfAmt = totalAmt / 2;
 
+            // Fatura numarasını firma adıyla birleştirip benzersiz yapıyoruz
             let uniqueInvoiceNo = `${rawInvNo} - ${contractorName}`;
             if (seenInvoices.has(uniqueInvoiceNo)) {
               uniqueInvoiceNo = `${uniqueInvoiceNo} (#${idx + 1})`;
@@ -353,9 +354,10 @@ export default function App() {
         }
 
         if (invoicesToInsert.length > 0) {
-          const { error } = await supabase
-            .from('invoices')
-            .upsert(invoicesToInsert, { onConflict: 'invoice_no' });
+          // Mevcut alt yüklenici kayıtlarını önce silip temiz yüklüyoruz (Böylece ON CONFLICT hatası imkansız hale gelir)
+          await supabase.from('invoices').delete().eq('category', 'subcontractor_invoice');
+
+          const { error } = await supabase.from('invoices').insert(invoicesToInsert);
 
           if (error) throw error;
           alert(`Harika! ${invoicesToInsert.length} adet Alt Yüklenici faturası başarıyla işlendi ve taksitlendirildi.`);
@@ -598,7 +600,6 @@ export default function App() {
   const totalOutgoingExpenses = realSubcontractorDebt + realFleetExpenses + realGeneralExpenses;
   const currentActualCash = baseCash + realCollectionsTotal - totalOutgoingExpenses;
 
-  // HIZLI FORM AÇMA YARDIMCISI
   const openActionModal = (cat: string) => {
     setFormData({
       ...formData,
@@ -616,7 +617,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
-      {/* KURUMSAL ÜST BAŞLIK */}
+      {/* ÜST BAŞLIK */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -642,7 +643,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* ANA GEZİNME MENÜSÜ */}
+        {/* ANA MENÜ ÇUBUĞU */}
         <div className="max-w-7xl mx-auto px-4 flex gap-2 text-xs font-semibold border-t border-slate-100 overflow-x-auto py-1.5">
           <button 
             onClick={() => setActiveTab('dashboard')} 
@@ -680,7 +681,7 @@ export default function App() {
       {/* İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         
-        {/* 1. GENEL & FİNANS SEKMESİ */}
+        {/* 1. GENEL & FİNANS */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
@@ -805,7 +806,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ SEKMESİ */}
+        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ */}
         {activeTab === 'subcontractors' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -876,7 +877,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. ARAÇ FİLOSU SEKMESİ */}
+        {/* 3. ARAÇ FİLOSU */}
         {activeTab === 'fleet' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -980,7 +981,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MÜŞTERİ TAHSİLATLARI SEKMESİ */}
+        {/* 4. MÜŞTERİ TAHSİLATLARI */}
         {activeTab === 'collections' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -1037,7 +1038,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. BANKA TALİMATI SEKMESİ */}
+        {/* 5. BANKA TALİMATI */}
         {activeTab === 'payments' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
@@ -1055,7 +1056,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 6. GENEL GİDERLER & TEDARİK SEKMESİ */}
+        {/* 6. GENEL GİDERLER & TEDARİK */}
         {activeTab === 'general_expenses' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
