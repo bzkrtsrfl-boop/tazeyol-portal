@@ -5,13 +5,18 @@ import {
   X, 
   RefreshCw, 
   FileSpreadsheet, 
-  FileUp,
-  Lock,
-  LogOut,
-  ShieldCheck,
-  Edit2,
-  Paperclip,
-  ExternalLink
+  FileUp, 
+  Lock, 
+  LogOut, 
+  ShieldCheck, 
+  Edit2, 
+  Paperclip, 
+  ExternalLink,
+  LayoutDashboard,
+  Users,
+  Coins,
+  Receipt,
+  FileCheck2
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -47,8 +52,8 @@ export default function App() {
     setIsAuthenticated(false);
   };
 
-  // PORTAL STATE'LERİ
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'fleet' | 'subcontractors' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
+  // PORTAL SEKMELERİ
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'subcontractors' | 'fleet' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
   
   // Masraf & Fatura Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -77,7 +82,7 @@ export default function App() {
   });
 
   const [formData, setFormData] = useState({
-    category: 'customer_collection',
+    category: 'subcontractor_invoice',
     companyName: '',
     plateNumber: '',
     invoiceNo: '',
@@ -283,7 +288,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME (BENZERSİZLEŞTİRİLMİŞ FATURA NO & 1/2 VADELİ)
+  // TOPLU ALT YÜKLENİCİ EXCEL'İ YÜKLEME
   const handleSubcontractorExcelImport = async (file: File) => {
     setIsImportingSubcontractors(true);
     const reader = new FileReader();
@@ -322,7 +327,6 @@ export default function App() {
             const totalAmt = cleanNumber(totalRaw);
             const halfAmt = totalAmt / 2;
 
-            // Benzersiz Fatura No Üret (Mükerrer GIB serisi çakışmasını engellemek için)
             let uniqueInvoiceNo = `${rawInvNo} - ${contractorName}`;
             if (seenInvoices.has(uniqueInvoiceNo)) {
               uniqueInvoiceNo = `${uniqueInvoiceNo} (#${idx + 1})`;
@@ -354,7 +358,7 @@ export default function App() {
             .upsert(invoicesToInsert, { onConflict: 'invoice_no' });
 
           if (error) throw error;
-          alert(`Harika! ${invoicesToInsert.length} adet Alt Yüklenici faturası başarıyla işlendi ve 1/2 vadeli ödeme planına bölündü.`);
+          alert(`Harika! ${invoicesToInsert.length} adet Alt Yüklenici faturası başarıyla işlendi ve taksitlendirildi.`);
           loadPortalData();
         } else {
           alert('Ödenecek tutarı olan geçerli fatura satırı bulunamadı.');
@@ -443,7 +447,7 @@ export default function App() {
       setIsModalOpen(false);
       setSelectedFile(null);
       setFormData({
-        category: 'customer_collection',
+        category: 'subcontractor_invoice',
         companyName: '',
         plateNumber: '',
         invoiceNo: '',
@@ -470,7 +474,7 @@ export default function App() {
         if (inv.term1_status !== 'paid' && inv.term1_amount > 0) {
           pendingPayments.push({
             subcontractor: inv.invoice_no,
-            term: '1/2 Taksit',
+            term: '1. Taksit',
             dueDate: inv.term1_due_date,
             amount: cleanNumber(inv.term1_amount)
           });
@@ -478,7 +482,7 @@ export default function App() {
         if (inv.term2_status !== 'paid' && inv.term2_amount > 0) {
           pendingPayments.push({
             subcontractor: inv.invoice_no,
-            term: '2/2 Taksit',
+            term: '2. Taksit',
             dueDate: inv.term2_due_date,
             amount: cleanNumber(inv.term2_amount)
           });
@@ -594,8 +598,25 @@ export default function App() {
   const totalOutgoingExpenses = realSubcontractorDebt + realFleetExpenses + realGeneralExpenses;
   const currentActualCash = baseCash + realCollectionsTotal - totalOutgoingExpenses;
 
+  // HIZLI FORM AÇMA YARDIMCISI
+  const openActionModal = (cat: string) => {
+    setFormData({
+      ...formData,
+      category: cat,
+      companyName: '',
+      plateNumber: '',
+      invoiceNo: '',
+      amount: '',
+      paymentDate: new Date().toISOString().split('T')[0],
+      dueDate: new Date().toISOString().split('T')[0]
+    });
+    setSelectedFile(null);
+    setIsModalOpen(true);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
+      {/* KURUMSAL ÜST BAŞLIK */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -609,82 +630,89 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2">
-            {/* TOPLU SATIŞ EXCEL */}
-            <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-2 rounded-lg font-medium flex items-center gap-1.5 transition shadow-sm">
-              <FileUp className="w-3.5 h-3.5" /> 
-              {isImportingExcel ? 'Aktarılıyor...' : 'Satış Exceli'}
-              <input 
-                type="file" 
-                accept=".xlsx,.xls" 
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleDirectExcelImport(f);
-                }} 
-                disabled={isImportingExcel}
-                className="hidden" 
-              />
-            </label>
-
-            {/* TOPLU TAŞERON EXCEL */}
-            <label className="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-2 rounded-lg font-medium flex items-center gap-1.5 transition shadow-sm">
-              <FileSpreadsheet className="w-3.5 h-3.5" /> 
-              {isImportingSubcontractors ? 'İşleniyor...' : 'Taşeron Exceli'}
-              <input 
-                type="file" 
-                accept=".xlsx,.xls" 
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleSubcontractorExcelImport(f);
-                }} 
-                disabled={isImportingSubcontractors}
-                className="hidden" 
-              />
-            </label>
-
-            <button onClick={loadPortalData} title="Yenile" className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition">
+            <button onClick={loadPortalData} title="Verileri Yenile" className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
             <button 
-              onClick={() => setIsModalOpen(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3.5 py-2 rounded-lg font-medium flex items-center gap-1.5 transition shadow-sm">
-              <Plus className="w-3.5 h-3.5" /> Fatura / Masraf Girişi
-            </button>
-            <button 
               onClick={handleLogout}
-              title="Çıkış Yap"
-              className="p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700 rounded-lg transition ml-1">
+              title="Güvenli Çıkış"
+              className="p-2 text-rose-500 hover:bg-rose-50 hover:text-rose-700 rounded-lg transition ml-1">
               <LogOut className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        <div className="max-w-7xl mx-auto px-4 flex gap-8 text-sm font-medium border-t border-slate-100 overflow-x-auto">
-          <button onClick={() => setActiveTab('dashboard')} className={`py-3 border-b-2 whitespace-nowrap ${activeTab === 'dashboard' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Genel Kokpit & Finans
+        {/* ANA GEZİNME MENÜSÜ */}
+        <div className="max-w-7xl mx-auto px-4 flex gap-2 text-xs font-semibold border-t border-slate-100 overflow-x-auto py-1.5">
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'dashboard' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <LayoutDashboard className="w-4 h-4" /> Genel & Finans
           </button>
-          <button onClick={() => setActiveTab('fleet')} className={`py-3 border-b-2 whitespace-nowrap ${activeTab === 'fleet' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Araç Filosu ({dbVehicles.length})
+          <button 
+            onClick={() => setActiveTab('subcontractors')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'subcontractors' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <Users className="w-4 h-4" /> Alt Yüklenici Hakedişleri ({dbInvoices.filter(i => i.category === 'subcontractor_invoice').length})
           </button>
-          <button onClick={() => setActiveTab('subcontractors')} className={`py-3 border-b-2 whitespace-nowrap ${activeTab === 'subcontractors' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Alt Yüklenici 1/2 Hakedişler ({dbInvoices.filter(i => i.category === 'subcontractor_invoice').length})
+          <button 
+            onClick={() => setActiveTab('fleet')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'fleet' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <Truck className="w-4 h-4" /> Araç Filosu ({dbVehicles.length})
           </button>
-          <button onClick={() => setActiveTab('collections')} className={`py-3 border-b-2 whitespace-nowrap ${activeTab === 'collections' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Müşteri Tahsilatları ({dbInvoices.filter(i => i.category === 'customer_collection').length})
+          <button 
+            onClick={() => setActiveTab('collections')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'collections' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <Coins className="w-4 h-4" /> Müşteri Tahsilatları ({dbInvoices.filter(i => i.category === 'customer_collection').length})
           </button>
-          <button onClick={() => setActiveTab('payments')} className={`py-3 border-b-2 whitespace-nowrap ${activeTab === 'payments' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Banka Talimatı (Excel)
+          <button 
+            onClick={() => setActiveTab('payments')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'payments' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <FileSpreadsheet className="w-4 h-4" /> Banka Talimatı (Excel)
           </button>
-          <button onClick={() => setActiveTab('general_expenses')} className={`py-3 border-b-2 whitespace-nowrap ${activeTab === 'general_expenses' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Genel Giderler & Tedarik
+          <button 
+            onClick={() => setActiveTab('general_expenses')} 
+            className={`px-4 py-2 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'general_expenses' ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <Receipt className="w-4 h-4" /> Genel Giderler & Tedarik
           </button>
         </div>
       </header>
 
+      {/* İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6">
+        
+        {/* 1. GENEL & FİNANS SEKMESİ */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Genel Finans ve Operasyon Kokpiti</h2>
+                <p className="text-xs text-slate-500 mt-0.5">Şirketin anlık nakit durumu, toplam cirosu ve gider dökümü.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3.5 py-2.5 rounded-xl font-semibold flex items-center gap-2 transition shadow-sm">
+                  <FileUp className="w-4 h-4" /> 
+                  {isImportingExcel ? 'Aktarılıyor...' : 'Satış Exceli Yükle'}
+                  <input 
+                    type="file" 
+                    accept=".xlsx,.xls" 
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleDirectExcelImport(f);
+                    }} 
+                    disabled={isImportingExcel}
+                    className="hidden" 
+                  />
+                </label>
+                <button 
+                  onClick={() => openActionModal('customer_collection')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3.5 py-2.5 rounded-xl font-semibold flex items-center gap-1.5 transition shadow-sm">
+                  <Plus className="w-4 h-4" /> Yeni İşlem Ekle
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Toplam Satış Cirosu</span>
                 <div className="text-2xl font-bold text-slate-900 mt-2">
                   {realSalesTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
@@ -694,7 +722,7 @@ export default function App() {
                 </span>
               </div>
 
-              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase">Alınan Tahsilatlar</span>
                 <div className="text-2xl font-bold text-emerald-600 mt-2">
                   +{realCollectionsTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
@@ -704,7 +732,7 @@ export default function App() {
                 </span>
               </div>
 
-              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-slate-500 font-semibold tracking-wider uppercase">Toplam Gider & Masraf</span>
                 <div className="text-2xl font-bold text-rose-600 mt-2">
                   -{totalOutgoingExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
@@ -712,7 +740,7 @@ export default function App() {
                 <span className="text-xs text-slate-400 mt-1 block">Taşeron + Araçlar + Şirket</span>
               </div>
 
-              <div className="bg-blue-600 text-white p-5 rounded-xl shadow-sm">
+              <div className="bg-blue-600 text-white p-5 rounded-2xl shadow-sm">
                 <span className="text-xs text-blue-200 font-semibold tracking-wider uppercase">Güncel Kasa / Banka</span>
                 <div className="text-2xl font-bold mt-2">
                   {currentActualCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
@@ -721,10 +749,10 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                 <div>
-                  <h3 className="font-semibold text-slate-800">Tüm Faturalar & Tahsilatlar</h3>
+                  <h3 className="font-bold text-slate-800 text-sm">Tüm Faturalar & Tahsilatlar</h3>
                   <span className="text-xs text-slate-400">Veritabanına işlenen satış, taşeron ve masraf kayıtları</span>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
@@ -777,13 +805,84 @@ export default function App() {
           </div>
         )}
 
-        {/* ARAÇ FİLOSU TABLOSU */}
-        {activeTab === 'fleet' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-100 gap-4">
+        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ SEKMESİ */}
+        {activeTab === 'subcontractors' && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Araç Filosu & Muayene Takibi ({dbVehicles.length} Araç)</h3>
-                <p className="text-xs text-slate-500 mt-1">Sürücü, marka, muayene kalan gün ve yakıt otomasyon dökümü.</p>
+                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları ve taksitli ödeme takvimi.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition">
+                  <FileSpreadsheet className="w-4 h-4" /> 
+                  {isImportingSubcontractors ? 'İşleniyor...' : 'Toplu Taşeron Exceli Yükle'}
+                  <input 
+                    type="file" 
+                    accept=".xlsx,.xls" 
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleSubcontractorExcelImport(f);
+                    }} 
+                    disabled={isImportingSubcontractors}
+                    className="hidden" 
+                  />
+                </label>
+                <button 
+                  onClick={() => openActionModal('subcontractor_invoice')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
+                  <Plus className="w-4 h-4" /> Yeni Hakediş Girişi
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
+                  <tr>
+                    <th className="py-3 px-4">Fatura No / Taşeron</th>
+                    <th className="py-3 px-4">Fatura Tarihi</th>
+                    <th className="py-3 px-4">Toplam Tutar</th>
+                    <th className="py-3 px-4">1. Vade</th>
+                    <th className="py-3 px-4">2. Vade</th>
+                    <th className="py-3 px-4 text-center">Fatura Belgesi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {dbInvoices.filter(i => i.category === 'subcontractor_invoice').map((inv, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      <td className="py-3 px-4 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
+                      <td className="py-3 px-4 text-slate-500">{inv.issue_date}</td>
+                      <td className="py-3 px-4 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                      <td className="py-3 px-4 text-blue-700 font-semibold">{cleanNumber(inv.term1_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ <span className="text-[11px] text-slate-400">({inv.term1_due_date})</span></td>
+                      <td className="py-3 px-4 text-blue-700 font-semibold">{cleanNumber(inv.term2_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ <span className="text-[11px] text-slate-400">({inv.term2_due_date})</span></td>
+                      <td className="py-3 px-4 text-center">
+                        {inv.document_url ? (
+                          <a href={inv.document_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 font-medium">
+                            <ExternalLink className="w-3.5 h-3.5" /> Görüntüle
+                          </a>
+                        ) : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                  {dbInvoices.filter(i => i.category === 'subcontractor_invoice').length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-8 text-slate-400">Henüz hakediş faturası yok. Yukarıdaki butondan Excel dosyanızı yükleyebilirsiniz.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* 3. ARAÇ FİLOSU SEKMESİ */}
+        {activeTab === 'fleet' && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({dbVehicles.length} Araç)</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Sürücü, marka, muayene kalan gün ve yakıt otomasyon dökümü.</p>
               </div>
               <button 
                 onClick={() => {
@@ -804,12 +903,12 @@ export default function App() {
                   });
                   setIsVehicleModalOpen(true);
                 }}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm px-4 py-2.5 rounded-lg flex items-center gap-2 shadow-sm transition">
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
                 <Plus className="w-4 h-4" /> Yeni Araç Ekle
               </button>
             </div>
 
-            <div className="mt-4 overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
@@ -881,97 +980,29 @@ export default function App() {
           </div>
         )}
 
-        {/* ALT YÜKLENİCİLER SEKMESİ */}
-        {activeTab === 'subcontractors' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-100 gap-4">
-              <div>
-                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici 1/2 Vadeli Hakediş Faturaları</h3>
-                <p className="text-xs text-slate-500 mt-1">Eylül & güncel mutabakat faturaları otomatik 2 taksit olarak takip edilir.</p>
-              </div>
-              <div className="flex gap-2">
-                <label className="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white font-medium text-xs px-3.5 py-2.5 rounded-lg flex items-center gap-2 shadow-sm transition">
-                  <FileSpreadsheet className="w-4 h-4" /> 
-                  {isImportingSubcontractors ? 'İşleniyor...' : 'Toplu Taşeron Exceli Yükle'}
-                  <input 
-                    type="file" 
-                    accept=".xlsx,.xls" 
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) handleSubcontractorExcelImport(f);
-                    }} 
-                    disabled={isImportingSubcontractors}
-                    className="hidden" 
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
-                  <tr>
-                    <th className="py-3 px-4">Fatura No / Taşeron</th>
-                    <th className="py-3 px-4">Tarih</th>
-                    <th className="py-3 px-4">Toplam Tutar</th>
-                    <th className="py-3 px-4">1. Vade (1/2)</th>
-                    <th className="py-3 px-4">2. Vade (1/2)</th>
-                    <th className="py-3 px-4 text-center">Belge</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {dbInvoices.filter(i => i.category === 'subcontractor_invoice').map((inv, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50">
-                      <td className="py-3 px-4 font-mono font-medium">{inv.invoice_no}</td>
-                      <td className="py-3 px-4 text-slate-500">{inv.issue_date}</td>
-                      <td className="py-3 px-4 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                      <td className="py-3 px-4 text-blue-700 font-semibold">{cleanNumber(inv.term1_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ <span className="text-[11px] text-slate-400">({inv.term1_due_date})</span></td>
-                      <td className="py-3 px-4 text-blue-700 font-semibold">{cleanNumber(inv.term2_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ <span className="text-[11px] text-slate-400">({inv.term2_due_date})</span></td>
-                      <td className="py-3 px-4 text-center">
-                        {inv.document_url ? (
-                          <a href={inv.document_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 font-medium">
-                            <ExternalLink className="w-3.5 h-3.5" /> Aç
-                          </a>
-                        ) : '-'}
-                      </td>
-                    </tr>
-                  ))}
-                  {dbInvoices.filter(i => i.category === 'subcontractor_invoice').length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="text-center py-8 text-slate-400">Henüz alt yüklenici faturası yok. Yukarıdaki mor butondan Excel dosyanızı yükleyebilirsiniz.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* MÜŞTERİ TAHSİLATLARI SEKMESİ */}
+        {/* 4. MÜŞTERİ TAHSİLATLARI SEKMESİ */}
         {activeTab === 'collections' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-            <div className="flex justify-between items-center pb-6 border-b border-slate-100">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Müşteri Tahsilatları Listesi</h3>
-                <span className="text-xs text-slate-500">Müşterilerden banka veya nakit olarak tahsil edilen bedeller.</span>
+                <h3 className="font-bold text-lg text-slate-900">Müşteri Tahsilatları</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Müşterilerden tahsil edilen banka ve nakit girişleri.</p>
               </div>
               <button 
-                onClick={() => {
-                  setFormData({ ...formData, category: 'customer_collection' });
-                  setIsModalOpen(true);
-                }} 
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm transition">
+                onClick={() => openActionModal('customer_collection')} 
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
                 <Plus className="w-4 h-4" /> Yeni Tahsilat Girişi
               </button>
             </div>
 
-            <div className="mt-4 overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
                   <tr>
-                    <th className="py-3 px-4">Makbuz / İşlem No</th>
+                    <th className="py-3 px-4">Makbuz / Dekont No</th>
                     <th className="py-3 px-4">Tahsilat Tarihi</th>
                     <th className="py-3 px-4">Durum</th>
+                    <th className="py-3 px-4 text-center">Belge</th>
                     <th className="py-3 px-4 text-right">Tahsil Edilen Tutar</th>
                   </tr>
                 </thead>
@@ -981,7 +1012,14 @@ export default function App() {
                       <td className="py-3 px-4 font-mono font-medium">{item.invoice_no}</td>
                       <td className="py-3 px-4 text-slate-600">{item.issue_date}</td>
                       <td className="py-3 px-4">
-                        <span className="bg-emerald-100 text-emerald-800 text-[11px] px-2 py-0.5 rounded-full font-semibold">Tahsil Edildi</span>
+                        <span className="bg-emerald-100 text-emerald-800 text-[11px] px-2.5 py-0.5 rounded-full font-semibold">Tahsil Edildi</span>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        {item.document_url ? (
+                          <a href={item.document_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 font-medium">
+                            <ExternalLink className="w-3.5 h-3.5" /> Dekont
+                          </a>
+                        ) : '-'}
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-emerald-600 text-sm">
                         +{cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
@@ -990,7 +1028,7 @@ export default function App() {
                   ))}
                   {dbInvoices.filter(i => i.category === 'customer_collection').length === 0 && (
                     <tr>
-                      <td colSpan={4} className="text-center py-8 text-slate-400">Henüz müşteri tahsilatı işlenmedi. Sağ üstten tahsilat ekleyebilirsiniz.</td>
+                      <td colSpan={5} className="text-center py-8 text-slate-400">Henüz müşteri tahsilatı işlenmedi.</td>
                     </tr>
                   )}
                 </tbody>
@@ -999,46 +1037,46 @@ export default function App() {
           </div>
         )}
 
-        {/* BANKA TALİMATI */}
+        {/* 5. BANKA TALİMATI SEKMESİ */}
         {activeTab === 'payments' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-            <div className="flex justify-between items-center pb-6 border-b border-slate-100">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Banka Toplu Ödeme Talimatı (Excel Export)</h3>
-                <span className="text-xs text-slate-500">1/2 taksiti gelen taşeron ödemelerini banka formatında indirin.</span>
+                <h3 className="font-bold text-lg text-slate-900">Banka Toplu Ödeme Talimatı (Excel)</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Vadesi gelen alt yüklenici hakedişlerini tek tıkla banka formatında indirin.</p>
               </div>
-              <button onClick={handleExportBankExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm px-4 py-2.5 rounded-lg flex items-center gap-2 shadow-sm transition">
-                <FileSpreadsheet className="w-4 h-4" /> Banka Excel Dosyası İndir
+              <button onClick={handleExportBankExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition">
+                <FileCheck2 className="w-4 h-4" /> Banka Excel Dosyası İndir
               </button>
             </div>
+            <p className="text-xs text-slate-500">
+              Bu ekran, sisteme işlenen alt yüklenici faturalarının 1. ve 2. taksitlerini banka transfer listesi olarak hazırlar.
+            </p>
           </div>
         )}
 
-        {/* GENEL GİDERLER & TEDARİK SEKMESİ */}
+        {/* 6. GENEL GİDERLER & TEDARİK SEKMESİ */}
         {activeTab === 'general_expenses' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-            <div className="flex justify-between items-center pb-6 border-b border-slate-100">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Genel Şirket Giderleri & Tedarik Faturaları</h3>
-                <p className="text-xs text-slate-500">Plakasız ofis, tedarik, kira, SGK ve vergi ödemeleri.</p>
+                <h3 className="font-bold text-lg text-slate-900">Genel Giderler & Tedarik</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Ofis, kira, SGK, vergi ve genel şirket masrafları (Plakasız veya plakalı).</p>
               </div>
               <button 
-                onClick={() => {
-                  setFormData({ ...formData, category: 'general_office' });
-                  setIsModalOpen(true);
-                }} 
-                className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition">
-                <Plus className="w-3.5 h-3.5" /> Genel Gider Girişi
+                onClick={() => openActionModal('general_office')} 
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
+                <Plus className="w-4 h-4" /> Yeni Gider Girişi
               </button>
             </div>
 
-            <div className="mt-4 overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
                   <tr>
                     <th className="py-3 px-4">Kategori</th>
-                    <th className="py-3 px-4">Açıklama / Belge</th>
-                    <th className="py-3 px-4">Vade</th>
+                    <th className="py-3 px-4">Açıklama / Belge No</th>
+                    <th className="py-3 px-4">Vade Tarihi</th>
                     <th className="py-3 px-4 text-center">Fatura / Belge</th>
                     <th className="py-3 px-4 text-right">Tutar</th>
                   </tr>
@@ -1225,8 +1263,8 @@ export default function App() {
                   value={formData.category}
                   onChange={e => setFormData({ ...formData, category: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs font-medium">
+                  <option value="subcontractor_invoice">🚚 Alt Yüklenici Hakediş Faturası</option>
                   <option value="customer_collection" className="font-semibold text-emerald-700">💰 Müşteri Satış Tahsilatı (Kasa/Banka Girişi)</option>
-                  <option value="subcontractor_invoice">🚚 Alt Yüklenici Hakediş Faturası (1/2 Vadeli)</option>
                   <option value="general_office">🏢 Genel Tedarik / Ofis / Hizmet Masrafı (Plakasız)</option>
                   <option value="fuel">⛽ Öz Mal Yakıt (TTS)</option>
                   <option value="maintenance_repair">🔧 Öz Mal Bakım & Servis & Lastik</option>
@@ -1266,11 +1304,11 @@ export default function App() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  {formData.category === 'customer_collection' ? 'Tahsilat Yapılan Müşteri' : 'Cari / Tedarikçi / Kurum Adı'}
+                  {formData.category === 'customer_collection' ? 'Tahsilat Yapılan Müşteri' : (formData.category === 'subcontractor_invoice' ? 'Alt Yüklenici / Taşeron Adı' : 'Cari / Tedarikçi / Kurum Adı')}
                 </label>
                 <input 
                   type="text" 
-                  placeholder={formData.category === 'customer_collection' ? 'Örn: MİGROS TİCARET A.Ş.' : 'Örn: Shell, Servis A.Ş., Ev Sahibi'}
+                  placeholder={formData.category === 'customer_collection' ? 'Örn: MİGROS TİCARET A.Ş.' : 'Örn: Ahmet Aksu, Shell A.Ş.'}
                   value={formData.companyName}
                   onChange={e => setFormData({ ...formData, companyName: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs" 
@@ -1326,10 +1364,10 @@ export default function App() {
 
               {formData.category === 'subcontractor_invoice' && (
                 <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 space-y-2">
-                  <span className="text-xs font-bold text-blue-900 block">1/2 Vadeli Ödeme Planı (Otomatik)</span>
+                  <span className="text-xs font-bold text-blue-900 block">Vadeli Ödeme Planı (Otomatik İki Taksit)</span>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">1. Taksit Vadesi (1/2)</label>
+                      <label className="block text-[11px] text-slate-500 mb-1">1. Taksit Vadesi</label>
                       <input 
                         type="date" 
                         value={formData.term1Date}
@@ -1338,7 +1376,7 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] text-slate-500 mb-1">2. Taksit Vadesi (1/2)</label>
+                      <label className="block text-[11px] text-slate-500 mb-1">2. Taksit Vadesi</label>
                       <input 
                         type="date" 
                         value={formData.term2Date}
