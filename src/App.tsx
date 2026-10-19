@@ -9,8 +9,11 @@ import {
   Lock,
   LogOut,
   ShieldCheck,
-  ArrowDownLeft,
-  ArrowUpRight
+  Edit2,
+  Calendar,
+  Fuel,
+  Radio,
+  FileText
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -19,7 +22,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 export default function App() {
-  // GÜVENLİK VE OTURUM YÖNETİMİ
+  // GÜVENLİK VE OTURUM
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return localStorage.getItem('tazeyol_auth') === 'true';
   });
@@ -49,12 +52,33 @@ export default function App() {
   // PORTAL STATE'LERİ
   const [activeTab, setActiveTab] = useState<'dashboard' | 'fleet' | 'subcontractors' | 'collections' | 'payments' | 'general_expenses'>('dashboard');
   
+  // Masraf & Fatura Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isImportingExcel, setIsImportingExcel] = useState(false);
 
+  // Araç Ekleme & Düzenleme Modal State
+  const [isVehicleModalOpen, setIsVehicleModalOpen] = useState(false);
+  const [isSavingVehicle, setIsSavingVehicle] = useState(false);
+  const [editingVehicleId, setEditingVehicleId] = useState<number | null>(null);
+
+  const [vehicleFormData, setVehicleFormData] = useState({
+    plateNumber: '',
+    driverName: '',
+    brandModel: '',
+    documentIncluded: 'VAR',
+    trackingSystem: 'Var',
+    fuelSystem: 'UTTS',
+    hgsSystem: 'SHELL',
+    nextInspectionDate: '',
+    insuranceCompany: '',
+    insuranceDate: '',
+    vehicleType: 'Kamyon Frigo (10 Palet)',
+    ownershipType: 'Öz Mal'
+  });
+
   const [formData, setFormData] = useState({
-    category: 'customer_collection', // Varsayılan müşteri tahsilatı
+    category: 'customer_collection',
     companyName: '',
     plateNumber: '',
     invoiceNo: '',
@@ -79,9 +103,7 @@ export default function App() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (invErr) {
-        console.error('Fatura çekme hatası:', invErr);
-      }
+      if (invErr) console.error('Fatura çekme hatası:', invErr);
 
       if (vData) setDbVehicles(vData);
       if (invData) setDbInvoices(invData);
@@ -116,7 +138,90 @@ export default function App() {
     return isNaN(parsed) ? 0 : parsed;
   };
 
-  // TOPLU SATIŞ EXCEL'İ YÜKLEME (MÜKERRER KORUMALI)
+  // KALAN GÜN VE MUAYENE DURUMU HESAPLAYICI
+  const calculateDaysLeft = (targetDateStr: string | null) => {
+    if (!targetDateStr) return { text: 'Belirtilmedi', color: 'text-slate-400 bg-slate-100' };
+    const target = new Date(targetDateStr).getTime();
+    const today = new Date().setHours(0, 0, 0, 0);
+    const diff = Math.ceil((target - today) / (1000 * 60 * 60 * 24));
+
+    if (diff < 0) {
+      return { text: `Süresi Geçti (${Math.abs(diff)} gün)`, color: 'text-rose-700 bg-rose-100 font-bold' };
+    } else if (diff <= 30) {
+      return { text: `${diff} gün kaldı`, color: 'text-amber-800 bg-amber-100 font-bold' };
+    } else {
+      return { text: `Geçerli (${diff} gün)`, color: 'text-emerald-800 bg-emerald-100 font-semibold' };
+    }
+  };
+
+  // ARAÇ DÜZENLEME PENCERESİNİ AÇMA
+  const openEditVehicleModal = (v: any) => {
+    setEditingVehicleId(v.id);
+    setVehicleFormData({
+      plateNumber: v.plate_number || '',
+      driverName: v.driver_name || '',
+      brandModel: v.brand_model || '',
+      documentIncluded: v.document_included || 'VAR',
+      trackingSystem: v.tracking_system || 'Var',
+      fuelSystem: v.fuel_system || 'UTTS',
+      hgsSystem: v.hgs_system || 'SHELL',
+      nextInspectionDate: v.next_inspection_date || '',
+      insuranceCompany: v.insurance_company || '',
+      insuranceDate: v.insurance_date || '',
+      vehicleType: v.vehicle_type || 'Kamyon Frigo (10 Palet)',
+      ownershipType: v.ownership_type || 'Öz Mal'
+    });
+    setIsVehicleModalOpen(true);
+  };
+
+  // YENİ ARAÇ VEYA GÜNCELLEME KAYDI
+  const handleSaveVehicle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vehicleFormData.plateNumber.trim()) {
+      alert('Lütfen araç plakasını giriniz.');
+      return;
+    }
+
+    setIsSavingVehicle(true);
+    try {
+      const payload = {
+        plate_number: vehicleFormData.plateNumber.trim().toUpperCase(),
+        driver_name: vehicleFormData.driverName.trim(),
+        brand_model: vehicleFormData.brandModel.trim(),
+        document_included: vehicleFormData.documentIncluded,
+        tracking_system: vehicleFormData.trackingSystem,
+        fuel_system: vehicleFormData.fuelSystem,
+        hgs_system: vehicleFormData.hgsSystem,
+        next_inspection_date: vehicleFormData.nextInspectionDate || null,
+        insurance_company: vehicleFormData.insuranceCompany.trim() || null,
+        insurance_date: vehicleFormData.insuranceDate || null,
+        vehicle_type: vehicleFormData.vehicleType,
+        ownership_type: vehicleFormData.ownershipType
+      };
+
+      if (editingVehicleId) {
+        // Güncelleme
+        const { error } = await supabase.from('vehicles').update(payload).eq('id', editingVehicleId);
+        if (error) throw error;
+        alert('Araç bilgileri güncellendi!');
+      } else {
+        // Yeni Ekleme
+        const { error } = await supabase.from('vehicles').insert([payload]);
+        if (error) throw error;
+        alert('Yeni araç filoya eklendi!');
+      }
+
+      setIsVehicleModalOpen(false);
+      setEditingVehicleId(null);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Araç işlem hatası: ' + (err.message || err));
+    } finally {
+      setIsSavingVehicle(false);
+    }
+  };
+
+  // TOPLU SATIŞ EXCEL'İ YÜKLEME
   const handleDirectExcelImport = async (file: File) => {
     setIsImportingExcel(true);
     const reader = new FileReader();
@@ -212,8 +317,6 @@ export default function App() {
 
       const matchedVehicle = dbVehicles.find(v => v.plate_number === formData.plateNumber);
       const halfAmount = parsedAmount / 2;
-
-      // Yön tayini: Müşteri Tahsilatı ve Satış Kasaya Artı (+) Giriş, Taşeron ve Masraflar Eksi (-) Çıkış
       const direction = isCollection ? 'incoming' : (formData.category === 'freight_sales' ? 'outgoing' : 'incoming');
 
       const { error } = await supabase.from('invoices').insert([{
@@ -234,7 +337,7 @@ export default function App() {
 
       if (error) throw error;
 
-      alert(isCollection ? 'Müşteri tahsilatı başarıyla işlendi ve kasaya yansıtıldı!' : 'Kayıt başarıyla işlendi!');
+      alert(isCollection ? 'Tahsilat işlendi ve kasaya yansıtıldı!' : 'Kayıt başarıyla işlendi!');
       setIsModalOpen(false);
       setFormData({
         category: 'customer_collection',
@@ -357,7 +460,7 @@ export default function App() {
           </form>
 
           <div className="mt-8 pt-6 border-t border-slate-100 text-center">
-            <span className="text-[11px] text-slate-400">Tazeyol Operasyon & Finans ERP Sistemi</span>
+            <span className="text-[11px] text-slate-400">Tazeyol & Alkan Nakliyat Operasyon ERP Sistemi</span>
           </div>
         </div>
       </div>
@@ -387,9 +490,8 @@ export default function App() {
     .filter(i => ['taxes_sgk', 'salary_payroll', 'traffic_fines', 'general_office'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const baseCash = 845200; // Başlangıç Kasa/Banka Bakiyesi
+  const baseCash = 845200;
   const totalOutgoingExpenses = realSubcontractorDebt + realFleetExpenses + realGeneralExpenses;
-  // Güncel Nakit = Başlangıç + Gerçekleşen Tahsilatlar - Gerçekleşen/Planlanan Harcamalar
   const currentActualCash = baseCash + realCollectionsTotal - totalOutgoingExpenses;
 
   return (
@@ -445,11 +547,11 @@ export default function App() {
           <button onClick={() => setActiveTab('dashboard')} className={`py-3 border-b-2 ${activeTab === 'dashboard' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
             Genel Kokpit & Finans
           </button>
+          <button onClick={() => setActiveTab('fleet')} className={`py-3 border-b-2 ${activeTab === 'fleet' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
+            Araç Filosu & Muayene Takibi ({dbVehicles.length})
+          </button>
           <button onClick={() => setActiveTab('collections')} className={`py-3 border-b-2 ${activeTab === 'collections' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
             Müşteri Tahsilatları ({dbInvoices.filter(i => i.category === 'customer_collection').length})
-          </button>
-          <button onClick={() => setActiveTab('fleet')} className={`py-3 border-b-2 ${activeTab === 'fleet' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
-            Öz Mal Araç Masrafları ({dbVehicles.length})
           </button>
           <button onClick={() => setActiveTab('subcontractors')} className={`py-3 border-b-2 ${activeTab === 'subcontractors' ? 'border-blue-600 text-blue-600 font-semibold' : 'border-transparent text-slate-500'}`}>
             Alt Yüklenici 1/2 Hakedişler
@@ -551,6 +653,110 @@ export default function App() {
           </div>
         )}
 
+        {/* ARAÇ FİLOSU & DETAYLI MUAYENE TABLOSU */}
+        {activeTab === 'fleet' && (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-100 gap-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Alkan & Tazeyol Araç Filosu ({dbVehicles.length} Araç)</h3>
+                <p className="text-xs text-slate-500 mt-1">Sürücü, marka, muayene kalan gün ve yakıt otomasyon dökümü.</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setEditingVehicleId(null);
+                  setVehicleFormData({
+                    plateNumber: '',
+                    driverName: '',
+                    brandModel: '',
+                    documentIncluded: 'VAR',
+                    trackingSystem: 'Var',
+                    fuelSystem: 'UTTS',
+                    hgsSystem: 'SHELL',
+                    nextInspectionDate: '',
+                    insuranceCompany: '',
+                    insuranceDate: '',
+                    vehicleType: 'Kamyon Frigo (10 Palet)',
+                    ownershipType: 'Öz Mal'
+                  });
+                  setIsVehicleModalOpen(true);
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm px-4 py-2.5 rounded-lg flex items-center gap-2 shadow-sm transition">
+                <Plus className="w-4 h-4" /> Yeni Araç Ekle
+              </button>
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-3">Plaka</th>
+                    <th className="py-3 px-3">Sürücü</th>
+                    <th className="py-3 px-3">Marka / Model</th>
+                    <th className="py-3 px-3">Kasa / Tip</th>
+                    <th className="py-3 px-3 text-center">Taşıt Tanıma</th>
+                    <th className="py-3 px-3">Sonraki Muayene</th>
+                    <th className="py-3 px-3">Muayene Durumu</th>
+                    <th className="py-3 px-3">Trafik Sigortası</th>
+                    <th className="py-3 px-3 text-right">Toplam Masraf</th>
+                    <th className="py-3 px-3 text-center">İşlem</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dbVehicles.map(v => {
+                    const costs = dbInvoices.filter(i => i.vehicle_id === v.id);
+                    const totalCost = costs.reduce((s, i) => s + cleanNumber(i.total_amount), 0);
+                    const daysInfo = calculateDaysLeft(v.next_inspection_date);
+
+                    return (
+                      <tr key={v.id} className="hover:bg-slate-50 transition">
+                        <td className="py-3 px-3 font-mono font-bold text-blue-700 text-sm whitespace-nowrap">
+                          {v.plate_number}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">
+                          {v.driver_name || '-'}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                          {v.brand_model || '-'}
+                        </td>
+                        <td className="py-3 px-3 text-slate-500 whitespace-nowrap">
+                          {v.vehicle_type}
+                        </td>
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${v.fuel_system === 'UTTS' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
+                            {v.fuel_system || 'UTTS'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                          {v.next_inspection_date || '-'}
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <span className={`px-2.5 py-1 rounded-full text-[11px] ${daysInfo.color}`}>
+                            {daysInfo.text}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                          {v.insurance_company ? `${v.insurance_company} (${v.insurance_date || ''})` : '-'}
+                        </td>
+                        <td className="py-3 px-3 text-right font-bold text-rose-600 whitespace-nowrap">
+                          {totalCost > 0 ? `-${totalCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '0,00 ₺'}
+                        </td>
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <button 
+                            onClick={() => openEditVehicleModal(v)}
+                            title="Bilgileri Düzenle"
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition inline-flex items-center gap-1 font-medium">
+                            <Edit2 className="w-3.5 h-3.5" /> Düzenle
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* MÜŞTERİ TAHSİLATLARI SEKMESİ */}
         {activeTab === 'collections' && (
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
@@ -603,27 +809,7 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'fleet' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-            <h3 className="font-bold text-lg text-slate-900 mb-2">Öz Mal Araç Masrafları</h3>
-            <p className="text-xs text-slate-500 mb-6">Yalnızca şirkete ait plakaların mazot, servis ve şoför harcamaları.</p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {dbVehicles.map(v => {
-                const costs = dbInvoices.filter(i => i.vehicle_id === v.id);
-                const total = costs.reduce((s, i) => s + cleanNumber(i.total_amount), 0);
-                return (
-                  <div key={v.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50">
-                    <span className="font-bold text-slate-900 block">{v.plate_number}</span>
-                    <span className="text-xs text-slate-500 block mb-2">{v.vehicle_type}</span>
-                    <span className="text-xs text-slate-500">Toplam Harcama:</span>
-                    <span className="font-bold text-rose-600 block text-lg">{total.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
+        {/* ALT YÜKLENİCİLER */}
         {activeTab === 'subcontractors' && (
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
             <h3 className="font-bold text-lg text-slate-900 mb-2">Alt Yüklenici 1/2 Vadeli Faturaları</h3>
@@ -651,6 +837,7 @@ export default function App() {
           </div>
         )}
 
+        {/* BANKA TALİMATI */}
         {activeTab === 'payments' && (
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
             <div className="flex justify-between items-center pb-6 border-b border-slate-100">
@@ -665,6 +852,7 @@ export default function App() {
           </div>
         )}
 
+        {/* GENEL GİDERLER */}
         {activeTab === 'general_expenses' && (
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
             <h3 className="font-bold text-lg text-slate-900 mb-2">Şirket Genel Giderleri & Vergiler</h3>
@@ -693,7 +881,143 @@ export default function App() {
         )}
       </main>
 
-      {/* FORM PENCERESİ */}
+      {/* ARAÇ EKLEME / DÜZENLEME PENCERESİ */}
+      {isVehicleModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-lg">
+                {editingVehicleId ? 'Araç Bilgilerini Düzenle' : 'Filoya Yeni Araç Ekle'}
+              </h3>
+              <button onClick={() => setIsVehicleModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveVehicle} className="mt-4 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Araç Plakası</label>
+                  <input 
+                    type="text" 
+                    placeholder="34 TZY 101"
+                    value={vehicleFormData.plateNumber}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, plateNumber: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg uppercase font-mono font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Sürücü Adı Soyadı</label>
+                  <input 
+                    type="text" 
+                    placeholder="Örn: Ercan Çelik"
+                    value={vehicleFormData.driverName}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, driverName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Marka / Model</label>
+                  <input 
+                    type="text" 
+                    placeholder="Örn: Axtor, Doblo, NPR10"
+                    value={vehicleFormData.brandModel}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, brandModel: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Kasa / Araç Tipi</label>
+                  <select 
+                    value={vehicleFormData.vehicleType}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, vehicleType: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                    <option value="Çekici / Tır">Çekici / Tır</option>
+                    <option value="Dorse Frigo">Dorse Frigo (-18 / +4)</option>
+                    <option value="Kamyon Frigo (10 Palet)">Kamyon Frigo (10 Palet)</option>
+                    <option value="Kamyon Frigo (8 Palet)">Kamyon Frigo (8 Palet)</option>
+                    <option value="Kamyonet / Hafif Ticari">Kamyonet / Hafif Ticari</option>
+                    <option value="Binek Otomobil">Binek Otomobil</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Taşıt Tanıma</label>
+                  <select 
+                    value={vehicleFormData.fuelSystem}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, fuelSystem: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                    <option value="UTTS">UTTS</option>
+                    <option value="Kart">Kart</option>
+                    <option value="YOK">YOK</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Araç Takip</label>
+                  <select 
+                    value={vehicleFormData.trackingSystem}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, trackingSystem: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                    <option value="Var">Var</option>
+                    <option value="Yok">Yok</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">HGS</label>
+                  <select 
+                    value={vehicleFormData.hgsSystem}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, hgsSystem: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
+                    <option value="SHELL">SHELL</option>
+                    <option value="DİĞER">DİĞER</option>
+                    <option value="YOK">YOK</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <span className="font-bold text-slate-800 block text-xs">Muayene & Sigorta Takvimi</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Sonraki Muayene Tarihi</label>
+                    <input 
+                      type="date" 
+                      value={vehicleFormData.nextInspectionDate}
+                      onChange={e => setVehicleFormData({ ...vehicleFormData, nextInspectionDate: e.target.value })}
+                      className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Sigorta Şirketi</label>
+                    <input 
+                      type="text" 
+                      placeholder="Örn: QUICK, ETHICA, AXA"
+                      value={vehicleFormData.insuranceCompany}
+                      onChange={e => setVehicleFormData({ ...vehicleFormData, insuranceCompany: e.target.value })}
+                      className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button type="button" onClick={() => setIsVehicleModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="submit" disabled={isSavingVehicle} className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">
+                  {isSavingVehicle ? 'Kaydediliyor...' : (editingVehicleId ? 'Güncelle' : 'Filoya Ekle')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* İŞLEM / FATURA GİRİŞ PENCERESİ */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100">
@@ -743,7 +1067,7 @@ export default function App() {
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-xs">
                     <option value="">Plaka Seçiniz...</option>
                     {dbVehicles.map(v => (
-                      <option key={v.id} value={v.plate_number}>{v.plate_number} ({v.vehicle_type})</option>
+                      <option key={v.id} value={v.plate_number}>{v.plate_number} ({v.brand_model || v.vehicle_type})</option>
                     ))}
                   </select>
                 </div>
@@ -765,7 +1089,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {formData.category === 'customer_collection' ? 'Dekont / Belge No (İsteğe Bağlı)' : 'Fatura / Belge No'}
+                    {formData.category === 'customer_collection' ? 'Dekont / Belge No' : 'Fatura / Belge No'}
                   </label>
                   <input 
                     type="text" 
