@@ -9,8 +9,6 @@ import {
   LogOut, 
   ShieldCheck, 
   Edit2, 
-  Paperclip, 
-  ExternalLink,
   LayoutDashboard,
   Users,
   Coins,
@@ -19,7 +17,6 @@ import {
   UserCheck,
   CreditCard,
   DollarSign,
-  ArrowDownCircle,
   TrendingUp,
   AlertCircle,
   Menu,
@@ -34,7 +31,11 @@ import {
   Building2,
   Wallet,
   BellRing,
-  CheckCircle2
+  CheckCircle2,
+  FileText,
+  History,
+  Wrench,
+  Fuel
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -42,7 +43,6 @@ import * as pdfjsLib from 'pdfjs-dist';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
-// KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
   return (
     <div className="flex items-center gap-2">
@@ -104,12 +104,11 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'subcontractors' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'payments' | 'general_expenses'>('overview');
 
-  // GENEL GÖRÜNÜM TARİH FİLTRESİ (YEREL TAKVİM DÜZELTMESİ)
+  // GENEL GÖRÜNÜM TARİH FİLTRESİ
   const getCurrentMonthRange = () => {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
-    const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
 
     const pad = (n: number) => (n < 10 ? '0' + n : String(n));
@@ -165,6 +164,10 @@ export default function App() {
     paySource: 'cash',
     notes: ''
   });
+
+  // 360° ÇEKMECE (DRAWER) STATE'LERİ
+  const [drawerType, setDrawerType] = useState<'vehicle' | 'employee' | 'entity' | null>(null);
+  const [selectedDrawerEntity, setSelectedDrawerEntity] = useState<any>(null);
 
   // ARAÇ EKLEME & DÜZENLEME MODAL STATE
   const [isVehicleModalOpen, setIsVehicleModalOpen] = useState(false);
@@ -305,7 +308,6 @@ export default function App() {
   // CARİ / TEDARİKÇİ OTOMATİK TAMAMLAMA LİSTESİ (HAFIZA)
   const existingCompanySuggestions = useMemo(() => {
     const names = new Set<string>();
-    // Önceden bilinen kurumsal isimler
     names.add('Shell & Turcas Petrol A.Ş.');
     names.add('MİGROS TİCARET A.Ş.');
     names.add('Bim Birleşik Mağazalar A.Ş.');
@@ -315,7 +317,6 @@ export default function App() {
     names.add('Oto Servis & Bakım');
     names.add('Lastik Dünyası');
 
-    // Fatura kayıtlarından toplananlar
     dbInvoices.forEach(i => {
       if (i.invoice_no && i.invoice_no.includes(' - ')) {
         const parts = i.invoice_no.split(' - ');
@@ -338,7 +339,7 @@ export default function App() {
         const diffDays = Math.ceil((targetTime - todayTime) / (1000 * 60 * 60 * 24));
         return { ...i, diffDays };
       })
-      .filter(i => i.diffDays <= 3) // Vadesi 3 gün kalanlar, bugün olanlar ve geçmiş olanlar
+      .filter(i => i.diffDays <= 3)
       .sort((a, b) => a.diffDays - b.diffDays);
   }, [dbInvoices]);
 
@@ -354,16 +355,20 @@ export default function App() {
 
   const filteredInvoices = dbInvoices.filter(i => isDateInRange(i.issue_date || i.created_at));
 
-  // GENEL GÖRÜNÜM FİNANSAL KART DEĞERLERİ
-  const totalSalesRevenue = filteredInvoices
+  // SEÇİLEN DÖNEM SATIŞ CİROSU (Tarihe Göre)
+  const selectedPeriodSalesRevenue = filteredInvoices
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
+  // KASAYA FİİLEN GİREN TAHSİLATLAR
   const totalCollectedCash = filteredInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const pendingReceivables = Math.max(0, totalSalesRevenue - totalCollectedCash);
+  // KRİTİK DÜZELTME: BEKLEYEN MÜŞTERİ ALACAKLARI (TARİHTEN BAĞIMSIZ TÜM TAHSİL EDİLMEMİŞ SATIŞ FATURALARI)
+  const allTimePendingSalesReceivables = dbInvoices
+    .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // 1. Taşeron Borcu & Kırılımları
   let unpaidSubcontractorDebt = 0;
@@ -610,7 +615,6 @@ export default function App() {
           }
         });
 
-        // 1. Öz Mal Tablosundaki Araçların HGS Hücrelerini Güncelle
         setDbProfitability(prev => prev.map(item => {
           const cleanP = item.plate_number.replace(/\s+/g, '').toUpperCase();
           if (plateHgsTotals[cleanP] !== undefined) {
@@ -622,7 +626,6 @@ export default function App() {
           return item;
         }));
 
-        // 2. Faturayı Genel Giderlere Borç Olarak Ekle
         const todayStr = new Date().toISOString().split('T')[0];
         await supabase.from('invoices').insert([{
           invoice_no: `HGS-${todayStr.slice(0, 7)}`,
@@ -646,7 +649,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // PERSONEL KAYDETME (PHONE & IBAN GÜVENLİ)
+  // PERSONEL KAYDETME
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!employeeFormData.fullName.trim()) return;
@@ -954,7 +957,7 @@ export default function App() {
     reader.readAsBinaryString(file);
   };
 
-  // DİNAMİK İŞLEM / FATURA KAYDI (PLAKA, ÖDEME KAYNAĞI VE HAMALİYE ENTEGRELİ)
+  // DİNAMİK İŞLEM / FATURA KAYDI
   const isVehicleExpense = ['vehicle_maintenance', 'vehicle_tire', 'vehicle_insurance', 'vehicle_inspection', 'traffic_fines'].includes(formData.category);
 
   const handleSaveInvoice = async (e: React.FormEvent) => {
@@ -986,7 +989,6 @@ export default function App() {
         }
       }
 
-      // 1. Eğer Ödemeyi Personel Kendi Cebinden Yaptıysa:
       if (formData.paymentStatus === 'paid' && formData.paidSource === 'employee' && formData.paidEmployeeName) {
         await supabase.from('advance_payments').insert([{
           target_type: 'employee',
@@ -1001,7 +1003,6 @@ export default function App() {
         }]);
       }
 
-      // 2. Eğer Araç Masrafıysa Öz Mal Tablosundaki "Diğer Gider"e Ekleyelim
       if (isVehicleExpense && formData.plateNumber) {
         const cleanP = formData.plateNumber.replace(/\s+/g, '').toUpperCase();
         setDbProfitability(prev => prev.map(item => {
@@ -1015,7 +1016,6 @@ export default function App() {
         }));
       }
 
-      // 3. Şirket Faturasını Kaydet
       const invNo = formData.invoiceNo || (isCollection ? `THS-${Date.now().toString().slice(-6)}` : `BLG-${Date.now().toString().slice(-6)}`);
       const { error } = await supabase.from('invoices').insert([{
         invoice_no: formData.plateNumber ? `${invNo} [${formData.plateNumber}]` : (formData.companyName ? `${invNo} - ${formData.companyName}` : invNo),
@@ -1083,6 +1083,24 @@ export default function App() {
       sgk: '',
       otherExpense: ''
     });
+  };
+
+  // 360° DRAWER AÇMA FONKSİYONLARI
+  const openVehicleDrawer = (plate: string) => {
+    const cleanP = plate.replace(/\s+/g, '').toUpperCase();
+    const v = dbVehicles.find(x => x.plate_number.replace(/\s+/g, '').toUpperCase() === cleanP) || { plate_number: cleanP };
+    setSelectedDrawerEntity(v);
+    setDrawerType('vehicle');
+  };
+
+  const openEmployeeDrawer = (emp: any) => {
+    setSelectedDrawerEntity(emp);
+    setDrawerType('employee');
+  };
+
+  const openEntityDrawer = (name: string) => {
+    setSelectedDrawerEntity({ name });
+    setDrawerType('entity');
   };
 
   // GİRİŞ EKRANI
@@ -1413,10 +1431,10 @@ export default function App() {
                   <TrendingUp className="w-3.5 h-3.5" /> Bekleyen Müşteri Alacakları
                 </span>
                 <div className="text-2xl font-bold text-slate-900 mt-2">
-                  {pendingReceivables.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {allTimePendingSalesReceivables.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-xs text-slate-400 mt-1 block">
-                  Seçilen Dönem Cirosu: {totalSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  Seçilen Dönem Cirosu: {selectedPeriodSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
               </div>
 
@@ -1497,7 +1515,9 @@ export default function App() {
                     .slice(0, 5)
                     .map((p, idx) => (
                       <div key={idx} className="flex justify-between items-center p-2.5 rounded-xl bg-slate-50 text-xs">
-                        <div>
+                        <div 
+                          onClick={() => openEntityDrawer(p.invoice_no)}
+                          className="cursor-pointer hover:text-blue-600 transition">
                           <span className="font-mono font-bold text-slate-800 block truncate max-w-[240px]">{p.invoice_no}</span>
                           <span className="text-[11px] text-slate-400">Vade: {p.term1_due_date || p.due_date}</span>
                         </div>
@@ -1531,8 +1551,8 @@ export default function App() {
                     .map((v, idx) => (
                       <div 
                         key={idx} 
-                        onClick={() => isAdmin && openEditVehicleModal(v)}
-                        title={isAdmin ? "Düzenlemek için tıklayın" : ""}
+                        onClick={() => openVehicleDrawer(v.plate_number)}
+                        title="360° Araç Kartını Aç"
                         className="flex justify-between items-center p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50/70 border border-transparent hover:border-blue-200 text-xs cursor-pointer transition">
                         <div>
                           <span className="font-mono font-bold text-blue-700 block">{v.plate_number}</span>
@@ -1542,7 +1562,7 @@ export default function App() {
                           <span className={`px-2 py-0.5 rounded-full text-[11px] ${v.daysInfo.color}`}>
                             {v.daysInfo.text}
                           </span>
-                          {isAdmin && <Edit2 className="w-3.5 h-3.5 text-slate-400 hover:text-blue-600" />}
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
                         </div>
                       </div>
                     ))}
@@ -1591,7 +1611,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
                 <div>
                   <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları, taksit kapatma ve hata düzeltme.</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları, taksit kapatma ve cari geçmiş dökümü.</p>
                 </div>
                 {isAdmin && (
                   <div className="flex items-center gap-2">
@@ -1649,7 +1669,11 @@ export default function App() {
                   <tbody className="divide-y divide-slate-100 text-xs">
                     {dbInvoices.filter(i => i.category === 'subcontractor_invoice').map((inv, idx) => (
                       <tr key={idx} className="hover:bg-slate-50">
-                        <td className="py-3 px-4 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
+                        <td 
+                          onClick={() => openEntityDrawer(inv.invoice_no)}
+                          className="py-3 px-4 font-mono font-medium text-blue-700 hover:underline cursor-pointer">
+                          {inv.invoice_no}
+                        </td>
                         <td className="py-3 px-4 text-slate-500">{inv.issue_date}</td>
                         <td className="py-3 px-4 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                         
@@ -1711,13 +1735,13 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. ÖZ MAL KARLILIK & MALİYET ANALİZİ */}
+        {/* 3. ÖZ MAL KARLILIK & MALİYET ANALİZİ (360° PLAKA DETAY TIKLANABİLİR) */}
         {activeTab === 'profitability' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık & Maliyet Analizi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Plaka bazlı ciro, akaryakıt, şoför ve net kâr marjı dökümü.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Plaka bazlı ciro, akaryakıt, şoför ve net kâr marjı dökümü. Plakaya tıklayarak 360° araç sicil kartını açabilirsiniz.</p>
               </div>
               {isAdmin && (
                 <div className="flex items-center gap-2">
@@ -1778,7 +1802,7 @@ export default function App() {
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
                     <th className="py-2.5 px-2">Ay</th>
-                    <th className="py-2.5 px-2">Plaka</th>
+                    <th className="py-2.5 px-2">Plaka (Detay)</th>
                     <th className="py-2.5 px-2 text-right">Mutabakat Ham</th>
                     <th className="py-2.5 px-2 text-right">Fatura</th>
                     <th className="py-2.5 px-2 text-right">Şoför Maaşı</th>
@@ -1801,7 +1825,12 @@ export default function App() {
                     return (
                       <tr key={row.id} className="hover:bg-slate-50 transition">
                         <td className="py-2.5 px-2 font-medium text-slate-600 whitespace-nowrap">{row.month_year}</td>
-                        <td className="py-2.5 px-2 font-mono font-bold text-blue-700 whitespace-nowrap">{row.plate_number}</td>
+                        <td 
+                          onClick={() => openVehicleDrawer(row.plate_number)}
+                          title="360° Araç Kartını Aç"
+                          className="py-2.5 px-2 font-mono font-bold text-blue-700 whitespace-nowrap hover:underline cursor-pointer">
+                          {row.plate_number}
+                        </td>
                         <td className="py-2.5 px-2 text-right whitespace-nowrap">{row.recon_net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                         <td className="py-2.5 px-2 text-right font-semibold whitespace-nowrap">{row.invoice_rev.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                         <td className="py-2.5 px-2 text-right whitespace-nowrap">{row.driver_sal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
@@ -1824,13 +1853,13 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. PERSONEL & BORDRO */}
+        {/* 4. PERSONEL & BORDRO (360° PERSONEL EKSTRE TIKLANABİLİR) */}
         {activeTab === 'employees' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Personel & Bordro Yönetimi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Sabit maaşlar, şirket harcama iadeleri ve net ödenecek tutarlar.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Sabit maaşlar, şirket harcama iadeleri ve net dökümler. İsme tıklayarak 360° personel ekstresini açabilirsiniz.</p>
               </div>
               {isAdmin && (
                 <button 
@@ -1845,7 +1874,7 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Personel Adı Soyadı</th>
+                    <th className="py-3 px-3">Personel Adı Soyadı (Ekstre)</th>
                     <th className="py-3 px-3">Görevi</th>
                     <th className="py-3 px-3 text-right">Sabit Maaş</th>
                     <th className="py-3 px-3 text-right">Şirket Harcamaları (+)</th>
@@ -1869,7 +1898,12 @@ export default function App() {
 
                     return (
                       <tr key={emp.id} className="hover:bg-slate-50 transition">
-                        <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{emp.full_name}</td>
+                        <td 
+                          onClick={() => openEmployeeDrawer(emp)}
+                          title="360° Personel Ekstresini Aç"
+                          className="py-3 px-3 font-bold text-blue-700 hover:underline cursor-pointer whitespace-nowrap">
+                          {emp.full_name}
+                        </td>
                         <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{emp.role_title}</td>
                         <td className="py-3 px-3 text-right font-semibold text-slate-800 whitespace-nowrap">
                           {cleanNumber(emp.base_salary).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
@@ -1908,13 +1942,13 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. ARAÇ FİLOSU */}
+        {/* 5. ARAÇ FİLOSU (360° PLAKA TIKLANABİLİR) */}
         {activeTab === 'fleet' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({dbVehicles.length} Araç)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Sürücü, marka, muayene kalan gün ve otomasyon dökümü.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Sürücü, marka, muayene kalan gün ve otomasyon dökümü. Plakaya tıklayarak sicil kartını açabilirsiniz.</p>
               </div>
               {isAdmin && (
                 <button 
@@ -1946,7 +1980,7 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Plaka</th>
+                    <th className="py-3 px-3">Plaka (Detay)</th>
                     <th className="py-3 px-3">Sürücü</th>
                     <th className="py-3 px-3">Marka / Model</th>
                     <th className="py-3 px-3">Kasa / Tip</th>
@@ -1962,7 +1996,12 @@ export default function App() {
                     const daysInfo = calculateDaysLeft(v.next_inspection_date);
                     return (
                       <tr key={v.id} className="hover:bg-slate-50 transition">
-                        <td className="py-3 px-3 font-mono font-bold text-blue-700 text-sm whitespace-nowrap">{v.plate_number}</td>
+                        <td 
+                          onClick={() => openVehicleDrawer(v.plate_number)}
+                          title="360° Araç Kartını Aç"
+                          className="py-3 px-3 font-mono font-bold text-blue-700 text-sm whitespace-nowrap hover:underline cursor-pointer">
+                          {v.plate_number}
+                        </td>
                         <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">{v.driver_name || '-'}</td>
                         <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{v.brand_model || '-'}</td>
                         <td className="py-3 px-3 text-slate-500 whitespace-nowrap">{v.vehicle_type}</td>
@@ -2096,815 +2135,4 @@ export default function App() {
                 <thead className="bg-slate-50 text-slate-500 text-xs font-semibold uppercase">
                   <tr>
                     <th className="py-3 px-4">Kategori</th>
-                    <th className="py-3 px-4">Açıklama / Belge No</th>
-                    <th className="py-3 px-4">Vade / Tarih</th>
-                    <th className="py-3 px-4 text-right">Tutar</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {dbInvoices.filter(i => ['taxes_sgk', 'general_fuel', 'general_hgs', 'traffic_fines', 'general_office', 'general_handling', 'vehicle_maintenance', 'vehicle_tire', 'vehicle_insurance', 'vehicle_inspection'].includes(i.category)).map((g, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50">
-                      <td className="py-3 px-4 font-semibold text-slate-700">
-                        {g.category === 'general_fuel' && '⛽ Toplu Yakıt Faturası'}
-                        {g.category === 'general_hgs' && '🛣️ Toplu HGS Faturası'}
-                        {g.category === 'general_handling' && '📦 Hamaliye / Yükleme'}
-                        {g.category === 'vehicle_maintenance' && '🔧 Araç Bakım & Servis'}
-                        {g.category === 'vehicle_tire' && '🛞 Lastik Masrafı'}
-                        {g.category === 'vehicle_insurance' && '🛡️ Sigorta & Kasko'}
-                        {g.category === 'vehicle_inspection' && '📋 Muayene Masrafı'}
-                        {g.category === 'traffic_fines' && '⚠️ Trafik Cezası'}
-                        {g.category === 'general_office' && '🏢 Şirket / Ofis Masrafı'}
-                        {g.category === 'taxes_sgk' && '🏛️ SGK / Vergi'}
-                      </td>
-                      <td className="py-3 px-4 font-mono">{g.invoice_no}</td>
-                      <td className="py-3 px-4 text-slate-500">{g.due_date || g.issue_date || '-'}</td>
-                      <td className="py-3 px-4 text-right font-bold text-rose-600">-{cleanNumber(g.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* MODAL: HIZLI AVANS & MASRAF İADESİ POP-UP */}
-      {isQuickPayModalOpen && quickPayTargetEmployee && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-sm">Personele Ödeme Yap</h3>
-              <button onClick={() => setIsQuickPayModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleQuickPaySubmit} className="mt-4 space-y-3 text-xs">
-              <div>
-                <span className="text-slate-500 block">Personel:</span>
-                <span className="font-bold text-slate-800 text-sm">{quickPayTargetEmployee.full_name}</span>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Ödeme Türü</label>
-                <select 
-                  value={quickPayFormData.payType}
-                  onChange={e => setQuickPayFormData({ ...quickPayFormData, payType: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                  <option value="advance">💵 Maaş Avansı Ver</option>
-                  <option value="expense_refund">🧾 Şirket İçin Yaptığı Masrafı İade Et</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Ödeme Kaynağı</label>
-                <select 
-                  value={quickPayFormData.paySource}
-                  onChange={e => setQuickPayFormData({ ...quickPayFormData, paySource: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                  <option value="cash">💵 Şirket Kasasından Nakit</option>
-                  <option value="bank">🏦 Şirket Banka Hesabından (Havale)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Ödenecek Tutar (TL)</label>
-                <input 
-                  type="text" 
-                  placeholder="2500"
-                  value={quickPayFormData.amount}
-                  onChange={e => setQuickPayFormData({ ...quickPayFormData, amount: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-sm"
-                  required
-                />
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsQuickPayModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium">Ödemeyi Kaydet</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: BANKA TALİMATI SEÇİM MODALI */}
-      {isBankExportModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Banka Excel Talimatı Hazırla</h3>
-              <button onClick={() => setIsBankExportModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="py-4 space-y-3 text-xs">
-              <p className="text-slate-600">Hangi taksit dilimlerini içeren ödeme listesini indirmek istiyorsunuz?</p>
-              
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 p-3 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition">
-                  <input 
-                    type="radio" 
-                    name="bankTerm" 
-                    checked={bankExportTermChoice === 'term1'} 
-                    onChange={() => setBankExportTermChoice('term1')}
-                  />
-                  <div>
-                    <span className="font-bold text-slate-800 block">Sadece 1. Taksitler (1. Vade)</span>
-                    <span className="text-slate-400 text-[11px]">Yalnızca henüz ödenmemiş 1. taksit borçlarını döker.</span>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-2 p-3 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition">
-                  <input 
-                    type="radio" 
-                    name="bankTerm" 
-                    checked={bankExportTermChoice === 'term2'} 
-                    onChange={() => setBankExportTermChoice('term2')}
-                  />
-                  <div>
-                    <span className="font-bold text-slate-800 block">Sadece 2. Taksitler (2. Vade)</span>
-                    <span className="text-slate-400 text-[11px]">Yalnızca henüz ödenmemiş 2. taksit borçlarını döker.</span>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-2 p-3 border border-blue-200 bg-blue-50/50 rounded-xl cursor-pointer hover:bg-blue-50 transition">
-                  <input 
-                    type="radio" 
-                    name="bankTerm" 
-                    checked={bankExportTermChoice === 'both'} 
-                    onChange={() => setBankExportTermChoice('both')}
-                  />
-                  <div>
-                    <span className="font-bold text-[#009fe3] block">1. ve 2. Taksit Birlikte (Toplu Hakediş Kapatma)</span>
-                    <span className="text-slate-500 text-[11px]">Aynı taşeron için iki taksiti toplayarak tek satırda net transfer tutarı üretir.</span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            <div className="pt-2 flex gap-3 text-xs">
-              <button type="button" onClick={() => setIsBankExportModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-              <button type="button" onClick={executeBankExport} className="w-1/2 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium">
-                Excel Dosyasını İndir
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: TAŞERON FATURA DÜZENLEME PENCERESİ */}
-      {isEditSubModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Alt Yüklenici Hakediş Düzenle</h3>
-              <button onClick={() => setIsEditSubModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveSubInvoiceEdit} className="mt-4 space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Fatura No & Taşeron Unvanı</label>
-                <input 
-                  type="text" 
-                  value={subEditFormData.invoiceNo}
-                  onChange={e => setSubEditFormData({ ...subEditFormData, invoiceNo: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono font-medium"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Toplam Tutar (TL)</label>
-                  <input 
-                    type="text" 
-                    value={subEditFormData.totalAmount}
-                    onChange={e => setSubEditFormData({ ...subEditFormData, totalAmount: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-blue-700"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Fatura Tarihi</label>
-                  <input 
-                    type="date" 
-                    value={subEditFormData.issueDate}
-                    onChange={e => setSubEditFormData({ ...subEditFormData, issueDate: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
-                  />
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                <span className="font-bold text-slate-800 block text-[11px]">Taksit Kırılımları</span>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-slate-500 text-[10px]">1. Vade Tutarı</label>
-                    <input 
-                      type="text" 
-                      value={subEditFormData.term1Amount}
-                      onChange={e => setSubEditFormData({ ...subEditFormData, term1Amount: e.target.value })}
-                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-500 text-[10px]">1. Vade Tarihi</label>
-                    <input 
-                      type="date" 
-                      value={subEditFormData.term1DueDate}
-                      onChange={e => setSubEditFormData({ ...subEditFormData, term1DueDate: e.target.value })}
-                      className="w-full px-2 py-1 border border-slate-200 rounded bg-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-slate-500 text-[10px]">2. Vade Tutarı</label>
-                    <input 
-                      type="text" 
-                      value={subEditFormData.term2Amount}
-                      onChange={e => setSubEditFormData({ ...subEditFormData, term2Amount: e.target.value })}
-                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-500 text-[10px]">2. Vade Tarihi</label>
-                    <input 
-                      type="date" 
-                      value={subEditFormData.term2DueDate}
-                      onChange={e => setSubEditFormData({ ...subEditFormData, term2DueDate: e.target.value })}
-                      className="w-full px-2 py-1 border border-slate-200 rounded bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsEditSubModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium">Değişiklikleri Kaydet</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: ÖZ MAL ARAÇ AYLIK KARLILIK KAYIT */}
-      {isProfitModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Yeni Araç Karlılık & Maliyet Kaydı</h3>
-              <button onClick={() => setIsProfitModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveProfitabilityRow} className="mt-4 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Dönem / Ay</label>
-                  <input 
-                    type="text" 
-                    placeholder="Eyl.26"
-                    value={profitFormData.monthYear}
-                    onChange={e => setProfitFormData({ ...profitFormData, monthYear: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Plaka</label>
-                  <input 
-                    type="text" 
-                    placeholder="34BHC220"
-                    value={profitFormData.plateNumber}
-                    onChange={e => setProfitFormData({ ...profitFormData, plateNumber: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono font-bold uppercase"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Mutabakat Ham Tutar (TL)</label>
-                  <input 
-                    type="text" 
-                    placeholder="283.691,96"
-                    value={profitFormData.reconNetRevenue}
-                    onChange={e => setProfitFormData({ ...profitFormData, reconNetRevenue: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Kesilen Satış Faturası (TL)</label>
-                  <input 
-                    type="text" 
-                    placeholder="329.082,67"
-                    value={profitFormData.invoiceRevenue}
-                    onChange={e => setProfitFormData({ ...profitFormData, invoiceRevenue: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-blue-700"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Şoför Maaşı</label>
-                  <input 
-                    type="text" 
-                    placeholder="82.500"
-                    value={profitFormData.driverSalary}
-                    onChange={e => setProfitFormData({ ...profitFormData, driverSalary: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Yakıt (KDV'siz)</label>
-                  <input 
-                    type="text" 
-                    placeholder="78.408"
-                    value={profitFormData.fuelExVat}
-                    onChange={e => setProfitFormData({ ...profitFormData, fuelExVat: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">HGS (KDV'siz)</label>
-                  <input 
-                    type="text" 
-                    placeholder="31.397"
-                    value={profitFormData.hgsExVat}
-                    onChange={e => setProfitFormData({ ...profitFormData, hgsExVat: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Şoför Primi</label>
-                  <input 
-                    type="text" 
-                    placeholder="0"
-                    value={profitFormData.bonus}
-                    onChange={e => setProfitFormData({ ...profitFormData, bonus: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Şoför SGK Payı</label>
-                  <input 
-                    type="text" 
-                    placeholder="11.148"
-                    value={profitFormData.sgk}
-                    onChange={e => setProfitFormData({ ...profitFormData, sgk: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Diğer Giderler</label>
-                  <input 
-                    type="text" 
-                    placeholder="1.000"
-                    value={profitFormData.otherExpense}
-                    onChange={e => setProfitFormData({ ...profitFormData, otherExpense: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsProfitModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-[#009fe3] text-white font-medium">Analize Kaydet</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: ARAÇ EKLEME / DÜZENLEME PENCERESİ */}
-      {isVehicleModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-lg">
-                {editingVehicleId ? 'Araç Bilgilerini Düzenle' : 'Filoya Yeni Araç Ekle'}
-              </h3>
-              <button onClick={() => setIsVehicleModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveVehicle} className="mt-4 space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Araç Plakası</label>
-                  <input 
-                    type="text" 
-                    placeholder="34 TZY 101"
-                    value={vehicleFormData.plateNumber}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, plateNumber: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg uppercase font-mono font-bold"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Sürücü Adı Soyadı</label>
-                  <input 
-                    type="text" 
-                    placeholder="Örn: Ercan Çelik"
-                    value={vehicleFormData.driverName}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, driverName: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Marka / Model</label>
-                  <input 
-                    type="text" 
-                    placeholder="Örn: Axtor, Doblo, NPR10"
-                    value={vehicleFormData.brandModel}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, brandModel: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Kasa / Araç Tipi</label>
-                  <select 
-                    value={vehicleFormData.vehicleType}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, vehicleType: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                    <option value="Çekici / Tır">Çekici / Tır</option>
-                    <option value="Dorse Frigo">Dorse Frigo (-18 / +4)</option>
-                    <option value="Kamyon Frigo (10 Palet)">Kamyon Frigo (10 Palet)</option>
-                    <option value="Kamyon Frigo (8 Palet)">Kamyon Frigo (8 Palet)</option>
-                    <option value="Kamyonet / Hafif Ticari">Kamyonet / Hafif Ticari</option>
-                    <option value="Binek Otomobil">Binek Otomobil</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Taşıt Tanıma</label>
-                  <select 
-                    value={vehicleFormData.fuelSystem}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, fuelSystem: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                    <option value="UTTS">UTTS</option>
-                    <option value="Kart">Kart</option>
-                    <option value="YOK">YOK</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Araç Takip</label>
-                  <select 
-                    value={vehicleFormData.trackingSystem}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, trackingSystem: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                    <option value="Var">Var</option>
-                    <option value="Yok">Yok</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">HGS</label>
-                  <select 
-                    value={vehicleFormData.hgsSystem}
-                    onChange={e => setVehicleFormData({ ...vehicleFormData, hgsSystem: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                    <option value="SHELL">SHELL</option>
-                    <option value="DİĞER">DİĞER</option>
-                    <option value="YOK">YOK</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-                <span className="font-bold text-slate-800 block text-xs">Muayene & Sigorta Takvimi</span>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Sonraki Muayene Tarihi</label>
-                    <input 
-                      type="date" 
-                      value={vehicleFormData.nextInspectionDate}
-                      onChange={e => setVehicleFormData({ ...vehicleFormData, nextInspectionDate: e.target.value })}
-                      className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-600 mb-1">Sigorta Şirketi</label>
-                    <input 
-                      type="text" 
-                      placeholder="Örn: QUICK, ETHICA, AXA"
-                      value={vehicleFormData.insuranceCompany}
-                      onChange={e => setVehicleFormData({ ...vehicleFormData, insuranceCompany: e.target.value })}
-                      className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsVehicleModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" disabled={isSavingVehicle} className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">
-                  {isSavingVehicle ? 'Kaydediliyor...' : (editingVehicleId ? 'Güncelle' : 'Filoya Ekle')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: PERSONEL EKLEME PENCERESİ */}
-      {isEmployeeModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-lg">Yeni Personel Kaydı</h3>
-              <button onClick={() => setIsEmployeeModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEmployee} className="mt-4 space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Ad Soyad</label>
-                <input 
-                  type="text" 
-                  placeholder="Örn: İsa Topuz"
-                  value={employeeFormData.fullName}
-                  onChange={e => setEmployeeFormData({ ...employeeFormData, fullName: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Görevi / Pozisyonu</label>
-                <select 
-                  value={employeeFormData.roleTitle}
-                  onChange={e => setEmployeeFormData({ ...employeeFormData, roleTitle: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                  <option value="Tır Kaptanı / Frigo">Tır Kaptanı / Frigo (-18 / +4)</option>
-                  <option value="Kamyon Şoförü (10 Palet)">Kamyon Şoförü (10 Palet)</option>
-                  <option value="Kamyonet Şoförü / Dağıtım">Kamyonet Şoförü / Dağıtım</option>
-                  <option value="Operasyon Sorumlusu">Operasyon Sorumlusu</option>
-                  <option value="Muhasebe & Finans">Muhasebe & Finans</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Aylık Sabit Net Maaş (TL)</label>
-                <input 
-                  type="text" 
-                  placeholder="56000"
-                  value={employeeFormData.baseSalary}
-                  onChange={e => setEmployeeFormData({ ...employeeFormData, baseSalary: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Telefon</label>
-                  <input 
-                    type="text" 
-                    placeholder="0532..."
-                    value={employeeFormData.phone}
-                    onChange={e => setEmployeeFormData({ ...employeeFormData, phone: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">IBAN No</label>
-                  <input 
-                    type="text" 
-                    placeholder="TR..."
-                    value={employeeFormData.iban}
-                    onChange={e => setEmployeeFormData({ ...employeeFormData, iban: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg uppercase"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsEmployeeModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">Personeli Kaydet</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: GELİŞMİŞ İŞLEM / FATURA GİRİŞİ (AUTOCOMPLETE, PLAKA VE ÖDEME KAYNAĞI) */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-lg">İşlem / Belge Girişi</h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveInvoice} className="mt-4 space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">İşlem / Masraf Türü</label>
-                <select 
-                  value={formData.category}
-                  onChange={e => setFormData({ ...formData, category: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium">
-                  <optgroup label="Akaryakıt & Otoyol (Toplu)">
-                    <option value="general_fuel">⛽ Toplu Yakıt Faturası</option>
-                    <option value="general_hgs">🛣️ Toplu HGS Faturası</option>
-                  </optgroup>
-                  <optgroup label="Araca Doğrudan Bağlı Masraflar (Plaka Seçilir)">
-                    <option value="vehicle_maintenance">🔧 Periyodik Bakım & Onarım / Servis</option>
-                    <option value="vehicle_tire">🛞 Lastik Değişimi & Lastik Masrafı</option>
-                    <option value="vehicle_insurance">🛡️ Sigorta & Kasko</option>
-                    <option value="vehicle_inspection">📋 Muayene Harcı / Masrafı</option>
-                    <option value="traffic_fines">⚠️ Trafik Cezası</option>
-                  </optgroup>
-                  <optgroup label="Operasyonel & Şirket Giderleri">
-                    <option value="general_handling">📦 Hamaliye / Yükleme-Boşaltma Gideri</option>
-                    <option value="general_office">🏢 Şirket / Ofis / Hizmet Masrafı</option>
-                    <option value="taxes_sgk">🏛️ SGK / Vergi / Muhtasar</option>
-                  </optgroup>
-                </select>
-              </div>
-
-              {/* ARACA YÖNELİK MASRAF İSE PLAKA SEÇİM ALANI */}
-              {isVehicleExpense && (
-                <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
-                  <label className="block font-bold text-blue-900">İlgili Araç Plakası (*Zorunlu)</label>
-                  <select 
-                    value={formData.plateNumber}
-                    onChange={e => setFormData({ ...formData, plateNumber: e.target.value })}
-                    className="w-full px-3 py-2 border border-blue-300 rounded-lg bg-white font-mono font-bold text-blue-800">
-                    <option value="">Plaka Seçiniz...</option>
-                    {dbVehicles.map(v => (
-                      <option key={v.id} value={v.plate_number}>{v.plate_number} ({v.driver_name || v.brand_model})</option>
-                    ))}
-                  </select>
-                  <span className="text-[10px] text-blue-600 block">Bu tutar aracın aylık maliyet tablosuna "Diğer Gider" olarak işlenecektir.</span>
-                </div>
-              )}
-
-              {/* CARİ / TEDARİKÇİ ADI - OTOMATİK TAMAMLAMA (AUTOCOMPLETE) */}
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">Cari / Tedarikçi / Hamal / Kurum Adı</label>
-                <input 
-                  type="text" 
-                  list="companies-autocomplete-list"
-                  placeholder="Yazmaya başlayın veya seçin..."
-                  value={formData.companyName}
-                  onChange={e => setFormData({ ...formData, companyName: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg" 
-                />
-                <datalist id="companies-autocomplete-list">
-                  {existingCompanySuggestions.map((name, i) => (
-                    <option key={i} value={name} />
-                  ))}
-                </datalist>
-                <span className="text-[10px] text-slate-400 mt-0.5 block">Önceden girilen cariler harf yazdıkça otomatik önerilir.</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Fatura / Makbuz No</label>
-                  <input 
-                    type="text" 
-                    placeholder="Örn: GIB2026..."
-                    value={formData.invoiceNo}
-                    onChange={e => setFormData({ ...formData, invoiceNo: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg" 
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Tutar (TL)</label>
-                  <input 
-                    type="text" 
-                    placeholder="Örn: 25.000,00"
-                    value={formData.amount}
-                    onChange={e => setFormData({ ...formData, amount: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold" 
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Belge / İşlem Tarihi</label>
-                  <input 
-                    type="date" 
-                    value={formData.paymentDate}
-                    onChange={e => setFormData({ ...formData, paymentDate: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white" 
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-600 mb-1">Vade Tarihi</label>
-                  <input 
-                    type="date" 
-                    value={formData.dueDate}
-                    onChange={e => setFormData({ ...formData, dueDate: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white" 
-                  />
-                </div>
-              </div>
-
-              {/* ÖDEME DURUMU VE KAYNAĞI SEÇİMİ */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <span className="font-bold text-slate-800 block text-xs">Ödeme Durumu ve Kaynağı</span>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="paymentStatusRadio" 
-                      checked={formData.paymentStatus === 'unpaid'}
-                      onChange={() => setFormData({ ...formData, paymentStatus: 'unpaid' })}
-                    />
-                    <span>Henüz Ödenmedi (Vadeli Borç)</span>
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="paymentStatusRadio" 
-                      checked={formData.paymentStatus === 'paid'}
-                      onChange={() => setFormData({ ...formData, paymentStatus: 'paid' })}
-                    />
-                    <span className="font-semibold text-emerald-700">Zaten Ödendi (Nakit Çıkışı)</span>
-                  </label>
-                </div>
-
-                {formData.paymentStatus === 'paid' && (
-                  <div className="pt-2 border-t border-slate-200 space-y-2">
-                    <span className="text-[11px] text-slate-500 font-semibold block">Ödemeyi Kim / Nereden Yaptı?</span>
-                    <div className="grid grid-cols-3 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paidSource: 'cash' })}
-                        className={`p-2 rounded-lg border text-center transition ${formData.paidSource === 'cash' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>
-                        💵 Şirket Kasası
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paidSource: 'bank' })}
-                        className={`p-2 rounded-lg border text-center transition ${formData.paidSource === 'bank' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>
-                        🏦 Şirket Bankası
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, paidSource: 'employee' })}
-                        className={`p-2 rounded-lg border text-center transition ${formData.paidSource === 'employee' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>
-                        👤 Personel Kendi Cebinden
-                      </button>
-                    </div>
-
-                    {formData.paidSource === 'employee' && (
-                      <div className="pt-1">
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">Harcamayı Yapan Personel</label>
-                        <select 
-                          value={formData.paidEmployeeName}
-                          onChange={e => setFormData({ ...formData, paidEmployeeName: e.target.value })}
-                          className="w-full px-3 py-1.5 border border-slate-200 rounded-lg bg-white"
-                          required>
-                          <option value="">Personel Seçiniz...</option>
-                          {dbEmployees.map(emp => (
-                            <option key={emp.id} value={emp.full_name}>{emp.full_name}</option>
-                          ))}
-                        </select>
-                        <span className="text-[10px] text-amber-700 mt-1 block">
-                          * Bu tutar personelin şirket alacağına yazılacak ve ay sonu maaşına otomatik eklenecektir.
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" disabled={isSaving} className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">
-                  {isSaving ? 'Kaydediliyor...' : 'Kaydet'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+                    <th className="
