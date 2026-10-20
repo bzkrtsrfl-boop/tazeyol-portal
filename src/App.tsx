@@ -279,7 +279,7 @@ export default function App() {
     }
   };
 
-  // GSM FORMATLAYICI: 05XX XXX XX XX
+  // GSM FORMATLAYICI (05XX XXX XX XX)
   const formatPhoneNumber = (val: string) => {
     let digits = val.replace(/\D/g, '');
     if (!digits.startsWith('0')) {
@@ -295,7 +295,7 @@ export default function App() {
     return res;
   };
 
-  // IBAN FORMATLAYICI: TRXX XXXX XXXX XXXX XXXX XXXX XX
+  // IBAN FORMATLAYICI (TRXX XXXX XXXX XXXX XXXX XXXX XX)
   const formatIBAN = (val: string) => {
     let clean = val.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
     if (!clean.startsWith('TR')) {
@@ -2760,7 +2760,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: PERSONEL EKLEME PENCERESİ (STANDART GSM & IBAN MASKELEMESİ) */}
+      {/* MODAL: PERSONEL EKLEME PENCERESİ */}
       {isEmployeeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
