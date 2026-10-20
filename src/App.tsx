@@ -2764,6 +2764,12 @@ export default function App() {
                       <option value="2">2 Taksit (Her Vadeden Eşit Düş)</option>
                       <option value="3">3 Taksit (Periyodik Düş)</option>
                       <option value="4">4 Taksit (Periyodik Düş)</option>
+                      <option value="5">5 Taksit (Periyodik Düş)</option>
+                      <option value="6">6 Taksit (Periyodik Düş)</option>
+                      <option value="7">7 Taksit (Periyodik Düş)</option>
+                      <option value="8">8 Taksit (Periyodik Düş)</option>
+                      <option value="9">9 Taksit (Periyodik Düş)</option>
+                      <option value="10">10 Taksit (Periyodik Düş)</option>
                     </select>
                   </div>
                 </div>
