@@ -717,7 +717,7 @@ export default function App() {
           status: 'paid'
         }]);
 
-       // 2. Kalan avans takibi icin avans tablosuna islenir
+     // 2. Kalan avans takibi icin avans tablosuna islenir
         await supabase.from('advance_payments').insert([{
           target_type: 'contractor',
           target_id: subEditFormData.invoiceNo,
@@ -729,6 +729,7 @@ export default function App() {
           issue_date: todayStr,
           notes: 'Taksit basi dusum: ' + singleTermDeduction.toLocaleString('tr-TR') + ' TL (Kalan: ' + (instCount - 1) + ' Taksit / ' + remainingAdvanceDebt.toLocaleString('tr-TR') + ' TL)'
         }]);
+      }
 
       if (t1 === 0 && t2 === 0 && tot > 0) {
         t1 = tot / 2;
@@ -749,7 +750,7 @@ export default function App() {
         .eq('id', editingSubInvoice.id);
 
       if (error) throw error;
-      alert(adv > 0 ? `Taksitli avans (${adv.toLocaleString('tr-TR')} ₺ / ${instCount} Taksit) başarıyla mahsup edildi ve kaydedildi!` : 'Hakediş başarıyla güncellendi!');
+      alert(adv > 0 ? 'Taksitli avans (' + adv.toLocaleString('tr-TR') + ' ₺ / ' + instCount + ' Taksit) başarıyla mahsup edildi ve kaydedildi!' : 'Hakediş başarıyla güncellendi!');
       setIsEditSubModalOpen(false);
       setEditingSubInvoice(null);
       loadPortalData();
@@ -757,7 +758,6 @@ export default function App() {
       alert('Fatura düzenleme hatası: ' + (err.message || err));
     }
   };
-
   const executeBankExport = () => {
     const subcontractorMap = new Map<string, {
       subcontractor: string;
