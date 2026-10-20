@@ -34,10 +34,8 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
-import * as pdfjsLib from 'pdfjs-dist';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-
+// KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
   return (
     <div className="flex items-center gap-2">
@@ -309,8 +307,9 @@ export default function App() {
     names.add('Lastik Dünyası');
 
     dbInvoices.forEach(i => {
-      if (i.invoice_no && i.invoice_no.includes(' - ')) {
-        const parts = i.invoice_no.split(' - ');
+      const invNo = String(i.invoice_no || '');
+      if (invNo.includes(' - ')) {
+        const parts = invNo.split(' - ');
         if (parts[1]) names.add(parts[1].trim());
       }
     });
@@ -329,7 +328,7 @@ export default function App() {
         const diffDays = Math.ceil((targetTime - todayTime) / (1000 * 60 * 60 * 24));
         return { ...i, diffDays };
       })
-      .filter(i => i.diffDays <= 3)
+      .filter(i => !isNaN(i.diffDays) && i.diffDays <= 3)
       .sort((a, b) => a.diffDays - b.diffDays);
   }, [dbInvoices]);
 
@@ -344,21 +343,27 @@ export default function App() {
 
   const filteredInvoices = dbInvoices.filter(i => isDateInRange(i.issue_date || i.created_at));
 
+  // SEÇİLEN DÖNEMİN CİROSU
   const totalPeriodSalesRevenue = filteredInvoices
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Tüm zamanların toplam tahsilatı (tarih filtresinden bağımsız)
-  const allTimeCollectedCash = dbInvoices
+  // SEÇİLEN DÖNEMDE KASAYA GİREN TAHSİLAT
+  const totalCollectedCash = filteredInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Tüm zamanların toplam kesilen satış faturaları
+  // TÜM ZAMANLARIN TOPLAM KESİLEN SATIŞLARI
   const allTimeSalesRevenue = dbInvoices
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Bekleyen Net Alacak = Toplam Satış - Toplam Tahsilat
+  // TÜM ZAMANLARIN TOPLAM MÜŞTERİ TAHSİLATLARI
+  const allTimeCollectedCash = dbInvoices
+    .filter(i => i.category === 'customer_collection')
+    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+  // GERÇEK NET BEKLEYEN MÜŞTERİ ALACAĞI = TÜM SATIŞLAR - TÜM TAHSİLATLAR
   const pendingReceivablesAllTime = Math.max(0, allTimeSalesRevenue - allTimeCollectedCash);
 
   let unpaidSubcontractorDebt = 0;
@@ -415,9 +420,9 @@ export default function App() {
   const currentRealCash = baseCash + totalCollectedCash - actualPaidOutflows;
 
   const openVehicle360 = (v: any) => {
-    const cleanPlate = v.plate_number.replace(/\s+/g, '').toUpperCase();
-    const relatedProfit = dbProfitability.filter(p => p.plate_number.replace(/\s+/g, '').toUpperCase() === cleanPlate);
-    const relatedExpenses = dbInvoices.filter(i => i.invoice_no?.toUpperCase().includes(cleanPlate));
+    const cleanPlate = String(v.plate_number || '').replace(/\s+/g, '').toUpperCase();
+    const relatedProfit = dbProfitability.filter(p => String(p.plate_number || '').replace(/\s+/g, '').toUpperCase() === cleanPlate);
+    const relatedExpenses = dbInvoices.filter(i => String(i.invoice_no || '').toUpperCase().includes(cleanPlate));
 
     setDrawerData({
       isOpen: true,
@@ -447,8 +452,9 @@ export default function App() {
   };
 
   const openContractor360 = (inv: any) => {
-    const name = inv.invoice_no.includes(' - ') ? inv.invoice_no.split(' - ')[1] : inv.invoice_no;
-    const allInvoices = dbInvoices.filter(i => i.invoice_no.includes(name));
+    const invNo = String(inv.invoice_no || '');
+    const name = invNo.includes(' - ') ? invNo.split(' - ')[1] : invNo;
+    const allInvoices = dbInvoices.filter(i => String(i.invoice_no || '').includes(name));
     setDrawerData({
       isOpen: true,
       type: 'contractor',
@@ -668,7 +674,7 @@ export default function App() {
         });
 
         setDbProfitability(prev => prev.map(item => {
-          const cleanP = item.plate_number.replace(/\s+/g, '').toUpperCase();
+          const cleanP = String(item.plate_number || '').replace(/\s+/g, '').toUpperCase();
           if (plateHgsTotals[cleanP] !== undefined) {
             return {
               ...item,
@@ -1051,7 +1057,7 @@ export default function App() {
       if (isVehicleExpense && formData.plateNumber) {
         const cleanP = formData.plateNumber.replace(/\s+/g, '').toUpperCase();
         setDbProfitability(prev => prev.map(item => {
-          if (item.plate_number.replace(/\s+/g, '').toUpperCase() === cleanP) {
+          if (String(item.plate_number || '').replace(/\s+/g, '').toUpperCase() === cleanP) {
             return {
               ...item,
               other_exp: (item.other_exp || 0) + parsedAmount
