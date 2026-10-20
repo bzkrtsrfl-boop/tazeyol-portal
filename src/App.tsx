@@ -279,6 +279,39 @@ export default function App() {
     }
   };
 
+  // GSM FORMATLAYICI: 05XX XXX XX XX
+  const formatPhoneNumber = (val: string) => {
+    let digits = val.replace(/\D/g, '');
+    if (!digits.startsWith('0')) {
+      digits = '0' + digits;
+    }
+    digits = digits.substring(0, 11);
+
+    let res = '';
+    if (digits.length > 0) res += digits.substring(0, 4);
+    if (digits.length >= 5) res += ' ' + digits.substring(4, 7);
+    if (digits.length >= 8) res += ' ' + digits.substring(7, 9);
+    if (digits.length >= 10) res += ' ' + digits.substring(9, 11);
+    return res;
+  };
+
+  // IBAN FORMATLAYICI: TRXX XXXX XXXX XXXX XXXX XXXX XX
+  const formatIBAN = (val: string) => {
+    let clean = val.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    if (!clean.startsWith('TR')) {
+      clean = 'TR' + clean.replace(/^TR/, '');
+    }
+    const trPart = clean.substring(0, 2);
+    const digitsPart = clean.substring(2).replace(/\D/g, '').substring(0, 24);
+    const full = trPart + digitsPart;
+
+    const parts = [];
+    for (let i = 0; i < full.length; i += 4) {
+      parts.push(full.substring(i, i + 4));
+    }
+    return parts.join(' ');
+  };
+
   const calculateDaysLeft = (targetDateStr: string | null) => {
     if (!targetDateStr) return { diff: 999, text: 'Belirtilmedi', color: 'text-slate-400 bg-slate-100' };
     const cleanDate = sanitizeDate(targetDateStr);
@@ -343,27 +376,22 @@ export default function App() {
 
   const filteredInvoices = dbInvoices.filter(i => isDateInRange(i.issue_date || i.created_at));
 
-  // SEÇİLEN DÖNEMİN CİROSU
   const totalPeriodSalesRevenue = filteredInvoices
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // SEÇİLEN DÖNEMDE KASAYA GİREN TAHSİLAT
   const totalCollectedCash = filteredInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // TÜM ZAMANLARIN TOPLAM KESİLEN SATIŞLARI
   const allTimeSalesRevenue = dbInvoices
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // TÜM ZAMANLARIN TOPLAM MÜŞTERİ TAHSİLATLARI
   const allTimeCollectedCash = dbInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // GERÇEK NET BEKLEYEN MÜŞTERİ ALACAĞI = TÜM SATIŞLAR - TÜM TAHSİLATLAR
   const pendingReceivablesAllTime = Math.max(0, allTimeSalesRevenue - allTimeCollectedCash);
 
   let unpaidSubcontractorDebt = 0;
@@ -2732,7 +2760,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: PERSONEL EKLEME PENCERESİ */}
+      {/* MODAL: PERSONEL EKLEME PENCERESİ (STANDART GSM & IBAN MASKELEMESİ) */}
       {isEmployeeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
@@ -2784,23 +2812,25 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Telefon</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Telefon (GSM)</label>
                   <input 
                     type="text" 
-                    placeholder="0532..."
+                    placeholder="05XX XXX XX XX"
                     value={employeeFormData.phone}
-                    onChange={e => setEmployeeFormData({ ...employeeFormData, phone: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                    onChange={e => setEmployeeFormData({ ...employeeFormData, phone: formatPhoneNumber(e.target.value) })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono text-xs"
+                    maxLength={14}
                   />
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">IBAN No</label>
                   <input 
                     type="text" 
-                    placeholder="TR..."
+                    placeholder="TR__ ____ ____ ____ ____ ____ __"
                     value={employeeFormData.iban}
-                    onChange={e => setEmployeeFormData({ ...employeeFormData, iban: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg uppercase"
+                    onChange={e => setEmployeeFormData({ ...employeeFormData, iban: formatIBAN(e.target.value) })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg uppercase font-mono text-xs tracking-wider"
+                    maxLength={32}
                   />
                 </div>
               </div>
