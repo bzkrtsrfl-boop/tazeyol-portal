@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Plus, 
   X, 
@@ -32,7 +32,9 @@ import {
   BarChart3,
   Calendar,
   Building2,
-  Wallet
+  Wallet,
+  BellRing,
+  CheckCircle2
 } from 'lucide-react';
 import { supabase } from './supabase';
 import * as XLSX from 'xlsx';
@@ -159,8 +161,8 @@ export default function App() {
   const [quickPayTargetEmployee, setQuickPayTargetEmployee] = useState<any>(null);
   const [quickPayFormData, setQuickPayFormData] = useState({
     amount: '',
-    payType: 'advance', // 'advance' veya 'expense_refund'
-    paySource: 'cash', // 'cash' veya 'bank'
+    payType: 'advance',
+    paySource: 'cash',
     notes: ''
   });
 
@@ -209,8 +211,8 @@ export default function App() {
     dueDate: new Date().toISOString().split('T')[0],
     term1Date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
     term2Date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-    paymentStatus: 'unpaid', // 'unpaid' veya 'paid'
-    paidSource: 'cash', // 'cash', 'bank', 'employee'
+    paymentStatus: 'unpaid',
+    paidSource: 'cash',
     paidEmployeeName: ''
   });
 
@@ -300,6 +302,46 @@ export default function App() {
     }
   };
 
+  // CARİ / TEDARİKÇİ OTOMATİK TAMAMLAMA LİSTESİ (HAFIZA)
+  const existingCompanySuggestions = useMemo(() => {
+    const names = new Set<string>();
+    // Önceden bilinen kurumsal isimler
+    names.add('Shell & Turcas Petrol A.Ş.');
+    names.add('MİGROS TİCARET A.Ş.');
+    names.add('Bim Birleşik Mağazalar A.Ş.');
+    names.add('A101 Yeni Mağazacılık A.Ş.');
+    names.add('Şok Marketler Ticaret A.Ş.');
+    names.add('Hamaliye ve İndirme Ekibi');
+    names.add('Oto Servis & Bakım');
+    names.add('Lastik Dünyası');
+
+    // Fatura kayıtlarından toplananlar
+    dbInvoices.forEach(i => {
+      if (i.invoice_no && i.invoice_no.includes(' - ')) {
+        const parts = i.invoice_no.split(' - ');
+        if (parts[1]) names.add(parts[1].trim());
+      }
+    });
+
+    return Array.from(names);
+  }, [dbInvoices]);
+
+  // VADESİ GELEN / GEÇEN DİĞER MASRAFLAR LİSTESİ (ALARM PANOSU)
+  const dueExpenseAlerts = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return dbInvoices
+      .filter(i => i.status !== 'paid' && i.category !== 'customer_collection' && i.category !== 'freight_sales' && i.due_date)
+      .map(i => {
+        const d = sanitizeDate(i.due_date);
+        const targetTime = new Date(d).getTime();
+        const todayTime = new Date(today).getTime();
+        const diffDays = Math.ceil((targetTime - todayTime) / (1000 * 60 * 60 * 24));
+        return { ...i, diffDays };
+      })
+      .filter(i => i.diffDays <= 3) // Vadesi 3 gün kalanlar, bugün olanlar ve geçmiş olanlar
+      .sort((a, b) => a.diffDays - b.diffDays);
+  }, [dbInvoices]);
+
   // TARİH ARALIĞINA GÖRE FİLTRELENMİŞ VERİLER
   const isDateInRange = (dateStr: string | null) => {
     if (!dateStr) return true;
@@ -382,6 +424,22 @@ export default function App() {
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const currentRealCash = baseCash + totalCollectedCash - actualPaidOutflows;
 
+  // DİREKT BORÇ ÖDE (ALARM PANOSUNDAN TEK TIKLA KAPATMA)
+  const handlePayDueExpense = async (inv: any) => {
+    const amt = cleanNumber(inv.total_amount);
+    const confirm = window.confirm(`${inv.invoice_no} (${amt.toLocaleString('tr-TR')} ₺) ödemesini şimdi gerçekleştirmek istiyor musunuz?`);
+    if (!confirm) return;
+
+    try {
+      const { error } = await supabase.from('invoices').update({ status: 'paid' }).eq('id', inv.id);
+      if (error) throw error;
+      alert('Ödeme başarıyla kaydedildi ve borç kapatıldı!');
+      loadPortalData();
+    } catch (err: any) {
+      alert('Ödeme hatası: ' + err.message);
+    }
+  };
+
   // TAŞERON FATURA DÜZENLEME İŞLEMİ
   const handleOpenEditSubInvoice = (inv: any) => {
     setEditingSubInvoice(inv);
@@ -434,7 +492,7 @@ export default function App() {
     }
   };
 
-  // BANKA TALİMATI İNDİRME MANTIĞI (1. / 2. TAKSİT VE TEK RAKAM BİRLEŞTİRME)
+  // BANKA TALİMATI İNDİRME MANTIĞI
   const executeBankExport = () => {
     const subcontractorMap = new Map<string, {
       subcontractor: string;
@@ -625,7 +683,6 @@ export default function App() {
       const isExpenseRefund = quickPayFormData.payType === 'expense_refund';
       const todayStr = new Date().toISOString().split('T')[0];
 
-      // advance_payments kaydı
       await supabase.from('advance_payments').insert([{
         target_type: 'employee',
         target_id: quickPayTargetEmployee.full_name,
@@ -638,7 +695,6 @@ export default function App() {
         notes: isExpenseRefund ? `Personel Masraf İadesi (${quickPayFormData.paySource === 'cash' ? 'Kasa' : 'Banka'})` : `Maaş Avansı (${quickPayFormData.notes || ''})`
       }]);
 
-      // Kasadan veya bankadan nakit çıkışı faturası
       await supabase.from('invoices').insert([{
         invoice_no: `${isExpenseRefund ? 'MASRAF-IADE' : 'AVANS'}-${Date.now().toString().slice(-6)}`,
         direction: 'incoming',
@@ -936,7 +992,7 @@ export default function App() {
           target_type: 'employee',
           target_id: formData.paidEmployeeName,
           target_name: formData.paidEmployeeName,
-          payment_type: 'employee_company_expense', // Şirket için yaptığı harcama (Personele Borç)
+          payment_type: 'employee_company_expense',
           total_amount: parsedAmount,
           total_installments: 1,
           remaining_amount: parsedAmount,
@@ -962,7 +1018,7 @@ export default function App() {
       // 3. Şirket Faturasını Kaydet
       const invNo = formData.invoiceNo || (isCollection ? `THS-${Date.now().toString().slice(-6)}` : `BLG-${Date.now().toString().slice(-6)}`);
       const { error } = await supabase.from('invoices').insert([{
-        invoice_no: formData.plateNumber ? `${invNo} [${formData.plateNumber}]` : invNo,
+        invoice_no: formData.plateNumber ? `${invNo} [${formData.plateNumber}]` : (formData.companyName ? `${invNo} - ${formData.companyName}` : invNo),
         direction: isCollection ? 'incoming' : 'incoming',
         category: formData.category,
         issue_date: formData.paymentDate,
@@ -1254,6 +1310,56 @@ export default function App() {
         {activeTab === 'overview' && (
           <div className="space-y-6">
             
+            {/* VADESİ GELEN / GEÇEN DİĞER MASRAFLAR BİLDİRİM PANOSU */}
+            {dueExpenseAlerts.length > 0 && (
+              <div className="bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-200 rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-rose-200/60">
+                  <div className="flex items-center gap-2">
+                    <BellRing className="w-4 h-4 text-rose-600 animate-bounce" />
+                    <h3 className="font-bold text-rose-950 text-sm">Vadesi Dolan & Yaklaşan Borç Bildirimleri</h3>
+                  </div>
+                  <span className="text-[11px] font-bold bg-rose-200 text-rose-900 px-2 py-0.5 rounded-full">
+                    {dueExpenseAlerts.length} Bekleyen Borç
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {dueExpenseAlerts.map((alertItem, idx) => {
+                    const isOverdue = alertItem.diffDays < 0;
+                    const isDueToday = alertItem.diffDays === 0;
+
+                    return (
+                      <div key={idx} className="bg-white p-3 rounded-xl border border-rose-100 shadow-xs flex items-center justify-between text-xs">
+                        <div className="space-y-0.5 truncate pr-2">
+                          <span className="font-bold text-slate-900 block truncate">{alertItem.invoice_no}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[10px] font-black px-1.5 py-0.2 rounded ${isOverdue ? 'bg-rose-100 text-rose-700' : (isDueToday ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800')}`}>
+                              {isOverdue ? `${Math.abs(alertItem.diffDays)} GÜN GEÇTİ` : (isDueToday ? 'BUGÜN SON GÜN' : `${alertItem.diffDays} GÜN KALDI`)}
+                            </span>
+                            <span className="text-slate-400 text-[10px]">Vade: {alertItem.due_date}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="font-bold text-rose-600 text-sm">
+                            {cleanNumber(alertItem.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          </span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handlePayDueExpense(alertItem)}
+                              className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-0.5 rounded flex items-center gap-1 transition">
+                              <CheckCircle2 className="w-3 h-3" /> Borcu Öde
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* TARİH ARALIĞI FİLTRE ÇUBUĞU */}
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div className="flex items-center gap-2">
@@ -1446,10 +1552,9 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ (3 GÖSTERGE KARTI VE DÜZENLEME) */}
+        {/* 2. ALT YÜKLENİCİ HAKEDİŞLERİ */}
         {activeTab === 'subcontractors' && (
           <div className="space-y-5">
-            {/* 3 ÖNEMLİ ÖZET GÖSTERGE KARTI */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs font-semibold text-rose-600 uppercase tracking-wider block">
@@ -1606,7 +1711,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. ÖZ MAL KARLILIK & MALİYET ANALİZİ MODÜLÜ (SHELL HGS EXCELİ BUTONU DAHİL) */}
+        {/* 3. ÖZ MAL KARLILIK & MALİYET ANALİZİ */}
         {activeTab === 'profitability' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
@@ -1719,7 +1824,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. PERSONEL & BORDRO (ŞİRKET HARCAMALARI VE HIZLI ÖDEME POP-UP'I DAHİL) */}
+        {/* 4. PERSONEL & BORDRO */}
         {activeTab === 'employees' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
@@ -1756,7 +1861,6 @@ export default function App() {
                     const totalAdvances = empRecords.filter(a => a.payment_type === 'advance').reduce((s, a) => s + cleanNumber(a.total_amount), 0);
                     const totalBonuses = empRecords.filter(a => ['bonus', 'special_bonus'].includes(a.payment_type)).reduce((s, a) => s + cleanNumber(a.total_amount), 0);
                     
-                    // Personelin Şirket İçin Cebinden Yaptığı Masraflar (Ödenmemişler)
                     const companyExpensesOwed = empRecords.filter(a => a.payment_type === 'employee_company_expense').reduce((s, a) => s + cleanNumber(a.total_amount), 0);
                     const companyExpensesRefunded = empRecords.filter(a => a.payment_type === 'expense_refund_paid').reduce((s, a) => s + cleanNumber(a.total_amount), 0);
                     const netCompanyExpenseBalance = Math.max(0, companyExpensesOwed - companyExpensesRefunded);
@@ -2603,7 +2707,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: GELİŞMİŞ İŞLEM / FATURA GİRİŞİ (PLAKA, ÖDEME KAYNAĞI VE HAMALİYE ENTEGRELİ) */}
+      {/* MODAL: GELİŞMİŞ İŞLEM / FATURA GİRİŞİ (AUTOCOMPLETE, PLAKA VE ÖDEME KAYNAĞI) */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
@@ -2657,15 +2761,23 @@ export default function App() {
                 </div>
               )}
 
+              {/* CARİ / TEDARİKÇİ ADI - OTOMATİK TAMAMLAMA (AUTOCOMPLETE) */}
               <div>
                 <label className="block font-semibold text-slate-600 mb-1">Cari / Tedarikçi / Hamal / Kurum Adı</label>
                 <input 
                   type="text" 
-                  placeholder="Örn: Akaryakıt A.Ş., Servis Otomotiv, Hamaliye Ekibi"
+                  list="companies-autocomplete-list"
+                  placeholder="Yazmaya başlayın veya seçin..."
                   value={formData.companyName}
                   onChange={e => setFormData({ ...formData, companyName: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg" 
                 />
+                <datalist id="companies-autocomplete-list">
+                  {existingCompanySuggestions.map((name, i) => (
+                    <option key={i} value={name} />
+                  ))}
+                </datalist>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Önceden girilen cariler harf yazdıkça otomatik önerilir.</span>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
