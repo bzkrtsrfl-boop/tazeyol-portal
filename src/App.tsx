@@ -348,13 +348,18 @@ export default function App() {
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const totalCollectedCash = filteredInvoices
+  // Tüm zamanların toplam tahsilatı (tarih filtresinden bağımsız)
+  const allTimeCollectedCash = dbInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const pendingReceivablesAllTime = dbInvoices
-    .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+  // Tüm zamanların toplam kesilen satış faturaları
+  const allTimeSalesRevenue = dbInvoices
+    .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+  // Bekleyen Net Alacak = Toplam Satış - Toplam Tahsilat
+  const pendingReceivablesAllTime = Math.max(0, allTimeSalesRevenue - allTimeCollectedCash);
 
   let unpaidSubcontractorDebt = 0;
   let unpaidSubcontractorTerm1Debt = 0;
