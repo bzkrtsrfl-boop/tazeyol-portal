@@ -1,7 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
-  <rect width="512" height="512" rx="96" fill="#0b1426"/>
+  <!-- Beyaz Arka Plan -->
+  <rect width="512" height="512" rx="96" fill="#ffffff"/>
+  
+  <!-- Merkez Nokta / Daire -->
   <circle cx="256" cy="256" r="58" fill="#00a8fe"/>
+  
+  <!-- Orta Halka / Çember -->
   <circle cx="256" cy="256" r="106" fill="none" stroke="#00a8fe" stroke-width="26"/>
+  
+  <!-- Üst Dış Açık Mavi Yay Parçası -->
   <path d="M 121 148 A 168 168 0 0 1 413 205" fill="none" stroke="#96dffe" stroke-width="26" stroke-linecap="butt"/>
+  
+  <!-- Alt Dış Açık Mavi Yay Parçası -->
   <path d="M 99 307 A 168 168 0 0 0 391 364" fill="none" stroke="#96dffe" stroke-width="26" stroke-linecap="butt"/>
 </svg>
