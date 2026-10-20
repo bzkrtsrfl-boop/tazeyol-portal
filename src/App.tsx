@@ -706,9 +706,9 @@ export default function App() {
         const remainingAdvanceDebt = adv - singleTermDeduction; // Sonraki faturalara devreden avans (80.000 TL)
         const todayStr = new Date().toISOString().split('T')[0];
 
-        // 1. Kasadan 100.000 TL nakit avans çıkışı kaydedilir
+        // 1. Kasadan nakit avans cikisi kaydedilir
         await supabase.from('invoices').insert([{
-          invoice_no: `AVANS - ${subEditFormData.invoiceNo} (${instCount} Taksit)`,
+          invoice_no: 'AVANS - ' + subEditFormData.invoiceNo + ' (' + instCount + ' Taksit)',
           direction: 'incoming',
           category: 'subcontractor_advance_paid',
           total_amount: adv,
