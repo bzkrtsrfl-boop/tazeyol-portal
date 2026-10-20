@@ -730,18 +730,6 @@ export default function App() {
           notes: 'Taksit basi dusum: ' + singleTermDeduction.toLocaleString('tr-TR') + ' TL (Kalan: ' + (instCount - 1) + ' Taksit / ' + remainingAdvanceDebt.toLocaleString('tr-TR') + ' TL)'
         }]);
 
-        const todayStr = new Date().toISOString().split('T')[0];
-        await supabase.from('invoices').insert([{
-          invoice_no: `AVANS - ${subEditFormData.invoiceNo} (${instCount} Taksit)`,
-          direction: 'incoming',
-          category: 'subcontractor_advance_paid',
-          total_amount: adv,
-          issue_date: todayStr,
-          due_date: todayStr,
-          status: 'paid'
-        }]);
-      }
-
       if (t1 === 0 && t2 === 0 && tot > 0) {
         t1 = tot / 2;
         t2 = tot / 2;
