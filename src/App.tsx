@@ -693,24 +693,43 @@ export default function App() {
       const adv = cleanNumber(subEditFormData.advanceAmount);
       const instCount = Math.max(1, parseInt(subEditFormData.advanceInstallmentCount) || 1);
 
-      if (adv > 0) {
-        // Taksit başına düşecek avans tutarı
-        const perTermAdv = adv / instCount;
+   if (adv > 0) {
+        // Taksit başına düşecek tekil mahsup tutarı (Örn: 100.000 / 5 = 20.000 TL)
+        const singleTermDeduction = adv / instCount;
 
-        if (instCount === 1) {
-          if (t1 >= adv) {
-            t1 -= adv;
-          } else {
-            const rem = adv - t1;
-            t1 = 0;
-            t2 = Math.max(0, t2 - rem);
-          }
-        } else {
-          // Birden fazla taksite yayılmış avans mahsubu
-          t1 = Math.max(0, t1 - perTermAdv);
-          t2 = Math.max(0, t2 - perTermAdv);
-        }
-        tot = Math.max(0, tot - adv);
+        // Bu faturanın sadece 1. vadesinden 1 taksitlik avans düşülür:
+        t1 = Math.max(0, t1 - singleTermDeduction);
+        
+        // Faturanın toplam net ödeneceği de sadece 1 taksit kadar azalır:
+        tot = Math.max(0, tot - singleTermDeduction);
+
+        const remainingAdvanceDebt = adv - singleTermDeduction; // Sonraki faturalara devreden avans (80.000 TL)
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        // 1. Kasadan 100.000 TL nakit avans çıkışı kaydedilir
+        await supabase.from('invoices').insert([{
+          invoice_no: `AVANS - ${subEditFormData.invoiceNo} (${instCount} Taksit)`,
+          direction: 'incoming',
+          category: 'subcontractor_advance_paid',
+          total_amount: adv,
+          issue_date: todayStr,
+          due_date: todayStr,
+          status: 'paid'
+        }]);
+
+        // 2. Kalan avans takibi için avans tablosuna işlenir (Gelecek faturadan düşmek üzere)
+        await supabase.from('advance_payments').insert([{
+          target_type: 'contractor',
+          target_id: subEditFormData.invoiceNo,
+          target_name: subEditFormData.invoiceNo,
+          payment_type: 'contractor_installment_advance',
+          total_amount: adv,
+          total_installments: instCount,
+          remaining_amount: remainingAdvanceDebt,
+          issue_date: todayStr,
+          notes: `Taksit başı düşüm: ${singleTermDeduction.toLocaleString('tr-TR')} TL (Kalan: ${instCount - 1} Taksit / ${remainingAdvanceDebt.toLocaleString('tr-TR')} TL)`
+        }]);
+      }
 
         const todayStr = new Date().toISOString().split('T')[0];
         await supabase.from('invoices').insert([{
