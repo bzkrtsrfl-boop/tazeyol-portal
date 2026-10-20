@@ -717,7 +717,7 @@ export default function App() {
           status: 'paid'
         }]);
 
-        // 2. Kalan avans takibi için avans tablosuna işlenir (Gelecek faturadan düşmek üzere)
+       // 2. Kalan avans takibi icin avans tablosuna islenir
         await supabase.from('advance_payments').insert([{
           target_type: 'contractor',
           target_id: subEditFormData.invoiceNo,
@@ -727,9 +727,8 @@ export default function App() {
           total_installments: instCount,
           remaining_amount: remainingAdvanceDebt,
           issue_date: todayStr,
-          notes: `Taksit başı düşüm: ${singleTermDeduction.toLocaleString('tr-TR')} TL (Kalan: ${instCount - 1} Taksit / ${remainingAdvanceDebt.toLocaleString('tr-TR')} TL)`
+          notes: 'Taksit basi dusum: ' + singleTermDeduction.toLocaleString('tr-TR') + ' TL (Kalan: ' + (instCount - 1) + ' Taksit / ' + remainingAdvanceDebt.toLocaleString('tr-TR') + ' TL)'
         }]);
-      }
 
         const todayStr = new Date().toISOString().split('T')[0];
         await supabase.from('invoices').insert([{
