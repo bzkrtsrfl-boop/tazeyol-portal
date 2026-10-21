@@ -1090,7 +1090,7 @@ export default function App() {
     }
 
     try {
-      const recTitle = `THS - ${newReceiptFormData.customerName || 'Müşteri'} (${newReceiptFormData.targetAccount === 'bank' ? 'Banka' : 'Kasa'})`;
+      const recTitle = `THS - ${newReceiptFormData.receiptNo || 'Dekont'} - ${newReceiptFormData.customerName || 'Müşteri'} - ${Date.now()}`;
       
       const { error: insErr } = await supabase.from('invoices').insert([{
         invoice_no: recTitle,
@@ -1460,7 +1460,7 @@ export default function App() {
                 type="text"
                 value={loginUsername}
                 onChange={e => setLoginUsername(e.target.value)}
-                placeholder="admin veya rapor"
+                placeholder="Kullanıcı Adı"
                 className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm"
                 required
               />
