@@ -1203,6 +1203,7 @@ export default function App() {
       if (error) throw error;
 
       alert('Tahsilat silindi, fatura tekrar açık duruma getirildi ve kasa güncellendi!');
+      setDbInvoices(prev => prev.filter(inv => inv.id !== item.id));
       await loadPortalData();
     } catch (err: any) {
       alert('Silme hatası: ' + err.message);
