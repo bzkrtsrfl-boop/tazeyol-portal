@@ -760,6 +760,45 @@ export default function App() {
       });
   }, [dbInvoices]);
 
+  // SATIŞ TABLOSU İÇİN ARAMA VE BAŞLIĞA GÖRE SIRALAMA
+  const [salesSearchQuery, setSalesSearchQuery] = useState('');
+  const [salesSortConfig, setSalesSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'issue_date', direction: 'desc' });
+
+  const displayedSalesList = useMemo(() => {
+    let list = [...salesDetailedList];
+
+    if (salesSearchQuery.trim()) {
+      const q = salesSearchQuery.toLowerCase();
+      list = list.filter(item => 
+        (item.customerName && item.customerName.toLowerCase().includes(q)) ||
+        (item.cleanInvoiceNo && item.cleanInvoiceNo.toLowerCase().includes(q))
+      );
+    }
+
+    list.sort((a, b) => {
+      let valA = a[salesSortConfig.key] || '';
+      let valB = b[salesSortConfig.key] || '';
+
+      if (salesSortConfig.key === 'total_amount') {
+        valA = cleanNumber(valA);
+        valB = cleanNumber(valB);
+      }
+
+      if (valA < valB) return salesSortConfig.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return salesSortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return list;
+  }, [salesDetailedList, salesSearchQuery, salesSortConfig]);
+
+  const handleSalesSort = (key: string) => {
+    setSalesSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
   // 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA
   const bankPaymentGroupedList = useMemo(() => {
     const map = new Map<string, { contractorName: string; term1Total: number; term2Total: number; invoiceNos: string[]; iban: string }>();
@@ -1884,21 +1923,40 @@ export default function App() {
                 </div>
               )}
             </div>
-
+            <div className="relative mb-3">
+              <input
+                type="text"
+                placeholder="Müşteri adı veya fatura no ile filtrele..."
+                value={salesSearchQuery}
+                onChange={e => setSalesSearchQuery(e.target.value)}
+                className="w-full sm:w-80 px-3.5 py-2 pl-9 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white outline-none"
+              />
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Müşteri / Firma Adı</th>
-                    <th className="py-3 px-3">Fatura Numarası</th>
-                    <th className="py-3 px-3">Fatura Tarihi</th>
-                    <th className="py-3 px-3">Vade Tarihi</th>
-                    <th className="py-3 px-3 text-right">Toplam Satış Tutarı</th>
-                    <th className="py-3 px-3 text-center">Durum / İşlem</th>
+                    <th onClick={() => handleSalesSort('customerName')} className="py-3 px-3 cursor-pointer hover:text-blue-600 select-none">
+                  Müşteri / Firma Adı ⇕
+                </th>
+                <th onClick={() => handleSalesSort('cleanInvoiceNo')} className="py-3 px-3 cursor-pointer hover:text-blue-600 select-none">
+                  Fatura Numarası ⇕
+                </th>
+                <th onClick={() => handleSalesSort('issue_date')} className="py-3 px-3 cursor-pointer hover:text-blue-600 select-none">
+                  Fatura Tarihi ⇕
+                </th>
+                <th onClick={() => handleSalesSort('due_date')} className="py-3 px-3 cursor-pointer hover:text-blue-600 select-none">
+                  Vade Tarihi ⇕
+                </th>
+                <th onClick={() => handleSalesSort('total_amount')} className="py-3 px-3 text-right cursor-pointer hover:text-blue-600 select-none">
+                  Toplam Satış Tutarı ⇕
+                </th>
+                <th className="py-3 px-3 text-center">Durum / İşlem</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {salesDetailedList.map((sale, idx) => (
+                  {displayedSalesList.map((sale, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 transition">
                       <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sale.customerName}</td>
                       <td className="py-3 px-3 font-mono font-medium text-blue-700">{sale.cleanInvoiceNo}</td>
