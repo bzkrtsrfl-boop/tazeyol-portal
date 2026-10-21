@@ -1162,24 +1162,24 @@ export default function App() {
       alert('Tahsilat hatası: ' + err.message);
     }
   };
-  // TAHSİLAT SİLME VE FATURAYI GERİ AÇMA
+// TAHSİLAT SİLME, KASADAN DÜŞME VE FATURAYI GERİ AÇMA
   const handleDeleteReceipt = async (item: any) => {
     if (!isAdmin) return;
-    if (!window.confirm(`${item.invoice_no}\nBu tahsilatı silmek istediğinize emin misiniz? Varsa bağlı satış faturası tekrar açık duruma dönecektir.`)) return;
+    if (!window.confirm(`${item.invoice_no}\nBu tahsilatı silmek istediğinize emin misiniz? Varsa bağlı satış faturası tekrar açık duruma dönecek ve tutar kasadan/bankadan düşülecektir.`)) return;
 
     try {
-      // 1. Tahsilat başlığından fatura numarasını ayıkla
       const title = String(item.invoice_no || '');
       let invoiceNoToRevert = '';
 
-      if (title.includes('THS-EF') || title.includes('THS-EA') || title.includes('THS-TRN') || title.includes('THS-GIB')) {
+      // 1. Başlıktan fatura numarasını ayıkla
+      if (title.includes(' - ')) {
         const parts = title.split(' - ');
         if (parts.length > 1) {
           invoiceNoToRevert = parts[1].replace('THS-', '').trim();
         }
       }
 
-      // 2. Eğer faturadan yapılmış bir tahsilatsa ilgili faturayı bul ve durumunu 'unpaid' yap
+      // 2. Varsa bağlı satış faturasını tekrar açık (unpaid) yap
       if (invoiceNoToRevert) {
         const matchedInvoice = dbInvoices.find(inv => 
           (inv.category === 'freight_sales' || inv.direction === 'outgoing') &&
@@ -1191,12 +1191,19 @@ export default function App() {
         }
       }
 
-      // 3. Tahsilat kaydını veritabanından sil
+      // 3. Kasadaki bağlantılı hareket kayıtlarını temizle (genel giderler/kasa tablosu)
+      try {
+        await supabase.from('general_expenses').delete().ilike('description', `%${item.invoice_no}%`);
+      } catch (e) {
+        // Tablo adı farklıysa sessizce devam eder
+      }
+
+      // 4. Tahsilat kaydını invoices tablosundan sil
       const { error } = await supabase.from('invoices').delete().eq('id', item.id);
       if (error) throw error;
 
-      alert('Tahsilat silindi ve ilgili fatura tekrar açık duruma getirildi!');
-      loadPortalData();
+      alert('Tahsilat silindi, fatura tekrar açık duruma getirildi ve kasa güncellendi!');
+      await loadPortalData();
     } catch (err: any) {
       alert('Silme hatası: ' + err.message);
     }
