@@ -1162,6 +1162,45 @@ export default function App() {
       alert('Tahsilat hatası: ' + err.message);
     }
   };
+  // TAHSİLAT SİLME VE FATURAYI GERİ AÇMA
+  const handleDeleteReceipt = async (item: any) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`${item.invoice_no}\nBu tahsilatı silmek istediğinize emin misiniz? Varsa bağlı satış faturası tekrar açık duruma dönecektir.`)) return;
+
+    try {
+      // 1. Tahsilat başlığından fatura numarasını ayıkla
+      const title = String(item.invoice_no || '');
+      let invoiceNoToRevert = '';
+
+      if (title.includes('THS-EF') || title.includes('THS-EA') || title.includes('THS-TRN') || title.includes('THS-GIB')) {
+        const parts = title.split(' - ');
+        if (parts.length > 1) {
+          invoiceNoToRevert = parts[1].replace('THS-', '').trim();
+        }
+      }
+
+      // 2. Eğer faturadan yapılmış bir tahsilatsa ilgili faturayı bul ve durumunu 'unpaid' yap
+      if (invoiceNoToRevert) {
+        const matchedInvoice = dbInvoices.find(inv => 
+          (inv.category === 'freight_sales' || inv.direction === 'outgoing') &&
+          String(inv.invoice_no || '').toUpperCase().includes(invoiceNoToRevert.toUpperCase())
+        );
+
+        if (matchedInvoice) {
+          await supabase.from('invoices').update({ status: 'unpaid' }).eq('id', matchedInvoice.id);
+        }
+      }
+
+      // 3. Tahsilat kaydını veritabanından sil
+      const { error } = await supabase.from('invoices').delete().eq('id', item.id);
+      if (error) throw error;
+
+      alert('Tahsilat silindi ve ilgili fatura tekrar açık duruma getirildi!');
+      loadPortalData();
+    } catch (err: any) {
+      alert('Silme hatası: ' + err.message);
+    }
+  };
 
   // KASA/BANKA PARA GİRİŞİ (SERMAYE/ORTAK FONU)
   const handleSaveCashDeposit = async (e: React.FormEvent) => {
@@ -2601,6 +2640,7 @@ export default function App() {
                     <th className="py-3 px-4">Tahsilat Tarihi</th>
                     <th className="py-3 px-4">Durum</th>
                     <th className="py-3 px-4 text-right">Tahsil Edilen Tutar</th>
+                    {isAdmin && <th className="py-3 px-4 text-center">İşlem</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -2614,6 +2654,16 @@ export default function App() {
                       <td className="py-3 px-4 text-right font-bold text-emerald-600 text-sm">
                         +{cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                       </td>
+                      {isAdmin && (
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            onClick={() => handleDeleteReceipt(item)}
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                            title="Tahsilatı Sil ve Faturayı Geri Aç">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
