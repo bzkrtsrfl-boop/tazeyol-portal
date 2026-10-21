@@ -762,6 +762,7 @@ export default function App() {
 
   // SATIŞ TABLOSU İÇİN ARAMA VE BAŞLIĞA GÖRE SIRALAMA
   const [salesSearchQuery, setSalesSearchQuery] = useState('');
+  const [salesStatusFilter, setSalesStatusFilter] = useState<'all' | 'unpaid' | 'paid'>('all');
   const [salesSortConfig, setSalesSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'issue_date', direction: 'desc' });
 
   const displayedSalesList = useMemo(() => {
@@ -773,6 +774,13 @@ export default function App() {
         (item.customerName && item.customerName.toLowerCase().includes(q)) ||
         (item.cleanInvoiceNo && item.cleanInvoiceNo.toLowerCase().includes(q))
       );
+    }
+    // Durum Filtresi (Açık / Tahsil Edildi)
+    if (salesStatusFilter !== 'all') {
+      list = list.filter(item => {
+        const isPaid = item.status === 'paid';
+        return salesStatusFilter === 'paid' ? isPaid : !isPaid;
+      });
     }
 
     list.sort((a, b) => {
@@ -1923,15 +1931,26 @@ export default function App() {
                 </div>
               )}
             </div>
-            <div className="relative mb-3">
-              <input
-                type="text"
-                placeholder="Müşteri adı veya fatura no ile filtrele..."
-                value={salesSearchQuery}
-                onChange={e => setSalesSearchQuery(e.target.value)}
-                className="w-full sm:w-80 px-3.5 py-2 pl-9 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white outline-none"
-              />
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+           <div className="flex flex-wrap items-center gap-2 mb-3">
+              <div className="relative flex-1 sm:w-80">
+                <input
+                  type="text"
+                  placeholder="Müşteri adı veya fatura no ile filtrele..."
+                  value={salesSearchQuery}
+                  onChange={e => setSalesSearchQuery(e.target.value)}
+                  className="w-full px-3.5 py-2 pl-9 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white outline-none"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              </div>
+
+              <select
+                value={salesStatusFilter}
+                onChange={e => setSalesStatusFilter(e.target.value as any)}
+                className="px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white font-semibold text-slate-700 outline-none">
+                <option value="all">Tüm Faturalar</option>
+                <option value="unpaid">⏳ Sadece Açık (Tahsil Edilecekler)</option>
+                <option value="paid">✅ Sadece Tahsil Edilenler</option>
+              </select>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
@@ -1952,7 +1971,9 @@ export default function App() {
                 <th onClick={() => handleSalesSort('total_amount')} className="py-3 px-3 text-right cursor-pointer hover:text-blue-600 select-none">
                   Toplam Satış Tutarı ⇕
                 </th>
-                <th className="py-3 px-3 text-center">Durum / İşlem</th>
+                <th onClick={() => handleSalesSort('status')} className="py-3 px-3 text-center cursor-pointer hover:text-blue-600 select-none">
+                  Durum / İşlem ⇕
+                </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
