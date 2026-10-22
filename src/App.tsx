@@ -2650,7 +2650,6 @@ export default function App() {
                   })}
                 </tbody>
               </table>
-              </table>
             </div>
           </div>
         )}
