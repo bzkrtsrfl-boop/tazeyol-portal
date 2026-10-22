@@ -2533,12 +2533,12 @@ export default function App() {
               )}
             </div>
 
-           {/* 4 ÖZET KART (TÜM FİLO SABİT & DİĞER GİDERLER) */}
+{/* 4 ÖZET KART (TÜM FİLO SABİT & DİĞER GİDERLER) */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
                 <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam Sigorta (Yıllık)</span>
                 <span className="text-base font-bold text-slate-800 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insuranceCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insurance_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
                 <span className="text-[10px] text-slate-400">{dbVehicles.length} Öz Mal Araç</span>
               </div>
@@ -2546,7 +2546,7 @@ export default function App() {
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
                 <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam Kasko (Yıllık)</span>
                 <span className="text-base font-bold text-slate-800 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.kaskoCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.kasko_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
                 <span className="text-[10px] text-slate-400">Poliçe Toplamı</span>
               </div>
@@ -2554,7 +2554,7 @@ export default function App() {
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
                 <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam MTV & Muayene</span>
                 <span className="text-base font-bold text-slate-800 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.last_mtv_cost || 0) + cleanNumber(v.inspection_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
                 <span className="text-[10px] text-slate-400">Yıllık Yasal Yük</span>
               </div>
@@ -2562,10 +2562,10 @@ export default function App() {
               <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3.5 shadow-sm">
                 <span className="text-[11px] font-semibold text-blue-700 uppercase block">FİLO SABİT GİDER TOPLAMI</span>
                 <span className="text-base font-black text-blue-900 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insuranceCost || 0) + cleanNumber(v.kaskoCost || 0) + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insurance_cost || 0) + cleanNumber(v.kasko_cost || 0) + cleanNumber(v.last_mtv_cost || 0) + cleanNumber(v.inspection_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
                 <span className="text-[10px] font-medium text-blue-600">
-                  Aylık: {(dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insuranceCost || 0) + cleanNumber(v.kaskoCost || 0) + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0), 0) / 12).toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ / ay
+                  Aylık: {(dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insurance_cost || 0) + cleanNumber(v.kasko_cost || 0) + cleanNumber(v.last_mtv_cost || 0) + cleanNumber(v.inspection_cost || 0), 0) / 12).toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ / ay
                 </span>
               </div>
             </div>
@@ -2588,10 +2588,11 @@ export default function App() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {dbVehicles.map((v, idx) => {
-                    const cleanPlate = (v.plateNumber || '').replace(/\s+/g, '').toUpperCase();
-                    
-                    // Plakaya ait genel giderleri filtrele
-                    const plateExpenses = dbInvoices.filter(inv => {
+                    const plate = (v.plate_number || '').trim();
+                    const cleanPlate = plate.replace(/\s+/g, '').toUpperCase();
+
+                    // Plakaya ait genel giderleri eşleştir
+                    const plateExpenses = cleanPlate.length >= 5 ? dbInvoices.filter(inv => {
                       const desc = (inv.description || '').replace(/\s+/g, '').toUpperCase();
                       const invNo = (inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
                       return (
@@ -2599,30 +2600,53 @@ export default function App() {
                         inv.category !== 'customer_collection' &&
                         (desc.includes(cleanPlate) || invNo.includes(cleanPlate))
                       );
-                    });
+                    }) : [];
 
                     const otherCost = plateExpenses.reduce((sum, e) => sum + cleanNumber(e.total_amount), 0);
-                    const fixedCost = cleanNumber(v.insuranceCost || 0) + cleanNumber(v.kaskoCost || 0) + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0);
+                    const sigortaAmt = cleanNumber(v.insurance_cost || 0);
+                    const kaskoAmt = cleanNumber(v.kasko_cost || 0);
+                    const mtvAmt = cleanNumber(v.last_mtv_cost || 0);
+                    const muayeneAmt = cleanNumber(v.inspection_cost || 0);
+
+                    const fixedCost = sigortaAmt + kaskoAmt + mtvAmt + muayeneAmt;
                     const totalCost = fixedCost + otherCost;
 
                     return (
                       <tr key={v.id || idx} className="hover:bg-slate-50 transition">
-                        <td className="py-3 px-3 font-bold text-blue-700">{v.plateNumber}</td>
-                        <td className="py-3 px-3 text-slate-700 font-medium">{v.driverName || '-'}</td>
+                        <td className="py-3 px-3 font-mono font-bold text-blue-700">{plate || '-'}</td>
+                        <td className="py-3 px-3 text-slate-700 font-medium">{v.driver_name || '-'}</td>
                         <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800">{v.insuranceCost ? `${cleanNumber(v.insuranceCost).toLocaleString('tr-TR')} ₺` : '-'}</span>
-                          {v.insuranceStartDate && <span className="block text-[10px] text-slate-400">Bitiş: {v.insuranceStartDate}</span>}
+                          <span className="font-semibold text-slate-800">
+                            {sigortaAmt > 0 ? `${sigortaAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                          </span>
+                          {(v.insurance_expiry_date || v.insurance_start_date) && (
+                            <span className="block text-[10px] text-slate-400">
+                              Bitiş: {sanitizeDate(v.insurance_expiry_date || v.insurance_start_date)}
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800">{v.kaskoCost ? `${cleanNumber(v.kaskoCost).toLocaleString('tr-TR')} ₺` : '-'}</span>
-                          {v.kaskoStartDate && <span className="block text-[10px] text-slate-400">Bitiş: {v.kaskoStartDate}</span>}
+                          <span className="font-semibold text-slate-800">
+                            {kaskoAmt > 0 ? `${kaskoAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                          </span>
+                          {(v.kasko_expiry_date || v.kasko_start_date) && (
+                            <span className="block text-[10px] text-slate-400">
+                              Bitiş: {sanitizeDate(v.kasko_expiry_date || v.kasko_start_date)}
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3 font-semibold text-slate-800">
-                          {v.lastMtvCost ? `${cleanNumber(v.lastMtvCost).toLocaleString('tr-TR')} ₺` : '-'}
+                          {mtvAmt > 0 ? `${mtvAmt.toLocaleString('tr-TR')} ₺` : '-'}
                         </td>
                         <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800">{v.inspectionCost ? `${cleanNumber(v.inspectionCost).toLocaleString('tr-TR')} ₺` : '-'}</span>
-                          {v.nextInspectionDate && <span className="block text-[10px] text-slate-400">Tarih: {v.nextInspectionDate}</span>}
+                          <span className="font-semibold text-slate-800">
+                            {muayeneAmt > 0 ? `${muayeneAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                          </span>
+                          {v.next_inspection_date && (
+                            <span className="block text-[10px] text-slate-400">
+                              Tarih: {sanitizeDate(v.next_inspection_date)}
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-right">
                           <span className={`font-bold ${otherCost > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
@@ -2635,11 +2659,7 @@ export default function App() {
                         {isAdmin && (
                           <td className="py-3 px-3 text-center">
                             <button
-                              onClick={() => {
-                                setEditingVehicleId(v.id);
-                                setVehicleFormData(v);
-                                setIsVehicleModalOpen(true);
-                              }}
+                              onClick={() => openEditVehicleModal(v)}
                               className="text-blue-600 hover:text-blue-800 font-medium text-xs">
                               Düzenle
                             </button>
