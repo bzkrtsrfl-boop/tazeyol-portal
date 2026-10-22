@@ -2775,7 +2775,7 @@ export default function App() {
                           </span>
                           {(v.insurance_expiry_date || v.insurance_start_date) && (
                             <span className="block text-[10px] text-slate-400">
-                              Bitiş: {sanitizeDate(v.insurance_expiry_date || v.insurance_start_date)}
+                              Bitiş: {formatDateTR(v.insurance_expiry_date || v.insurance_start_date)}
                             </span>
                           )}
                         </td>
@@ -2785,7 +2785,7 @@ export default function App() {
                           </span>
                           {(v.kasko_expiry_date || v.kasko_start_date) && (
                             <span className="block text-[10px] text-slate-400">
-                              Bitiş: {sanitizeDate(v.kasko_expiry_date || v.kasko_start_date)}
+                              Bitiş: {formatDateTR(v.kasko_expiry_date || v.kasko_start_date)}
                             </span>
                           )}
                         </td>
@@ -2798,7 +2798,7 @@ export default function App() {
                           </span>
                           {v.next_inspection_date && (
                             <span className="block text-[10px] text-slate-400">
-                              Tarih: {sanitizeDate(v.next_inspection_date)}
+                              Tarih: {formatDateTR(v.next_inspection_date)}
                             </span>
                           )}
                         </td>
