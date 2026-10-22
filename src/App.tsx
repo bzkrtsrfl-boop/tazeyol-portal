@@ -2380,20 +2380,31 @@ const t1 = Math.max(0, rawT1 - advDeduction);
                     const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
                     const isT1Paid = inv.term1_status === 'paid';
                     const isT2Paid = inv.term2_status === 'paid';
-                      // Aktif taksitli avansı bulup 1. vadeden canlı düşer:
-const contractorPure = (inv.invoice_no || '').split(' - ')[1] || inv.invoice_no || '';
-const activeAdv = dbAdvances.find(a => 
-  a.target_type === 'contractor' && 
-  (a.target_name === contractorPure || a.target_id === inv.invoice_no || (inv.invoice_no && inv.invoice_no.includes(a.target_name)))
-);
+                      // Fatura No veya Taşeron Adından Avansı Yakalama
+                    const invTitle = String(inv.invoice_no || '');
+                    const subNameOnly = invTitle.includes(' - ') ? invTitle.split(' - ')[1].trim() : invTitle;
 
-let deductedAdvAmt = 0;
-if (activeAdv && !isT1Paid) {
-  const inst = Math.max(1, activeAdv.total_installments || 1);
-  deductedAdvAmt = cleanNumber(activeAdv.total_amount) / inst;
-}
-const dynamicT1 = Math.max(0, t1 - deductedAdvAmt);
+                    const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
+                    const cleanInv = cleanTxt(invTitle);
+                    const cleanSub = cleanTxt(subNameOnly);
 
+                    const activeAdv = dbAdvances.find(a => {
+                      if (a.target_type !== 'contractor') return false;
+                      const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
+                      const advNote = cleanTxt(String(a.notes || ''));
+                      return (
+                        (advTarget.length >= 4 && (cleanInv.includes(advTarget) || cleanSub.includes(advTarget))) ||
+                        (cleanSub.length >= 4 && advTarget.includes(cleanSub))
+                      );
+                    });
+
+                    let deductedAdvAmt = 0;
+                    if (activeAdv && !isT1Paid) {
+                      const inst = Math.max(1, activeAdv.total_installments || 1);
+                      deductedAdvAmt = cleanNumber(activeAdv.total_amount) / inst;
+                    }
+                    const dynamicT1 = Math.max(0, t1 - deductedAdvAmt);
+               
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
                         <td className="py-3 px-3 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
@@ -2401,9 +2412,13 @@ const dynamicT1 = Math.max(0, t1 - deductedAdvAmt);
                         <td className="py-3 px-3 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR')} ₺</td>
                         <td className="py-3 px-3">
                           <span className={`font-semibold block ${isT1Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
-                            {dynamicT1.toLocaleString('tr-TR')} ₺
-{deductedAdvAmt > 0 && <span className="block text-[10px] text-amber-600 font-normal">(-{deductedAdvAmt.toLocaleString('tr-TR')} ₺ Avans Mahsubu)</span>}
-                          </span>
+                  {dynamicT1.toLocaleString('tr-TR')} ₺
+                </span>
+                {deductedAdvAmt > 0 && (
+                  <span className="block text-[10px] text-amber-600 font-normal">
+                    (-{deductedAdvAmt.toLocaleString('tr-TR')} ₺ Avans Mahsubu)
+                  </span>
+                )}
                           <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(inv.term1_due_date)}</span>
                         </td>
                         <td className="py-3 px-3">
