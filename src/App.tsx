@@ -548,6 +548,8 @@ export default function App() {
 
   // MÜKERRER KORUMALI & EXCEL TARİH HATASIZ TAŞERON FATURA AKTARIMI
   const handleImportSubcontractorInvoicesSafe = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const normalizeKey = (text: string) => 
+    (text || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
     if (!isAdmin) return;
     const file = e.target.files?.[0];
     if (!file) return;
@@ -559,10 +561,10 @@ export default function App() {
       const rawRows: any[] = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
 
       const existingInvoices = new Set(
-        dbInvoices
-          .filter(i => i.category === 'subcontractor_invoice')
-          .map(i => String(i.invoice_no || '').trim().toUpperCase())
-      );
+      dbInvoices
+        .filter(i => i.category === 'subcontractor_invoice')
+        .map(i => normalizeKey(String(i.invoice_no || '')))
+    );
 
       const newRowsToInsert: any[] = [];
       let skippedCount = 0;
@@ -578,7 +580,7 @@ export default function App() {
 
         const fullTitle = `${invNo} - ${subName}`.trim();
 
-        if (existingInvoices.has(fullTitle.toUpperCase()) || (invNo && existingInvoices.has(invNo.toUpperCase()))) {
+        if (existingInvoices.has(normalizeKey(fullTitle))) {
           skippedCount++;
         } else if (invNo && totalAmt > 0) {
           const t1 = totalAmt / 2;
