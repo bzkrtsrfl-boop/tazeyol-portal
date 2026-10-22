@@ -108,7 +108,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<
     'overview' | 'subcontractors' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
   >('overview');
-
+  const [subSearchTerm, setSubSearchTerm] = useState('');
+  const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
   const getCurrentMonthRange = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -2181,7 +2182,38 @@ export default function App() {
                 </div>
               )}
             </div>
+{/* ARAMA VE FİLTRELEME ÇUBUĞU */}
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between mb-4">
+          <div className="relative w-full sm:w-80">
+            <input
+              type="text"
+              placeholder="Taşeron adı veya fatura no ile filtrele..."
+              value={subSearchTerm}
+              onChange={(e) => setSubSearchTerm(e.target.value)}
+              className="w-full text-xs pl-8 pr-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+            />
+            <svg
+              className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
 
+          <div className="w-full sm:w-auto">
+            <select
+              value={subStatusFilter}
+              onChange={(e: any) => setSubStatusFilter(e.target.value)}
+              className="w-full sm:w-48 text-xs px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-700 focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">Tüm Faturalar</option>
+              <option value="pending">Ödenmemiş / Bekleyenler</option>
+              <option value="paid">Tamamı Ödenenler</option>
+            </select>
+          </div>
+        </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
@@ -2195,7 +2227,27 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbInvoices.filter(i => i.category === 'subcontractor_invoice').map(inv => {
+                  {dbInvoices
+  .filter(i => i.category === 'subcontractor_invoice')
+  .filter(inv => {
+    const term = subSearchTerm.toLocaleLowerCase('tr-TR').trim();
+    const invTitle = (inv.invoice_no || '').toLocaleLowerCase('tr-TR');
+    const matchesSearch = !term || invTitle.includes(term);
+
+    const isTerm1Paid = inv.term1_status === 'paid';
+    const isTerm2Paid = inv.term2_status === 'paid';
+    const isFullyPaid = isTerm1Paid && isTerm2Paid;
+
+    let matchesStatus = true;
+    if (subStatusFilter === 'pending') {
+      matchesStatus = !isFullyPaid;
+    } else if (subStatusFilter === 'paid') {
+      matchesStatus = isFullyPaid;
+    }
+
+    return matchesSearch && matchesStatus;
+  })
+  .map(inv => {
                     const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
                     const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
                     const isT1Paid = inv.term1_status === 'paid';
