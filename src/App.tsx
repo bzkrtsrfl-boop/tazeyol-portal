@@ -2004,7 +2004,7 @@ export default function App() {
                         <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
                           <div>
                             <span className="font-bold text-slate-900 block">{inv.invoice_no}</span>
-                            <span className="text-[11px] text-slate-500">1. Vade: {sanitizeDate(inv.term1_due_date) || '-'}</span>
+                            <span className="text-[12px] text-slate-500">1. Vade: {formatDateTR(inv.term1_due_date)}</span>
                           </div>
                           <span className="font-bold text-rose-600 text-sm">{t1.toLocaleString('tr-TR')} ₺</span>
                         </div>
@@ -2039,7 +2039,7 @@ export default function App() {
                         </div>
                         <div className="text-right">
                           <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[11px] block">
-                            {sanitizeDate(veh.next_inspection_date)}
+                            {formatDateTR(veh.next_inspection_date)}
                           </span>
                           <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
                         </div>
@@ -2123,8 +2123,8 @@ export default function App() {
                     <tr key={idx} className="hover:bg-slate-50 transition">
                       <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sale.customerName}</td>
                       <td className="py-3 px-3 font-mono font-medium text-blue-700">{sale.cleanInvoiceNo}</td>
-                      <td className="py-3 px-3 text-slate-600">{sanitizeDate(sale.issue_date)}</td>
-                      <td className="py-3 px-3 text-slate-600">{sanitizeDate(sale.due_date) || '-'}</td>
+                      <td className="py-3 px-3 text-slate-600">{formatDateTR(sale.issue_date)}</td>
+                      <td className="py-3 px-3 text-slate-600">{formatDateTR(sale.due_date)}</td>
                       <td className="py-3 px-3 text-right font-bold text-slate-900 text-sm">
                         {cleanNumber(sale.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                       </td>
@@ -2201,19 +2201,19 @@ export default function App() {
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
                         <td className="py-3 px-3 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
-                        <td className="py-3 px-3 text-slate-500">{sanitizeDate(inv.issue_date)}</td>
+                        <td className="py-3 px-3 text-slate-500">{formatDateTR(inv.issue_date)}</td>
                         <td className="py-3 px-3 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR')} ₺</td>
                         <td className="py-3 px-3">
                           <span className={`font-semibold block ${isT1Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
                             {t1.toLocaleString('tr-TR')} ₺
                           </span>
-                          <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : sanitizeDate(inv.term1_due_date) || '-'}</span>
+                          <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(inv.term1_due_date)}</span>
                         </td>
                         <td className="py-3 px-3">
                           <span className={`font-semibold block ${isT2Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
                             {t2.toLocaleString('tr-TR')} ₺
                           </span>
-                          <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : sanitizeDate(inv.term2_due_date) || '-'}</span>
+                          <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : formatDateTR(inv.term2_due_date)}</span>
                         </td>
                         {isAdmin && (
                           <td className="py-3 px-3 text-center">
