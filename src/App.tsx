@@ -871,7 +871,7 @@ export default function App() {
           customerName: cust,
           cleanInvoiceNo: fNo
         };
-      });
+      
   }, [dbInvoices]);
 
   // SATIŞ TABLOSU İÇİN ARAMA VE BAŞLIĞA GÖRE SIRALAMA
