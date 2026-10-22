@@ -2590,7 +2590,7 @@ export default function App() {
                         </div>
                         <div className="flex justify-between text-slate-600 pt-1">
                           <span>Son Ödeme Tarihi:</span>
-                          <span className="font-bold text-slate-800">{sanitizeDate(cc.due_date) || '-'}</span>
+                          <span className="font-bold text-slate-800">{formatDateTR(cc.due_date)}</span>
                         </div>
                       </div>
                     </div>
