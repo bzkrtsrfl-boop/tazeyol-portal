@@ -936,7 +936,20 @@ export default function App() {
        const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
         const key = cleanKey(contractorName);
 
-        const t1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
+        // Varsa aktif avans taksitini hesaplar:
+const contractorPure = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
+const activeAdv = dbAdvances.find(a => 
+  a.target_type === 'contractor' && 
+  (a.target_name === contractorPure || a.target_id === inv.invoice_no || fullTitle.includes(a.target_name))
+);
+let advDeduction = 0;
+if (activeAdv) {
+  const inst = Math.max(1, activeAdv.total_installments || 1);
+  advDeduction = cleanNumber(activeAdv.total_amount) / inst;
+}
+
+const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
+const t1 = Math.max(0, rawT1 - advDeduction);
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
         if (t1 > 0 || t2 > 0) {
@@ -1000,7 +1013,7 @@ export default function App() {
       }
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
- }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder]);
+ }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
   
   // CANLI SEÇİLEN BANKA TOPLAMI
   const bankLiveSelectionSummary = useMemo(() => {
@@ -2367,6 +2380,19 @@ export default function App() {
                     const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
                     const isT1Paid = inv.term1_status === 'paid';
                     const isT2Paid = inv.term2_status === 'paid';
+                      // Aktif taksitli avansı bulup 1. vadeden canlı düşer:
+const contractorPure = (inv.invoice_no || '').split(' - ')[1] || inv.invoice_no || '';
+const activeAdv = dbAdvances.find(a => 
+  a.target_type === 'contractor' && 
+  (a.target_name === contractorPure || a.target_id === inv.invoice_no || (inv.invoice_no && inv.invoice_no.includes(a.target_name)))
+);
+
+let deductedAdvAmt = 0;
+if (activeAdv && !isT1Paid) {
+  const inst = Math.max(1, activeAdv.total_installments || 1);
+  deductedAdvAmt = cleanNumber(activeAdv.total_amount) / inst;
+}
+const dynamicT1 = Math.max(0, t1 - deductedAdvAmt);
 
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
@@ -2375,7 +2401,8 @@ export default function App() {
                         <td className="py-3 px-3 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR')} ₺</td>
                         <td className="py-3 px-3">
                           <span className={`font-semibold block ${isT1Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
-                            {t1.toLocaleString('tr-TR')} ₺
+                            {dynamicT1.toLocaleString('tr-TR')} ₺
+{deductedAdvAmt > 0 && <span className="block text-[10px] text-amber-600 font-normal">(-{deductedAdvAmt.toLocaleString('tr-TR')} ₺ Avans Mahsubu)</span>}
                           </span>
                           <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(inv.term1_due_date)}</span>
                         </td>
