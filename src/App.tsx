@@ -936,17 +936,25 @@ export default function App() {
        const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
         const key = cleanKey(contractorName);
 
-        // Varsa aktif avans taksitini hesaplar:
-const contractorPure = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
-const activeAdv = dbAdvances.find(a => 
-  a.target_type === 'contractor' && 
-  (a.target_name === contractorPure || a.target_id === inv.invoice_no || fullTitle.includes(a.target_name))
-);
-let advDeduction = 0;
-if (activeAdv) {
-  const inst = Math.max(1, activeAdv.total_installments || 1);
-  advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-}
+   // Varsa aktif avans taksitini hesaplar:
+        const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
+        const cleanContractor = cleanTxt(contractorName);
+        const cleanFull = cleanTxt(fullTitle);
+
+        const activeAdv = dbAdvances.find(a => {
+          if (a.target_type !== 'contractor') return false;
+          const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
+          return (
+            (advTarget.length >= 4 && (cleanFull.includes(advTarget) || cleanContractor.includes(advTarget))) ||
+            (cleanContractor.length >= 4 && advTarget.includes(cleanContractor))
+          );
+        });
+
+        let advDeduction = 0;
+        if (activeAdv) {
+          const inst = Math.max(1, activeAdv.total_installments || 1);
+          advDeduction = cleanNumber(activeAdv.total_amount) / inst;
+        }    
 
 const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
 const t1 = Math.max(0, rawT1 - advDeduction);
