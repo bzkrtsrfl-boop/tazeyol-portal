@@ -2300,13 +2300,29 @@ export default function App() {
   })
 .sort((a: any, b: any) => {
     let comparison = 0;
+
     if (subSortField === 'invoice_no') {
-      comparison = (a.invoice_no || '').localeCompare(b.invoice_no || '', 'tr');
+      // Başlıktan sadece taşeronun adını çekip ona göre alfabetik sıralar:
+      const nameA = (a.invoice_no || '').split(' - ')[1] || a.invoice_no || '';
+      const nameB = (b.invoice_no || '').split(' - ')[1] || b.invoice_no || '';
+      comparison = nameA.trim().localeCompare(nameB.trim(), 'tr-TR', { sensitivity: 'base' });
     } else if (subSortField === 'issue_date') {
-      comparison = new Date(a.issue_date || 0).getTime() - new Date(b.issue_date || 0).getTime();
+      // GG.AA.YYYY veya YYYY-AA-GG formatını hatasız tarihe çevirip milisaniyeye göre sıralar:
+      const parseDate = (d: any) => {
+        if (!d) return 0;
+        const str = String(d).trim();
+        if (str.includes('.')) {
+          const [day, month, year] = str.split('.');
+          return new Date(`${year}-${month}-${day}`).getTime() || 0;
+        }
+        return new Date(str).getTime() || 0;
+      };
+      comparison = parseDate(a.issue_date) - parseDate(b.issue_date);
     } else if (subSortField === 'total_amount') {
+      // Tutara göre matematiksel sıralama:
       comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
     }
+
     return subSortOrder === 'asc' ? comparison : -comparison;
   })
                     .map(inv => {
