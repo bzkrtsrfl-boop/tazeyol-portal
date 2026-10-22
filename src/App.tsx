@@ -1198,7 +1198,7 @@ export default function App() {
     }
   };
 
-  // 14. DİNAMİK TAKSİTLİ AVANS MAHSUBU VE HAKEDİŞ DÜZENLEME
+ // 14. DİNAMİK TAKSİTLİ AVANS MAHSUBU VE HAKEDİŞ DÜZENLEME
   const handleSaveSubInvoiceEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingSubInvoice) return;
@@ -1212,9 +1212,6 @@ export default function App() {
 
       if (adv > 0) {
         const singleTermDeduction = adv / instCount;
-        t1 = Math.max(0, t1 - singleTermDeduction);
-        tot = Math.max(0, tot - singleTermDeduction);
-
         const remainingAdvanceDebt = adv - singleTermDeduction;
         const todayStr = new Date().toISOString().split('T')[0];
 
