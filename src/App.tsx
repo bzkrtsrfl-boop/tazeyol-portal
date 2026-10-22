@@ -694,9 +694,18 @@ export default function App() {
         if (diff <= 3) pendingDebts.push({ ...d, diffDays: diff });
       });
 
-    dbCreditCards.forEach(cc => {
-      const diff = Math.ceil((new Date(sanitizeDate(cc.due_date)).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
-      if (diff <= 5) creditCardsAlerts.push({ ...cc, diffDays: diff });
+   dbCreditCards.forEach(cc => {
+      const stmtAmt = cleanNumber(cc.statement_amount);
+      if (stmtAmt > 0) {
+        let diff = 0;
+        if (cc.due_date) {
+          diff = Math.ceil((new Date(sanitizeDate(cc.due_date)).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
+        }
+        // Ekstre borcu varsa ve vadesi geçmiş veya 15 gün içindeyse ana ekranda göster
+        if (diff <= 15) {
+          creditCardsAlerts.push({ ...cc, diffDays: diff, cleanStmtAmt: stmtAmt });
+        }
+      }
     });
 
     dbVehicles.forEach(v => {
@@ -1809,9 +1818,9 @@ export default function App() {
                   </div>
                   <div className="mt-2 flex justify-between items-baseline">
                     <span className="text-[11px] text-slate-500">Vadesi yaklaşan kartlar</span>
-                    <span className="text-base font-bold text-purple-700">
-                      {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.statement_amount), 0).toLocaleString('tr-TR')} ₺
-                    </span>
+                   <span className="text-base font-bold text-purple-700">
+                     {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.cleanStmtAmt || i.statement_amount || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                   </span>
                   </div>
                 </div>
               </div>
