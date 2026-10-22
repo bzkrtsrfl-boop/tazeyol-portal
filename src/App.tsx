@@ -2298,7 +2298,18 @@ export default function App() {
 
     return matchesSearch && matchesStatus;
   })
-  .map(inv => {
+.sort((a: any, b: any) => {
+    let comparison = 0;
+    if (subSortField === 'invoice_no') {
+      comparison = (a.invoice_no || '').localeCompare(b.invoice_no || '', 'tr');
+    } else if (subSortField === 'issue_date') {
+      comparison = new Date(a.issue_date || 0).getTime() - new Date(b.issue_date || 0).getTime();
+    } else if (subSortField === 'total_amount') {
+      comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
+    }
+    return subSortOrder === 'asc' ? comparison : -comparison;
+  })
+                    .map(inv => {
                     const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
                     const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
                     const isT1Paid = inv.term1_status === 'paid';
