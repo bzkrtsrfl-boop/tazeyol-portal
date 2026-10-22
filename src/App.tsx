@@ -972,12 +972,7 @@ export default function App() {
           const inst = match ? parseInt(match[1]) : 1;
           advDeduction = cleanNumber(advInvoice.total_amount) / inst;
         }
-        let advDeduction = 0;
-        if (activeAdv) {
-          const inst = Math.max(1, activeAdv.total_installments || 1);
-          advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-        }    
-
+               
 const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
 const t1 = Math.max(0, rawT1 - advDeduction);
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
