@@ -110,6 +110,8 @@ export default function App() {
   >('overview');
   const [subSearchTerm, setSubSearchTerm] = useState('');
   const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
+  const [subSortField, setSubSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
+  const [subSortOrder, setSubSortOrder] = useState<'asc' | 'desc'>('desc');
   const getCurrentMonthRange = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -839,6 +841,20 @@ export default function App() {
   const salesDetailedList = useMemo(() => {
     return dbInvoices
       .filter(i => i.category === 'freight_sales' || i.direction === 'outgoing')
+     return matchesSearch && matchesStatus;
+  })
+  .sort((a, b) => {
+    let comparison = 0;
+    if (subSortField === 'invoice_no') {
+      comparison = (a.invoice_no || '').localeCompare(b.invoice_no || '', 'tr');
+    } else if (subSortField === 'issue_date') {
+      comparison = new Date(a.issue_date || 0).getTime() - new Date(b.issue_date || 0).getTime();
+    } else if (subSortField === 'total_amount') {
+      comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
+    }
+    return subSortOrder === 'asc' ? comparison : -comparison;
+  })
+  .map(inv => {
       .map(inv => {
         let cust = 'MİGROS TİCARET A.Ş.';
         let fNo = inv.invoice_no || '';
@@ -2218,9 +2234,45 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Fatura No / Taşeron</th>
-                    <th className="py-3 px-3">Tarih</th>
-                    <th className="py-3 px-3">Toplam Tutar</th>
+                   <th 
+                className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                onClick={() => {
+                  if (subSortField === 'invoice_no') {
+                    setSubSortOrder(subSortOrder === 'asc' ? 'desc' : 'asc');
+                  } else {
+                    setSubSortField('invoice_no');
+                    setSubSortOrder('asc');
+                  }
+                }}
+              >
+                Fatura No / Taşeron {subSortField === 'invoice_no' ? (subSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+              </th>
+              <th 
+                className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                onClick={() => {
+                  if (subSortField === 'issue_date') {
+                    setSubSortOrder(subSortOrder === 'asc' ? 'desc' : 'asc');
+                  } else {
+                    setSubSortField('issue_date');
+                    setSubSortOrder('desc');
+                  }
+                }}
+              >
+                Tarih {subSortField === 'issue_date' ? (subSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+              </th>
+              <th 
+                className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                onClick={() => {
+                  if (subSortField === 'total_amount') {
+                    setSubSortOrder(subSortOrder === 'asc' ? 'desc' : 'asc');
+                  } else {
+                    setSubSortField('total_amount');
+                    setSubSortOrder('desc');
+                  }
+                }}
+              >
+                Toplam Tutar {subSortField === 'total_amount' ? (subSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+              </th>
                     <th className="py-3 px-3">1. Vade</th>
                     <th className="py-3 px-3">2. Vade</th>
                     {isAdmin && <th className="py-3 px-3 text-center">Ödeme & İşlem</th>}
