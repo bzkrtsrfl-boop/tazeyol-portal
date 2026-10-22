@@ -941,38 +941,34 @@ export default function App() {
 
         if (t1 > 0 || t2 > 0) {
    if (!map.has(key)) {
-            let foundIban = subIbanMap.get(key);
+            // İsimleri Türkçe ve karakterden arındıran fonksiyon
+            const toPure = (s: string) => 
+              (s || '')
+                .toLocaleLowerCase('tr-TR')
+                .replace(/[^a-z0-9]/g, '');
 
-            if (!foundIban) {
-              // Şirket eklerini (ltd, şti, sanayi, ticaret vb.) temizleyip asıl kök kelimelere bakar
-              const cleanWords = (txt: string) => 
-                (txt || '')
-                  .toLocaleLowerCase('tr-TR')
-                  .replace(/[^a-z0-9\s]/g, ' ')
-                  .split(/\s+/)
-                  .filter(w => !['ltd', 'sti', 'as', 'tic', 'san', 'ticaret', 'sanayi', 'limited', 'sirketi', 've', 'lojistik', 'nakliyat'].includes(w) && w.length >= 3);
+            const pContractor = toPure(contractorName);
 
-              const targetWords = cleanWords(contractorName);
+            // 1. Önce doğrudan veya içerme kontrolü ile bul
+            let found = dbSubcontractors.find(sub => {
+              const pSub = toPure(sub.name);
+              if (!pSub || !pContractor) return false;
+              return pContractor === pSub || pContractor.includes(pSub) || pSub.includes(pContractor);
+            });
 
-              for (const [subKey, ibanVal] of subIbanMap.entries()) {
-                // 1. İçerme kontrolü
-                if (subKey.length >= 4 && (key.includes(subKey) || subKey.includes(key))) {
-                  foundIban = ibanVal;
-                  break;
-                }
-
-                // 2. Çekirdek kelime eşleşmesi (Örn: Berkaras, Exxy, Mbk yakalama)
-                const subWords = cleanWords(subKey);
-                const hasCommonWord = targetWords.some(w => subWords.includes(w) && w.length >= 4);
-                if (hasCommonWord) {
-                  foundIban = ibanVal;
-                  break;
-                }
+            // 2. Bulamazsa ilk kelimelerine bak (Örn: 'BERKARAS', 'EXXY', 'FLEE', 'KADİR')
+            if (!found) {
+              const firstWord = (contractorName || '').trim().split(/\s+/)[0];
+              const pFirst = toPure(firstWord);
+              if (pFirst.length >= 3) {
+                found = dbSubcontractors.find(sub => toPure(sub.name).includes(pFirst));
               }
             }
 
-            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban || 'IBAN Eksik' });
+            const foundIban = found?.iban || 'IBAN Eksik';
+            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban });
           }
+
           const cur = map.get(key)!;
           cur.term1Total += t1;
           cur.term2Total += t2;
@@ -2033,9 +2029,9 @@ export default function App() {
               </div>
 
               <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm bg-emerald-50/20">
-                <span className="text-xs font-semibold text-emerald-800 tracking-wider uppercase flex items-center gap-1">
-                  <Coins className="w-3.5 h-3.5" /> Dönem İçi Fiili Masraf
-                </span>
+                <span className="text-xs font-semibold text-emerald-800 tracking-wider flex items-center gap-1">
+  <Coins className="w-3.5 h-3.5" /> DÖNEM İÇİ FİİLİ MASRAF
+</span>
                 <div className="text-xl font-bold text-emerald-800 mt-1.5">
                   {totalPeriodPaidExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
