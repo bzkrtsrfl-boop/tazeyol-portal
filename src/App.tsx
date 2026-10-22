@@ -189,68 +189,50 @@ export default function App() {
     const parsed = parseFloat(str);
     return isNaN(parsed) ? 0 : parsed;
   };
-
-  // EXCEL SAYISAL TARİHLERİ (Örn: 46295) VE METİN TARİHLERİ YYYY-MM-DD YAPAR
-  // TÜRKİYE STANDARDI TARİH DÖNÜŞTÜRÜCÜ (GG.AA.YYYY)
+// 1. ARKA PLAN İÇİN HESAPLAMA DOSTU TARİH FORMATI (YYYY-MM-DD)
   const sanitizeDate = (d: any): string => {
     if (!d) return '';
     try {
-      let dateObj: Date | null = null;
-
-      // 1. Excel Seri Numarası Desteği (Örn: 46295)
+      // Excel Seri Numarası (Örn: 46295)
       if (typeof d === 'number' || (!isNaN(Number(d)) && String(d).trim().length === 5)) {
         const serial = Number(d);
         if (serial > 20000 && serial < 80000) {
-          dateObj = new Date(Math.round((serial - 25569) * 86400 * 1000));
+          const dateObj = new Date(Math.round((serial - 25569) * 86400 * 1000));
+          return dateObj.toISOString().split('T')[0];
         }
       }
-
-      // 2. Zaten GG.AA.YYYY formatında ise
-      if (typeof d === 'string' && d.includes('.')) {
-        const parts = d.trim().split('.');
+      let str = String(d).split('T')[0].trim();
+      // 20026 gibi 5 haneli hatalı yılları 2026 yapar
+      if (str.startsWith('200') && str.length >= 10) {
+        str = str.replace(/^200/, '20');
+      }
+      // Eğer GG.AA.YYYY girilmişse YYYY-MM-DD'ye çevir
+      if (str.includes('.')) {
+        const parts = str.split('.');
         if (parts.length === 3 && parts[2].length === 4) {
-          return `${parts[0].padStart(2, '0')}.${parts[1].padStart(2, '0')}.${parts[2]}`;
+          return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
         }
       }
-
-      // 3. YYYY-MM-DD veya ISO formatı (Hatalı 20026 gibi yılları 2026'ya çeker)
-      if (!dateObj) {
-        let str = String(d).split('T')[0].trim();
-        if (str.startsWith('200') && str.length >= 10) {
-          str = str.replace(/^200/, '20'); // 20026 -> 2026 koruması
-        }
-        const parts = str.split('-');
-        if (parts.length === 3) {
-          const year = parts[0];
-          const month = parts[1].padStart(2, '0');
-          const day = parts[2].padStart(2, '0');
-          return `${day}.${month}.${year}`;
-        }
-        dateObj = new Date(str);
-      }
-
-      if (dateObj && !isNaN(dateObj.getTime())) {
-        const day = String(dateObj.getDate()).padStart(2, '0');
-        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const year = dateObj.getFullYear();
-        return `${day}.${month}.${year}`;
-      }
-
-      return String(d);
+      return str;
     } catch {
       return '';
     }
   };
 
-  // Form inputları için YYYY-MM-DD formatı sağlayıcı
-  const formatDateForInput = (d: any): string => {
-    if (!d) return '';
+  // 2. SADECE EKRANDA GÖSTERİM İÇİN TÜRKİYE TARİH FORMATI (GG.AA.YYYY)
+  const formatDateTR = (d: any): string => {
+    if (!d) return '-';
     const clean = sanitizeDate(d);
-    if (clean.includes('.')) {
-      const [day, month, year] = clean.split('.');
-      return `${year}-${month}-${day}`;
+    if (!clean || !clean.includes('-')) return clean || '-';
+    const parts = clean.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}.${parts[1]}.${parts[0]}`;
     }
-    return String(d).split('T')[0];
+    return clean;
+  };
+
+  const formatDateForInput = (d: any): string => {
+    return sanitizeDate(d);
   };
 
   const addOneYear = (dateStr: string) => {
