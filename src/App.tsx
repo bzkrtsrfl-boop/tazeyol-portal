@@ -938,14 +938,31 @@ export default function App() {
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
         if (t1 > 0 || t2 > 0) {
-         if (!map.has(key)) {
-            // 1. Önce doğrudan eşleşmeye bakar
+   if (!map.has(key)) {
             let foundIban = subIbanMap.get(key);
 
-            // 2. Bulamazsa akıllı eşleştirme yapar (biri diğerini içeriyor mu)
             if (!foundIban) {
+              // Şirket eklerini (ltd, şti, sanayi, ticaret vb.) temizleyip asıl kök kelimelere bakar
+              const cleanWords = (txt: string) => 
+                (txt || '')
+                  .toLocaleLowerCase('tr-TR')
+                  .replace(/[^a-z0-9\s]/g, ' ')
+                  .split(/\s+/)
+                  .filter(w => !['ltd', 'sti', 'as', 'tic', 'san', 'ticaret', 'sanayi', 'limited', 'sirketi', 've', 'lojistik', 'nakliyat'].includes(w) && w.length >= 3);
+
+              const targetWords = cleanWords(contractorName);
+
               for (const [subKey, ibanVal] of subIbanMap.entries()) {
+                // 1. İçerme kontrolü
                 if (subKey.length >= 4 && (key.includes(subKey) || subKey.includes(key))) {
+                  foundIban = ibanVal;
+                  break;
+                }
+
+                // 2. Çekirdek kelime eşleşmesi (Örn: Berkaras, Exxy, Mbk yakalama)
+                const subWords = cleanWords(subKey);
+                const hasCommonWord = targetWords.some(w => subWords.includes(w) && w.length >= 4);
+                if (hasCommonWord) {
                   foundIban = ibanVal;
                   break;
                 }
