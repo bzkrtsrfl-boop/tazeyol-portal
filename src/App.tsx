@@ -590,6 +590,7 @@ export default function App() {
             category: 'subcontractor_invoice',
             total_amount: totalAmt,
             issue_date: rowDate,
+            due_date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
             term1_due_date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
             term1_amount: t1,
             term1_status: 'unpaid',
