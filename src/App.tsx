@@ -2495,44 +2495,9 @@ export default function App() {
 
         {/* 8. ARAÇ FİLOSU */}
         {activeTab === 'fleet' && (
-      {(() => {
-          // Plakaya ait genel giderleri eşleştirme fonksiyonu
-          const getVehicleOtherExpenses = (plate: string) => {
-            const cleanPlate = (plate || '').replace(/\s+/g, '').toUpperCase();
-            return dbInvoices.filter(inv => {
-              const desc = (inv.description || '').replace(/\s+/g, '').toUpperCase();
-              const invNo = (inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
-              return (
-                inv.category !== 'freight_sales' &&
-                inv.category !== 'customer_collection' &&
-                (desc.includes(cleanPlate) || invNo.includes(cleanPlate))
-              );
-            });
-          };
-
-          // Filo Genel Toplamları
-          let totalSigorta = 0;
-          let totalKasko = 0;
-          let totalMtv = 0;
-          let totalMuayene = 0;
-          let totalDigerGiderler = 0;
-
-          vehicles.forEach(v => {
-            totalSigorta += cleanNumber(v.sigorta_amount || 0);
-            totalKasko += cleanNumber(v.kasko_amount || 0);
-            totalMtv += cleanNumber(v.mtv_amount || 0);
-            totalMuayene += cleanNumber(v.muayene_amount || 0);
-            const otherExps = getVehicleOtherExpenses(v.plate);
-            totalDigerGiderler += otherExps.reduce((sum, e) => sum + cleanNumber(e.total_amount), 0);
-          });
-
-          const totalSabitGider = totalSigorta + totalKasko + totalMtv + totalMuayene;
-          const genelFiloToplami = totalSabitGider + totalDigerGiderler;
-
-          return (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-            <div className="flex justify-between items-center pb-5 border-b border-slate-100">
-              <div>
+         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+         <div className="flex justify-between items-center pb-5 border-b border-slate-100">
+         <div>
                 <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({dbVehicles.length} Araç)</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Sürücü, muayene, sigorta, kasko ve otomatik MTV bildirimleri.</p>
               </div>
