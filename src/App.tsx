@@ -112,6 +112,8 @@ export default function App() {
   const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
   const [subSortField, setSubSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
   const [subSortOrder, setSubSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [bankSortField, setBankSortField] = useState<'contractorName' | 'iban' | 'activeAmount'>('activeAmount');
+  const [bankSortOrder, setBankSortOrder] = useState<'asc' | 'desc'>('desc');
   const getCurrentMonthRange = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -990,7 +992,18 @@ export default function App() {
         choice,
         activeAmount
       };
-    }).sort((a, b) => b.activeAmount - a.activeAmount);
+   }).sort((a, b) => {
+      let comparison = 0;
+      if (bankSortField === 'contractorName') {
+        comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
+      } else if (bankSortField === 'iban') {
+        // 'IBAN Eksik' olanları en sona veya en başa mantıklı dizebilmek için
+        comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
+      } else if (bankSortField === 'activeAmount') {
+        comparison = cleanNumber(a.activeAmount) - cleanNumber(b.activeAmount);
+      }
+      return bankSortOrder === 'asc' ? comparison : -comparison;
+    });
   }, [dbInvoices, contractorTermChoices, subIbanMap]);
 
   // CANLI SEÇİLEN BANKA TOPLAMI
@@ -2560,10 +2573,49 @@ export default function App() {
                         {bankPaymentGroupedList.every(i => bankSelectedContractors[i.contractorName] !== false) ? 'Bırak' : 'Tümü'}
                       </button>
                     </th>
-                    <th className="py-3 px-3">Alt Yüklenici Adı</th>
-                    <th className="py-3 px-3">Kayıtlı IBAN</th>
+                    <th 
+                      className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (bankSortField === 'contractorName') {
+                          setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setBankSortField('contractorName');
+                          setBankSortOrder('asc');
+                        }
+                      }}
+                    >
+                      Alt Yüklenici Adı {bankSortField === 'contractorName' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
+
+                    <th 
+                      className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (bankSortField === 'iban') {
+                          setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setBankSortField('iban');
+                          setBankSortOrder('asc');
+                        }
+                      }}
+                    >
+                      Kayıtlı IBAN {bankSortField === 'iban' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
+
                     <th className="py-3 px-3 text-center">Ödenecek Vade Seçeneği</th>
-                    <th className="py-3 px-3 text-right">Net Ödenecek Tutar</th>
+
+                    <th 
+                      className="py-3 px-3 text-right cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (bankSortField === 'activeAmount') {
+                          setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        } else {
+                          setBankSortField('activeAmount');
+                          setBankSortOrder('desc');
+                        }
+                      }}
+                    >
+                      Net Ödenecek Tutar {bankSortField === 'activeAmount' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
