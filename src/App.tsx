@@ -258,6 +258,70 @@ export default function App() {
     minPaymentAmount: '',
     dueDate: ''
   });
+  const [editingCreditCardId, setEditingCreditCardId] = useState<number | null>(null);
+
+  // Kredi Kartı Düzenleme Penceresini Aç
+  const openEditCreditCardModal = (card: any) => {
+    setEditingCreditCardId(card.id);
+    setCreditCardFormData({
+      cardName: card.card_name || '',
+      bankName: card.bank_name || '',
+      lastFourDigits: card.last_four_digits || '',
+      statementAmount: String(card.statement_amount || ''),
+      minPaymentAmount: String(card.min_payment_amount || ''),
+      dueDate: sanitizeDate(card.due_date)
+    });
+    setIsCreditCardModalOpen(true);
+  };
+
+  // Kredi Kartı Ödemesi Yap (Tamamı veya Asgari)
+  const handlePayCreditCard = async (card: any, type: 'full' | 'min') => {
+    if (!isAdmin) return;
+    const fullAmt = cleanNumber(card.statement_amount);
+    const minAmt = cleanNumber(card.min_payment_amount);
+    const payAmt = type === 'full' ? fullAmt : minAmt;
+
+    if (payAmt <= 0) {
+      alert('Ödenecek geçerli bir borç tutarı bulunmuyor.');
+      return;
+    }
+
+    const typeLabel = type === 'full' ? 'Tamamını' : 'Asgari Tutarını';
+    const confirmMsg = `${card.card_name} (${card.bank_name})\nÖdenecek Tutar: ${payAmt.toLocaleString('tr-TR')} ₺ (${typeLabel})\nBu ödemeyi onaylıyor musunuz? (Kasadan fiilen düşülecektir)`;
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const remainingAmt = Math.max(0, fullAmt - payAmt);
+
+      // 1. Kart borcunu güncelle
+      const { error: cardErr } = await supabase
+        .from('credit_cards')
+        .update({
+          statement_amount: remainingAmt,
+          min_payment_amount: type === 'full' ? 0 : Math.max(0, minAmt - payAmt)
+        })
+        .eq('id', card.id);
+
+      if (cardErr) throw cardErr;
+
+      // 2. Kasa/Banka nakit çıkışı kaydı oluştur
+      await supabase.from('invoices').insert([{
+        invoice_no: `KART ÖDEME - ${card.card_name} [${card.bank_name}] (${typeLabel})`,
+        direction: 'incoming',
+        category: 'credit_card_payment',
+        total_amount: payAmt,
+        issue_date: todayStr,
+        due_date: todayStr,
+        status: 'paid'
+      }]);
+
+      alert(`Kart ödemesi (${payAmt.toLocaleString('tr-TR')} ₺) başarıyla işlendi ve kasadan düşüldü!${remainingAmt > 0 ? `\nKalan Ekstre Borcu: ${remainingAmt.toLocaleString('tr-TR')} ₺` : ''}`);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Kart ödeme hatası: ' + err.message);
+    }
+  };
 
   const [isNewSaleModalOpen, setIsNewSaleModalOpen] = useState(false);
   const [newSaleFormData, setNewSaleFormData] = useState({
@@ -2465,30 +2529,89 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {dbCreditCards.map((cc, idx) => (
-                <div key={idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-slate-900 text-sm">{cc.card_name}</span>
-                    <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">
-                      {cc.bank_name} {cc.last_four_digits ? `(•${cc.last_four_digits})` : ''}
-                    </span>
+              {dbCreditCards.map((cc, idx) => {
+                const stmtAmt = cleanNumber(cc.statement_amount);
+                const minAmt = cleanNumber(cc.min_payment_amount);
+                const hasDebt = stmtAmt > 0;
+
+                return (
+                  <div key={cc.id || idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 flex flex-col justify-between shadow-xs">
+                    <div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-slate-900 text-sm">{cc.card_name}</span>
+                        <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                          {cc.bank_name} {cc.last_four_digits ? `(•${cc.last_four_digits})` : ''}
+                        </span>
+                      </div>
+
+                      <div className="pt-2 mt-2 border-t border-slate-200 space-y-1 text-xs">
+                        <div className="flex justify-between text-slate-600">
+                          <span>Ekstre Borcu:</span>
+                          <span className={`font-bold ${hasDebt ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            {hasDebt ? `${stmtAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : 'Borç Yok (0,00 ₺)'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-slate-600">
+                          <span>Asgari Tutar:</span>
+                          <span className="font-semibold text-amber-700">
+                            {minAmt > 0 ? `${minAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '-'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-slate-600 pt-1">
+                          <span>Son Ödeme Tarihi:</span>
+                          <span className="font-bold text-slate-800">{sanitizeDate(cc.due_date) || '-'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* İŞLEM VE ÖDEME BUTONLARI */}
+                    {isAdmin && (
+                      <div className="pt-2 border-t border-slate-200/80 flex flex-col gap-1.5">
+                        <div className="flex gap-1.5">
+                          {hasDebt && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handlePayCreditCard(cc, 'full')}
+                                className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition shadow-xs text-center">
+                                Tamamını Öde
+                              </button>
+                              {minAmt > 0 && minAmt < stmtAmt && (
+                                <button
+                                  type="button"
+                                  onClick={() => handlePayCreditCard(cc, 'min')}
+                                  className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg text-[10px] transition shadow-xs text-center">
+                                  Asgariyi Öde
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2 justify-end pt-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditCreditCardModal(cc)}
+                            className="text-blue-600 hover:underline font-semibold text-xs flex items-center gap-1">
+                            <Edit2 className="w-3 h-3" /> Düzenle
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (window.confirm(`${cc.card_name} kartını silmek istediğinize emin misiniz?`)) {
+                                await supabase.from('credit_cards').delete().eq('id', cc.id);
+                                loadPortalData();
+                              }
+                            }}
+                            className="text-rose-600 hover:underline font-semibold text-xs flex items-center gap-1">
+                            <Trash2 className="w-3 h-3" /> Sil
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="pt-2 border-t border-slate-200 space-y-1 text-xs">
-                    <div className="flex justify-between text-slate-600">
-                      <span>Ekstre Borcu:</span>
-                      <span className="font-bold text-rose-600">{cleanNumber(cc.statement_amount).toLocaleString('tr-TR')} ₺</span>
-                    </div>
-                    <div className="flex justify-between text-slate-600">
-                      <span>Asgari Tutar:</span>
-                      <span className="font-semibold text-amber-700">{cleanNumber(cc.min_payment_amount).toLocaleString('tr-TR')} ₺</span>
-                    </div>
-                    <div className="flex justify-between text-slate-600 pt-1">
-                      <span>Son Ödeme Tarihi:</span>
-                      <span className="font-bold text-slate-800">{sanitizeDate(cc.due_date)}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -3465,26 +3588,55 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Yeni Kredi Kartı Ekle</h3>
-              <button onClick={() => setIsCreditCardModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            <h3 className="font-bold text-slate-900 text-base">
+                {editingCreditCardId ? 'Kredi Kartı Düzenle & Ekstre Güncelle' : 'Yeni Kredi Kartı Ekle'}
+              </h3>
+              <button 
+                onClick={() => {
+                  setIsCreditCardModalOpen(false);
+                  setEditingCreditCardId(null);
+                }} 
+                className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
             </div>
             <form onSubmit={async e => {
               e.preventDefault();
               if (!creditCardFormData.cardName || !creditCardFormData.dueDate) return;
               try {
-                const { error } = await supabase.from('credit_cards').insert([{
+                const payload = {
                   card_name: creditCardFormData.cardName.trim(),
                   bank_name: creditCardFormData.bankName.trim(),
                   last_four_digits: creditCardFormData.lastFourDigits.trim(),
                   statement_amount: cleanNumber(creditCardFormData.statementAmount),
                   min_payment_amount: cleanNumber(creditCardFormData.minPaymentAmount),
                   due_date: creditCardFormData.dueDate
-                }]);
-                if (error) throw error;
-                alert('Kredi kartı eklendi!');
+                };
+
+                if (editingCreditCardId) {
+                  const { error } = await supabase.from('credit_cards').update(payload).eq('id', editingCreditCardId);
+                  if (error) throw error;
+                  alert('Kredi kartı bilgileri ve güncel ekstre başarıyla kaydedildi!');
+                } else {
+                  const { error } = await supabase.from('credit_cards').insert([payload]);
+                  if (error) throw error;
+                  alert('Yeni kredi kartı eklendi!');
+                }
+
                 setIsCreditCardModalOpen(false);
+                setEditingCreditCardId(null);
+                setCreditCardFormData({
+                  cardName: '',
+                  bankName: '',
+                  lastFourDigits: '',
+                  statementAmount: '',
+                  minPaymentAmount: '',
+                  dueDate: ''
+                });
                 loadPortalData();
-              } catch (err: any) { alert('Hata: ' + err.message); }
+              } catch (err: any) { 
+                alert('Kart kaydetme hatası: ' + err.message); 
+              }
             }} className="mt-4 space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -3515,7 +3667,7 @@ export default function App() {
                 <input type="date" value={creditCardFormData.dueDate} onChange={e => setCreditCardFormData({ ...creditCardFormData, dueDate: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white" required />
               </div>
               <div className="pt-2 flex gap-3">
-                <button type="button" onClick={() => setIsCreditCardModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="button" onClick={() => { setIsCreditCardModalOpen(false); setEditingCreditCardId(null); }} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
                 <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">Kaydet</button>
               </div>
             </form>
