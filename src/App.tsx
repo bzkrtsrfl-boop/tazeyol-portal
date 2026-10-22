@@ -938,9 +938,21 @@ export default function App() {
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
         if (t1 > 0 || t2 > 0) {
-          if (!map.has(key)) {
-            const foundIban = subIbanMap.get(key) || 'IBAN Eksik';
-            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban });
+         if (!map.has(key)) {
+            // 1. Önce doğrudan eşleşmeye bakar
+            let foundIban = subIbanMap.get(key);
+
+            // 2. Bulamazsa akıllı eşleştirme yapar (biri diğerini içeriyor mu)
+            if (!foundIban) {
+              for (const [subKey, ibanVal] of subIbanMap.entries()) {
+                if (subKey.length >= 4 && (key.includes(subKey) || subKey.includes(key))) {
+                  foundIban = ibanVal;
+                  break;
+                }
+              }
+            }
+
+            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban || 'IBAN Eksik' });
           }
           const cur = map.get(key)!;
           cur.term1Total += t1;
