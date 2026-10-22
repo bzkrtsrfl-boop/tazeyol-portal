@@ -855,8 +855,7 @@ export default function App() {
     return subSortOrder === 'asc' ? comparison : -comparison;
   })
   .map(inv => {
-      .map(inv => {
-        let cust = 'MİGROS TİCARET A.Ş.';
+     let cust = 'MİGROS TİCARET A.Ş.';
         let fNo = inv.invoice_no || '';
 
         if (fNo.includes(' - ')) {
