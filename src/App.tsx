@@ -499,12 +499,13 @@ export default function App() {
     title: ''
   });
 
-  // 6. TAŞERON IBAN EŞLEŞTİRME HARİTASI
+ // 6. TAŞERON IBAN EŞLEŞTİRME HARİTASI (TÜRKÇE VE BOŞLUK KORUMALI)
   const subIbanMap = useMemo(() => {
     const map = new Map<string, string>();
+    const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
     dbSubcontractors.forEach(s => {
       if (s.name && s.iban) {
-        map.set(s.name.trim().toUpperCase(), s.iban.trim());
+        map.set(cleanKey(s.name), s.iban.trim());
       }
     });
     return map;
@@ -930,7 +931,8 @@ export default function App() {
       .forEach(inv => {
         const fullTitle = String(inv.invoice_no || '');
         const contractorName = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
-        const key = contractorName.toUpperCase();
+       const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
+        const key = cleanKey(contractorName);
 
         const t1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
