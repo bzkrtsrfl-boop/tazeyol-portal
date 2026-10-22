@@ -936,20 +936,42 @@ export default function App() {
        const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
         const key = cleanKey(contractorName);
 
-   // Varsa aktif avans taksitini hesaplar:
+   // Varsa aktif avans taksitini hesaplar (Hem advance_payments hem invoices/giderler taranır):
         const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
         const cleanContractor = cleanTxt(contractorName);
-        const cleanFull = cleanTxt(fullTitle);
+        const cleanInvNo = cleanTxt(String(inv.invoice_no || '').split(' - ')[0] || '');
 
+        // 1. Yol: dbAdvances tablosunda ara
         const activeAdv = dbAdvances.find(a => {
           if (a.target_type !== 'contractor') return false;
           const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
           return (
-            (advTarget.length >= 4 && (cleanFull.includes(advTarget) || cleanContractor.includes(advTarget))) ||
-            (cleanContractor.length >= 4 && advTarget.includes(cleanContractor))
+            (cleanContractor.length >= 4 && advTarget.includes(cleanContractor)) ||
+            (cleanInvNo.length >= 6 && advTarget.includes(cleanInvNo))
           );
         });
 
+        // 2. Yol: invoices listesindeki avans gider fişlerinde ara
+        const advInvoice = dbInvoices.find(i => {
+          const title = String(i.invoice_no || '');
+          if (!title.toUpperCase().includes('AVANS')) return false;
+          const cleanTitle = cleanTxt(title);
+          return (
+            (cleanContractor.length >= 4 && cleanTitle.includes(cleanContractor)) ||
+            (cleanInvNo.length >= 6 && cleanTitle.includes(cleanInvNo))
+          );
+        });
+
+        let advDeduction = 0;
+        if (activeAdv) {
+          const inst = Math.max(1, activeAdv.total_installments || 1);
+          advDeduction = cleanNumber(activeAdv.total_amount) / inst;
+        } else if (advInvoice) {
+          // Eğer faturada taksit yazıyorsa yakala, yoksa 1 taksit say
+          const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
+          const inst = match ? parseInt(match[1]) : 1;
+          advDeduction = cleanNumber(advInvoice.total_amount) / inst;
+        }
         let advDeduction = 0;
         if (activeAdv) {
           const inst = Math.max(1, activeAdv.total_installments || 1);
