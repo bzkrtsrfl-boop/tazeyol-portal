@@ -2495,6 +2495,41 @@ export default function App() {
 
         {/* 8. ARAÇ FİLOSU */}
         {activeTab === 'fleet' && (
+      {(() => {
+          // Plakaya ait genel giderleri eşleştirme fonksiyonu
+          const getVehicleOtherExpenses = (plate: string) => {
+            const cleanPlate = (plate || '').replace(/\s+/g, '').toUpperCase();
+            return dbInvoices.filter(inv => {
+              const desc = (inv.description || '').replace(/\s+/g, '').toUpperCase();
+              const invNo = (inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
+              return (
+                inv.category !== 'freight_sales' &&
+                inv.category !== 'customer_collection' &&
+                (desc.includes(cleanPlate) || invNo.includes(cleanPlate))
+              );
+            });
+          };
+
+          // Filo Genel Toplamları
+          let totalSigorta = 0;
+          let totalKasko = 0;
+          let totalMtv = 0;
+          let totalMuayene = 0;
+          let totalDigerGiderler = 0;
+
+          vehicles.forEach(v => {
+            totalSigorta += cleanNumber(v.sigorta_amount || 0);
+            totalKasko += cleanNumber(v.kasko_amount || 0);
+            totalMtv += cleanNumber(v.mtv_amount || 0);
+            totalMuayene += cleanNumber(v.muayene_amount || 0);
+            const otherExps = getVehicleOtherExpenses(v.plate);
+            totalDigerGiderler += otherExps.reduce((sum, e) => sum + cleanNumber(e.total_amount), 0);
+          });
+
+          const totalSabitGider = totalSigorta + totalKasko + totalMtv + totalMuayene;
+          const genelFiloToplami = totalSabitGider + totalDigerGiderler;
+
+          return (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex justify-between items-center pb-5 border-b border-slate-100">
               <div>
@@ -2533,44 +2568,123 @@ export default function App() {
               )}
             </div>
 
+           {/* 4 ÖZET KART (TÜM FİLO SABİT & DİĞER GİDERLER) */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
+                <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam Sigorta (Yıllık)</span>
+                <span className="text-base font-bold text-slate-800 block mt-1">
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insuranceCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </span>
+                <span className="text-[10px] text-slate-400">{dbVehicles.length} Öz Mal Araç</span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
+                <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam Kasko (Yıllık)</span>
+                <span className="text-base font-bold text-slate-800 block mt-1">
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.kaskoCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </span>
+                <span className="text-[10px] text-slate-400">Poliçe Toplamı</span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
+                <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam MTV & Muayene</span>
+                <span className="text-base font-bold text-slate-800 block mt-1">
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </span>
+                <span className="text-[10px] text-slate-400">Yıllık Yasal Yük</span>
+              </div>
+
+              <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3.5 shadow-sm">
+                <span className="text-[11px] font-semibold text-blue-700 uppercase block">FİLO SABİT GİDER TOPLAMI</span>
+                <span className="text-base font-black text-blue-900 block mt-1">
+                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insuranceCost || 0) + cleanNumber(v.kaskoCost || 0) + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </span>
+                <span className="text-[10px] font-medium text-blue-600">
+                  Aylık: {(dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insuranceCost || 0) + cleanNumber(v.kaskoCost || 0) + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0), 0) / 12).toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ / ay
+                </span>
+              </div>
+            </div>
+
+            {/* DİNAMİK MALİYET TABLOSU */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Plaka</th>
-                    <th className="py-3 px-3">Sürücü</th>
-                    <th className="py-3 px-3">Muayene Tarihi</th>
-                    <th className="py-3 px-3">Sigorta Bitiş</th>
-                    <th className="py-3 px-3">Kasko Bitiş</th>
-                    <th className="py-3 px-3 text-right">Son MTV</th>
-                    {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
+                    <th className="py-3 px-3">PLAKA</th>
+                    <th className="py-3 px-3">SÜRÜCÜ</th>
+                    <th className="py-3 px-3">SİGORTA (TUTAR / BİTİŞ)</th>
+                    <th className="py-3 px-3">KASKO (TUTAR / BİTİŞ)</th>
+                    <th className="py-3 px-3">YILLIK MTV</th>
+                    <th className="py-3 px-3">MUAYENE</th>
+                    <th className="py-3 px-3 text-right">DİĞER GİDERLER</th>
+                    <th className="py-3 px-3 text-right">TOPLAM MALİYET</th>
+                    {isAdmin && <th className="py-3 px-3 text-center">İŞLEM</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbVehicles.map(v => (
-                    <tr key={v.id} className="hover:bg-slate-50 transition">
-                      <td onClick={() => openVehicle360(v)} className="py-3 px-3 font-mono font-bold text-blue-700 cursor-pointer hover:underline text-sm">
-                        {v.plate_number}
-                      </td>
-                      <td className="py-3 px-3 font-semibold text-slate-800">{v.driver_name || '-'}</td>
-                      <td className="py-3 px-3 text-slate-600">{sanitizeDate(v.next_inspection_date) || '-'}</td>
-                      <td className="py-3 px-3 text-slate-600">{sanitizeDate(v.insurance_expiry_date) || '-'}</td>
-                      <td className="py-3 px-3 text-slate-600">{sanitizeDate(v.kasko_expiry_date) || '-'}</td>
-                      <td className="py-3 px-3 text-right font-medium text-slate-700">
-                        {v.last_mtv_cost ? `${cleanNumber(v.last_mtv_cost).toLocaleString('tr-TR')} ₺` : '-'}
-                      </td>
-                      {isAdmin && (
-                        <td className="py-3 px-3 text-center">
-                          <button 
-                            onClick={() => openEditVehicleModal(v)}
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition inline-flex items-center gap-1 font-medium">
-                            <Edit2 className="w-3.5 h-3.5" /> Düzenle
-                          </button>
+                  {dbVehicles.map((v, idx) => {
+                    const cleanPlate = (v.plateNumber || '').replace(/\s+/g, '').toUpperCase();
+                    
+                    // Plakaya ait genel giderleri filtrele
+                    const plateExpenses = dbInvoices.filter(inv => {
+                      const desc = (inv.description || '').replace(/\s+/g, '').toUpperCase();
+                      const invNo = (inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
+                      return (
+                        inv.category !== 'freight_sales' &&
+                        inv.category !== 'customer_collection' &&
+                        (desc.includes(cleanPlate) || invNo.includes(cleanPlate))
+                      );
+                    });
+
+                    const otherCost = plateExpenses.reduce((sum, e) => sum + cleanNumber(e.total_amount), 0);
+                    const fixedCost = cleanNumber(v.insuranceCost || 0) + cleanNumber(v.kaskoCost || 0) + cleanNumber(v.lastMtvCost || 0) + cleanNumber(v.inspectionCost || 0);
+                    const totalCost = fixedCost + otherCost;
+
+                    return (
+                      <tr key={v.id || idx} className="hover:bg-slate-50 transition">
+                        <td className="py-3 px-3 font-bold text-blue-700">{v.plateNumber}</td>
+                        <td className="py-3 px-3 text-slate-700 font-medium">{v.driverName || '-'}</td>
+                        <td className="py-3 px-3">
+                          <span className="font-semibold text-slate-800">{v.insuranceCost ? `${cleanNumber(v.insuranceCost).toLocaleString('tr-TR')} ₺` : '-'}</span>
+                          {v.insuranceStartDate && <span className="block text-[10px] text-slate-400">Bitiş: {v.insuranceStartDate}</span>}
                         </td>
-                      )}
-                    </tr>
-                  ))}
+                        <td className="py-3 px-3">
+                          <span className="font-semibold text-slate-800">{v.kaskoCost ? `${cleanNumber(v.kaskoCost).toLocaleString('tr-TR')} ₺` : '-'}</span>
+                          {v.kaskoStartDate && <span className="block text-[10px] text-slate-400">Bitiş: {v.kaskoStartDate}</span>}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-800">
+                          {v.lastMtvCost ? `${cleanNumber(v.lastMtvCost).toLocaleString('tr-TR')} ₺` : '-'}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className="font-semibold text-slate-800">{v.inspectionCost ? `${cleanNumber(v.inspectionCost).toLocaleString('tr-TR')} ₺` : '-'}</span>
+                          {v.nextInspectionDate && <span className="block text-[10px] text-slate-400">Tarih: {v.nextInspectionDate}</span>}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <span className={`font-bold ${otherCost > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                            {otherCost > 0 ? `${otherCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '-'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right font-black text-slate-900 text-sm">
+                          {totalCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        </td>
+                        {isAdmin && (
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              onClick={() => {
+                                setEditingVehicleId(v.id);
+                                setVehicleFormData(v);
+                                setIsVehicleModalOpen(true);
+                              }}
+                              className="text-blue-600 hover:text-blue-800 font-medium text-xs">
+                              Düzenle
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
+              </table>
               </table>
             </div>
           </div>
