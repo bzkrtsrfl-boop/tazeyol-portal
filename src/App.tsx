@@ -628,23 +628,19 @@ export default function App() {
       }
 
       if (newRowsToInsert.length > 0) {
+        if (newRowsToInsert.length > 0) {
         const { error } = await supabase.from('invoices').insert(newRowsToInsert);
         if (error) throw error;
       }
 
-    alert(`İşlem Başarılı!\n• ${newRowsToInsert.length} adet yeni fatura eklendi.\n• ${skippedCount} adet mevcut fatura mükerrer olmaması için atlandı.`);
-    loadPortalData();
-  } catch (err: any) {
       alert(`İşlem Başarılı!\n• ${newRowsToInsert.length} adet yeni fatura eklendi.\n• ${updatedCount} adet mevcut fatura güncellendi.`);
-    await loadPortalData();
-  } catch (err: any) {
-    console.error(err);
-    alert('Excel aktarım hatası: ' + (err.message || 'Bilinmeyen hata'));
-  } finally {
-    setIsExcelUploading(false);
-    e.target.value = '';
-  }
-      alert('Excel aktarım hatası: ' + err.message);
+      await loadPortalData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Excel aktarım hatası: ' + (err.message || 'Bilinmeyen hata'));
+    } finally {
+      setIsExcelUploading(false);
+      e.target.value = '';
     }
   };
 
