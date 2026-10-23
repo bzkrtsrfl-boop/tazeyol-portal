@@ -960,15 +960,16 @@ export default function App() {
        const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
         const key = cleanKey(contractorName);
 
-   // Varsa aktif avans taksitini hesaplar (SADECE taşeronun kendi adına göre eşleşir):
+    // Varsa aktif avans taksitini hesaplar (SADECE taşeronun kendi adına göre birebir kilitli eşleşir):
     const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
     const cleanContractor = cleanTxt(contractorName);
 
-    // 1. Yol: dbAdvances tablosunda ara
+    // 1. Yol: dbAdvances tablosunda ara (Tam veya başlangıç eşleşmesi, minimum 5 karakter güvenliği)
     const activeAdv = dbAdvances.find(a => {
       if (a.target_type !== 'contractor') return false;
       const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
-      return cleanContractor.length >= 4 && (advTarget.includes(cleanContractor) || cleanContractor.includes(advTarget));
+      if (!advTarget || cleanContractor.length < 4) return false;
+      return advTarget === cleanContractor || advTarget.includes(cleanContractor) || cleanContractor.includes(advTarget);
     });
 
     // 2. Yol: invoices listesindeki avans gider fişlerinde ara
@@ -990,8 +991,7 @@ export default function App() {
         const inst = match ? parseInt(match[1]) : 1;
         advDeduction = cleanNumber(advInvoice.total_amount) / inst;
       }
-    }
-               
+    }               
 const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
 const t1 = Math.max(0, rawT1 - advDeduction);
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
@@ -1084,11 +1084,42 @@ const t1 = Math.max(0, rawT1 - advDeduction);
   };
 
   // BANKA EXCEL ÇIKTISI
+ // BANKA EXCEL ÇIKTISI & OTOMATİK MUTABAKAT DENETİMİ (SANITY CHECK)
   const handleDownloadBankExcel = () => {
     const selectedRows = bankPaymentGroupedList.filter(item => bankSelectedContractors[item.contractorName] !== false && item.activeAmount > 0);
     if (selectedRows.length === 0) {
       alert('Lütfen listeden en az bir alt yüklenici seçiniz!');
       return;
+    }
+
+    // GÜVENLİK KONTROLÜ (SANITY CHECK): Kuruş sapması denetimi
+    let auditRawTotal = 0;
+    let auditActiveTotal = 0;
+
+    selectedRows.forEach(row => {
+      let rawAmt = 0;
+      if (row.choice === 'term1') rawAmt = row.term1Total;
+      else if (row.choice === 'term2') rawAmt = row.term2Total;
+      else if (row.choice === 'both') rawAmt = row.term1Total + row.term2Total;
+
+      auditRawTotal += rawAmt;
+      auditActiveTotal += cleanNumber(row.activeAmount);
+    });
+
+    const diff = Math.abs(auditRawTotal - auditActiveTotal);
+    // 1 Kuruştan büyük herhangi bir mantık/matematik sapması varsa indirmeyi durdur
+    if (diff > 0.05) {
+      alert(`GÜVENLİK UYARISI: Banka talimat toplamı ile hakediş toplamı arasında ${diff.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ tutarsızlık tespit edildi!\nMali kayıp yaşanmaması için Excel indirme işlemi durduruldu. Lütfen seçili kayıtları kontrol ediniz.`);
+      return;
+    }
+
+    // IBAN Eksik Olan Taşeron Kontrolü
+    const missingIbans = selectedRows.filter(r => !r.iban || r.iban === 'IBAN Eksik' || r.iban.trim().length < 15);
+    if (missingIbans.length > 0) {
+      const names = missingIbans.map(m => m.contractorName).join(', ');
+      if (!window.confirm(`DİKKAT: Seçilen bazı alt yüklenicilerin IBAN bilgisi eksik veya geçersiz:\n• ${names}\n\nYine de Excel oluşturulsun mu?`)) {
+        return;
+      }
     }
 
     const excelData = selectedRows.map(item => ({
@@ -1102,6 +1133,44 @@ const t1 = Math.max(0, rawT1 - advDeduction);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Toplu Odeme');
     XLSX.writeFile(workbook, `Tazeyol_Banka_Odeme_Talimati_${new Date().toISOString().split('T')[0]}.xlsx`);
+    // Otomatik Durum Kapatma & Mükerrer Ödeme Kilidi
+    setTimeout(async () => {
+      if (window.confirm('Banka Exceli başarıyla oluşturuldu!\n\nSeçilen bu alt yüklenicilerin ilgili vadeleri sistemde "Ödendi" olarak işaretlenip kapatılsın mı? (Böylece mükerrer ödeme riski önlenir)')) {
+        try {
+          for (const item of selectedRows) {
+            const contractorInvoices = dbInvoices.filter(i => {
+              if (i.category !== 'subcontractor_invoice') return false;
+              const fTitle = String(i.invoice_no || '');
+              const cName = fTitle.includes(' - ') ? fTitle.split(' - ')[1].trim() : fTitle;
+              return cName === item.contractorName;
+            });
+
+            for (const inv of contractorInvoices) {
+              const updates: any = {};
+              if (item.choice === 'term1' || item.choice === 'both') {
+                updates.term1_status = 'paid';
+              }
+              if (item.choice === 'term2' || item.choice === 'both') {
+                updates.term2_status = 'paid';
+              }
+              const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
+              const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
+              if (isT1Paid && isT2Paid) {
+                updates.status = 'paid';
+              }
+
+              if (Object.keys(updates).length > 0) {
+                await supabase.from('invoices').update(updates).eq('id', inv.id);
+              }
+            }
+          }
+          alert('Seçilen ödemeler başarıyla kapatıldı ve kayıtlara işlendi!');
+          loadPortalData();
+        } catch (err: any) {
+          alert('Durum güncelleme hatası: ' + err.message);
+        }
+      }
+    }, 500);
   };
 
   // 11. HAKEDİŞ SATIRINDA ESNEK VADE ÖDEME (1. Vade / 2. Vade / Tümü)
