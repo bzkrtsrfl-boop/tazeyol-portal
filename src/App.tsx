@@ -974,15 +974,15 @@ export default function App() {
                 foundIban = found.iban;
               }
             }
-
             map.set(key, { 
               contractorName, 
               term1Total: 0, 
               term2Total: 0, 
               invoiceNos: [], 
               iban: foundIban || 'IBAN Eksik' 
-            }
+            });
           }
+        }
       });
 
     return Array.from(map.values()).map(item => {
