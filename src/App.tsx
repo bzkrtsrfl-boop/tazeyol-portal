@@ -1062,8 +1062,8 @@ export default function App() {
       }
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
- }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
-  
+  }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
+
   // CANLI SEÇİLEN BANKA TOPLAMI
   const bankLiveSelectionSummary = useMemo(() => {
     let total = 0;
