@@ -47,18 +47,11 @@ import * as XLSX from 'xlsx';
 function TazeyolBrand() {
   return (
     <div className="flex items-center gap-2">
-      <div className="flex items-center">
-        <span className="font-extrabold text-xl tracking-tight text-[#0f2341]">taze</span>
-        <div className="relative flex items-center justify-center font-extrabold text-xl text-[#009fe3]">
-          y
-          <span className="relative inline-flex items-center justify-center ml-0.5 mr-0.5">
-            <span className="w-5 h-5 rounded-full border-[2.5px] border-[#97dcfc] flex items-center justify-center">
-              <span className="w-2.5 h-2.5 rounded-full bg-[#009fe3]"></span>
-            </span>
-          </span>
-          l
-        </div>
-      </div>
+      <img 
+        src="/logo.png" 
+        alt="Tazeyol Logosu" 
+        className="h-8 w-auto object-contain" 
+      />
       <span className="bg-[#009fe3] text-white text-[11px] font-black tracking-widest px-2 py-0.5 rounded-md uppercase ml-1 shadow-sm">
         ERP
       </span>
