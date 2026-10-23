@@ -958,7 +958,6 @@ export default function App() {
         const fullTitle = String(inv.invoice_no || '');
         const contractorName = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
         const key = normalizeKey(contractorName);
-
         const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
         const rawT2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
@@ -971,7 +970,6 @@ export default function App() {
             const foundIban = found?.iban || 'IBAN Eksik';
             map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban });
           }
-
           const cur = map.get(key)!;
           cur.term1Total += rawT1;
           cur.term2Total += rawT2;
