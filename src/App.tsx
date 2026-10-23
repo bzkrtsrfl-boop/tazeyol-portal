@@ -1028,32 +1028,7 @@ export default function App() {
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
   }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
-    return Array.from(map.values()).map(item => {
-      const choice = contractorTermChoices[item.contractorName] || 'term1';
-      let activeAmount = 0;
-      if (choice === 'term1') activeAmount = item.term1Total;
-      else if (choice === 'term2') activeAmount = item.term2Total;
-      else if (choice === 'both') activeAmount = item.term1Total + item.term2Total;
-
-      return {
-        ...item,
-        choice,
-        activeAmount
-      };
-   }).sort((a, b) => {
-      let comparison = 0;
-      if (bankSortField === 'contractorName') {
-        comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
-      } else if (bankSortField === 'iban') {
-        // 'IBAN Eksik' olanları en sona veya en başa mantıklı dizebilmek için
-        comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
-      } else if (bankSortField === 'activeAmount') {
-        comparison = cleanNumber(a.activeAmount) - cleanNumber(b.activeAmount);
-      }
-      return bankSortOrder === 'asc' ? comparison : -comparison;
-    });
-  }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
-
+    
   // CANLI SEÇİLEN BANKA TOPLAMI
   const bankLiveSelectionSummary = useMemo(() => {
     let total = 0;
