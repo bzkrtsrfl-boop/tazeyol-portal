@@ -2206,6 +2206,38 @@ const t1 = Math.max(0, rawT1 - advDeduction);
                 <option value="paid">✅ Sadece Tahsil Edilenler</option>
               </select>
             </div>
+            {/* BEKLEYEN VE SEÇİLİ TAHSİLAT ÖZET KARTI */}
+        {(() => {
+          const salesInvoices = dbInvoices.filter((i: any) => i.direction === 'outgoing' || i.category === 'sales_invoice');
+          const uncollected = salesInvoices.filter((i: any) => i.status !== 'paid');
+          const totalUncollectedAmt = uncollected.reduce((acc: number, cur: any) => acc + (Number(cur.total_amount) || 0), 0);
+
+          return (
+            <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold shadow-md">
+                  ₺
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
+                    Toplam Bekleyen Müşteri Tahsilatı (Açık Faturalar)
+                  </span>
+                  <span className="text-2xl font-black text-slate-900 tracking-tight">
+                    {totalUncollectedAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-center">
+                <span className="bg-white/90 border border-emerald-200 text-emerald-800 font-bold text-xs px-3.5 py-1.5 rounded-xl shadow-xs">
+                  {uncollected.length} Açık Fatura
+                </span>
+                <span className="bg-slate-100 text-slate-600 font-semibold text-xs px-3 py-1.5 rounded-xl">
+                  Toplam: {salesInvoices.length} Fatura
+                </span>
+              </div>
+            </div>
+          );
+        })()}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
