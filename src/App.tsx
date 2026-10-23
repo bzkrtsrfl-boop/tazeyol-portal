@@ -147,6 +147,7 @@ export default function App() {
     { id: 7, month_year: 'Eyl.26', plate_number: '34UU8372', recon_net: 187228.32, invoice_rev: 217184.85, driver_sal: 56000.00, fuel_ex_vat: 57310.68, hgs_ex_vat: 16070.97, bonus: 15600.00, sgk: 11148.00, other_exp: 0 }
   ]);
   const [loading, setLoading] = useState(true);
+  const [isExcelUploading, setIsExcelUploading] = useState(false);
 
   const loadPortalData = async () => {
     setLoading(true);
@@ -559,6 +560,7 @@ export default function App() {
     if (!isAdmin) return;
     const file = e.target.files?.[0];
     if (!file) return;
+    setIsExcelUploading(true);
 
     try {
       const data = await file.arrayBuffer();
@@ -630,9 +632,18 @@ export default function App() {
         if (error) throw error;
       }
 
-      alert(`İşlem Başarılı!\n• ${newRowsToInsert.length} adet yeni fatura eklendi.\n• ${skippedCount} adet mevcut fatura mükerrer olmaması için atlandı.`);
-      loadPortalData();
-    } catch (err: any) {
+    alert(`İşlem Başarılı!\n• ${newRowsToInsert.length} adet yeni fatura eklendi.\n• ${skippedCount} adet mevcut fatura mükerrer olmaması için atlandı.`);
+    loadPortalData();
+  } catch (err: any) {
+      alert(`İşlem Başarılı!\n• ${newRowsToInsert.length} adet yeni fatura eklendi.\n• ${updatedCount} adet mevcut fatura güncellendi.`);
+    await loadPortalData();
+  } catch (err: any) {
+    console.error(err);
+    alert('Excel aktarım hatası: ' + (err.message || 'Bilinmeyen hata'));
+  } finally {
+    setIsExcelUploading(false);
+    e.target.value = '';
+  }
       alert('Excel aktarım hatası: ' + err.message);
     }
   };
@@ -2270,10 +2281,11 @@ const t1 = Math.max(0, rawT1 - advDeduction);
               </div>
               {isAdmin && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="cursor-pointer bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
-                    <FileUp className="w-4 h-4" /> Taşeron Fatura Exceli Yükle
-                    <input type="file" accept=".xlsx,.xls" onChange={handleImportSubcontractorInvoicesSafe} className="hidden" />
-                  </label>
+                  <label className={`cursor-pointer ${isExcelUploading ? 'bg-slate-500 pointer-events-none opacity-80' : 'bg-slate-800 hover:bg-slate-900'} text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition`}>
+              <FileUp className={`w-4 h-4 ${isExcelUploading ? 'animate-bounce' : ''}`} />
+              <span>{isExcelUploading ? 'Faturalar Güncelleniyor, Lütfen Bekleyin...' : 'Taşeron Fatura Exceli Yükle'}</span>
+              <input type="file" accept=".xlsx, .xls" disabled={isExcelUploading} onChange={handleImportSubcontractorInvoicesSafe} className="hidden" />
+            </label>
                   <button 
                     onClick={() => setIsManualSubInvoiceModalOpen(true)}
                     className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
