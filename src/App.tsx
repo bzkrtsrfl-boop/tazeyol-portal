@@ -564,34 +564,47 @@ export default function App() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rawRows: any[] = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+// Excel satırlarını dizi olarak alıyoruz (0=A, 1=B, 2=C, 3=D, 4=E, 5=F, 6=G)
+      const rawRows: any[] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' });
 
-      const existingInvoices = new Set(
+      const existingInvoicesMap = new Map<string, any>();
       dbInvoices
         .filter(i => i.category === 'subcontractor_invoice')
-        .map(i => normalizeKey(String(i.invoice_no || '')))
-    );
+        .forEach(i => existingInvoicesMap.set(normalizeKey(String(i.invoice_no || '')), i));
 
       const newRowsToInsert: any[] = [];
-      let skippedCount = 0;
+      let updatedCount = 0;
 
-      rawRows.forEach((row: any) => {
-        const invNo = String(row['Fatura No'] || row['Fatura no'] || row['Fatura Numarası'] || row['Belge No'] || '').trim();
-        const subName = String(row['Unvanı/Adı Soyadı'] || row['Alt Yüklenici'] || row['Taşeron'] || row['Cari'] || '').trim();
-        const totalAmt = cleanNumber(row['Ödenecek Tutar'] || row['Tutar'] || row['Toplam Tutar'] || row['Genel Toplam']);
-        
-        // Excel seri numarası 46295 korumalı tarih
-        const rawDate = row['Tarih'] || row['Düzenleme tarihi'] || row['Fatura Tarihi'];
+      // 0. satır başlıklar olduğu için i=1'den başlıyoruz
+      for (let i = 1; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        if (!row || !Array.isArray(row) || row.length === 0) continue;
+
+        const subName = String(row[1] || '').trim(); // B Sütunu (Ünvan)
+        const invNo = String(row[3] || '').trim();   // D Sütunu (Fatura No)
+        const rawDate = row[4];                      // E Sütunu (Tarih)
+        const totalAmt = cleanNumber(row[6]);         // G Sütunu (ÖDENECEK NET TUTAR)
+
+        if (!invNo || !subName || totalAmt <= 0) continue;
+
         const rowDate = sanitizeDate(rawDate) || new Date().toISOString().split('T')[0];
-
         const fullTitle = `${invNo} - ${subName}`.trim();
+        const normKey = normalizeKey(fullTitle);
 
-        if (existingInvoices.has(normalizeKey(fullTitle))) {
-          skippedCount++;
-        } else if (invNo && totalAmt > 0) {
-          const t1 = totalAmt / 2;
-          const t2 = totalAmt / 2;
+        const t1 = totalAmt / 2;
+        const t2 = totalAmt / 2;
 
+        if (existingInvoicesMap.has(normKey)) {
+          // Sistemde zaten varsa: Tutarını ve vadelerini G sütununa göre güncelle
+          const exist = existingInvoicesMap.get(normKey);
+          await supabase.from('invoices').update({
+            total_amount: totalAmt,
+            term1_amount: t1,
+            term2_amount: t2
+          }).eq('id', exist.id);
+          updatedCount++;
+        } else {
+          // Sistemde yoksa: Yeni kayıt olarak ekle
           newRowsToInsert.push({
             invoice_no: fullTitle,
             direction: 'incoming',
@@ -608,7 +621,7 @@ export default function App() {
             status: 'unpaid'
           });
         }
-      });
+      }
 
       if (newRowsToInsert.length > 0) {
         const { error } = await supabase.from('invoices').insert(newRowsToInsert);
