@@ -963,18 +963,26 @@ export default function App() {
 
         if (rawT1 > 0 || rawT2 > 0) {
           if (!map.has(key)) {
-            let found = dbSubcontractors.find(sub => {
-              const pSub = normalizeKey(sub.name);
-              return pSub && key && (key === pSub || key.includes(pSub) || pSub.includes(key));
-            });
-            const foundIban = found?.iban || 'IBAN Eksik';
-            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban });
+            let foundIban = subIbanMap?.[contractorName] || subIbanMap?.[key];
+
+            if (!foundIban || foundIban === 'IBAN Eksik') {
+              const found = dbSubcontractors.find(sub => {
+                const pSub = normalizeKey(sub.name);
+                return pSub && key && (key === pSub || key.includes(pSub) || pSub.includes(key));
+              });
+              if (found?.iban) {
+                foundIban = found.iban;
+              }
+            }
+
+            map.set(key, { 
+              contractorName, 
+              term1Total: 0, 
+              term2Total: 0, 
+              invoiceNos: [], 
+              iban: foundIban || 'IBAN Eksik' 
+            }
           }
-          const cur = map.get(key)!;
-          cur.term1Total += rawT1;
-          cur.term2Total += rawT2;
-          cur.invoiceNos.push(inv.invoice_no);
-        }
       });
 
     return Array.from(map.values()).map(item => {
