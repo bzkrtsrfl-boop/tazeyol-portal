@@ -46,13 +46,13 @@ import * as XLSX from 'xlsx';
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-3">
       <img 
         src="/logo.png" 
-        alt="Tazeyol Logosu" 
-        className="h-8 w-auto object-contain" 
+        alt="Tazeyol" 
+        className="h-10 w-auto object-contain py-0.5" 
       />
-      <span className="bg-[#009fe3] text-white text-[11px] font-black tracking-widest px-2 py-0.5 rounded-md uppercase ml-1 shadow-sm">
+      <span className="bg-[#009fe3] text-white text-[11px] font-black tracking-widest px-2 py-0.5 rounded-md uppercase shadow-sm">
         ERP
       </span>
     </div>
