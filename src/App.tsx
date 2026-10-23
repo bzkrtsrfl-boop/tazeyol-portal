@@ -940,41 +940,67 @@ export default function App() {
     }));
   };
 
-  // 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA
+ // 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA (TÜRKÇE KARAKTER & TOPLU AVANS GÜVENLİKLİ)
   const bankPaymentGroupedList = useMemo(() => {
+    // Türkçe karakterleri ve boşlukları tamamen standartlaştıran temizleyici
+    const normalizeKey = (str: string) => {
+      return (str || '')
+        .replace(/İ/g, 'i')
+        .replace(/I/g, 'ı')
+        .toLocaleLowerCase('tr-TR')
+        .replace(/[^a-z0-9]/g, '');
+    };
+
     const map = new Map<string, { contractorName: string; term1Total: number; term2Total: number; invoiceNos: string[]; iban: string }>();
 
+    // 1. ADIM: Tüm faturaları taşeron bazında ham olarak topla
     dbInvoices
       .filter(i => i.category === 'subcontractor_invoice')
       .forEach(inv => {
         const fullTitle = String(inv.invoice_no || '');
         const contractorName = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
-       const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
-        const key = cleanKey(contractorName);
+        const key = normalizeKey(contractorName);
 
-    // Varsa aktif avans taksitini hesaplar (SADECE taşeronun kendi adına göre birebir kilitli eşleşir):
-    const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
-    const cleanContractor = cleanTxt(contractorName);
+        const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
+        const rawT2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
-    // 1. Yol: dbAdvances tablosunda ara (Tam veya başlangıç eşleşmesi, minimum 5 karakter güvenliği)
-    const activeAdv = dbAdvances.find(a => {
-      if (a.target_type !== 'contractor') return false;
-      const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
-      if (!advTarget || cleanContractor.length < 4) return false;
-      return advTarget === cleanContractor || advTarget.includes(cleanContractor) || cleanContractor.includes(advTarget);
-    });
+        if (rawT1 > 0 || rawT2 > 0) {
+          if (!map.has(key)) {
+            // IBAN eşleştirmesi
+            let found = dbSubcontractors.find(sub => {
+              const pSub = normalizeKey(sub.name);
+              return pSub && key && (key === pSub || key.includes(pSub) || pSub.includes(key));
+            });
+            const foundIban = found?.iban || 'IBAN Eksik';
+            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban });
+          }
 
-    // 2. Yol: invoices listesindeki avans gider fişlerinde ara
-    const advInvoice = dbInvoices.find(i => {
-      const title = String(i.invoice_no || '');
-      if (!title.toUpperCase().includes('AVANS')) return false;
-      const cleanTitle = cleanTxt(title);
-      return cleanContractor.length >= 4 && cleanTitle.includes(cleanContractor);
-    });
+          const cur = map.get(key)!;
+          cur.term1Total += rawT1;
+          cur.term2Total += rawT2;
+          cur.invoiceNos.push(inv.invoice_no);
+        }
+      });
 
-    let advDeduction = 0;
-    // Eğer bu taşeron daha önce map'e eklenmemişse avansı 1 kez mahsup et
-    if (!map.has(key)) {
+    // 2. ADIM: Taşeronun tüm vadeleri toplandıktan sonra tanımlı avansı 1. Vadeden tek seferde düş
+    return Array.from(map.values()).map(item => {
+      const normName = normalizeKey(item.contractorName);
+
+      // dbAdvances tablosunda avans ara
+      const activeAdv = dbAdvances.find(a => {
+        if (a.target_type !== 'contractor') return false;
+        const advTarget = normalizeKey(String(a.target_name || a.target_id || ''));
+        return normName.length >= 4 && (advTarget === normName || advTarget.includes(normName) || normName.includes(advTarget));
+      });
+
+      // Faturalar arasındaki AVANS fişlerinde ara
+      const advInvoice = dbInvoices.find(i => {
+        const title = String(i.invoice_no || '');
+        if (!title.toUpperCase().includes('AVANS')) return false;
+        return normName.length >= 4 && normalizeKey(title).includes(normName);
+      });
+
+      let advDeduction = 0;
       if (activeAdv) {
         const inst = Math.max(1, activeAdv.total_installments || 1);
         advDeduction = cleanNumber(activeAdv.total_amount) / inst;
@@ -983,47 +1009,34 @@ export default function App() {
         const inst = match ? parseInt(match[1]) : 1;
         advDeduction = cleanNumber(advInvoice.total_amount) / inst;
       }
-    }               
-const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
-const t1 = Math.max(0, rawT1 - advDeduction);
-        const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
-        if (t1 > 0 || t2 > 0) {
-   if (!map.has(key)) {
-            // İsimleri Türkçe ve karakterden arındıran fonksiyon
-            const toPure = (s: string) => 
-              (s || '')
-                .toLocaleLowerCase('tr-TR')
-                .replace(/[^a-z0-9]/g, '');
+      // Avansı 1. Vade toplamından düş (Asla kısmi kalmaz, fazlası havada kaybolmaz)
+      const adjustedTerm1 = Math.max(0, item.term1Total - advDeduction);
 
-            const pContractor = toPure(contractorName);
+      const choice = contractorTermChoices[item.contractorName] || 'term1';
+      let activeAmount = 0;
+      if (choice === 'term1') activeAmount = adjustedTerm1;
+      else if (choice === 'term2') activeAmount = item.term2Total;
+      else if (choice === 'both') activeAmount = adjustedTerm1 + item.term2Total;
 
-            // 1. Önce doğrudan veya içerme kontrolü ile bul
-            let found = dbSubcontractors.find(sub => {
-              const pSub = toPure(sub.name);
-              if (!pSub || !pContractor) return false;
-              return pContractor === pSub || pContractor.includes(pSub) || pSub.includes(pContractor);
-            });
-
-            // 2. Bulamazsa ilk kelimelerine bak (Örn: 'BERKARAS', 'EXXY', 'FLEE', 'KADİR')
-            if (!found) {
-              const firstWord = (contractorName || '').trim().split(/\s+/)[0];
-              const pFirst = toPure(firstWord);
-              if (pFirst.length >= 3) {
-                found = dbSubcontractors.find(sub => toPure(sub.name).includes(pFirst));
-              }
-            }
-
-            const foundIban = found?.iban || 'IBAN Eksik';
-            map.set(key, { contractorName, term1Total: 0, term2Total: 0, invoiceNos: [], iban: foundIban });
-          }
-
-          const cur = map.get(key)!;
-          cur.term1Total += t1;
-          cur.term2Total += t2;
-          cur.invoiceNos.push(inv.invoice_no);
-        }
-      });
+      return {
+        ...item,
+        term1Total: adjustedTerm1,
+        choice,
+        activeAmount
+      };
+    }).sort((a, b) => {
+      let comparison = 0;
+      if (bankSortField === 'contractorName') {
+        comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
+      } else if (bankSortField === 'iban') {
+        comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
+      } else if (bankSortField === 'activeAmount') {
+        comparison = cleanNumber(a.activeAmount) - cleanNumber(b.activeAmount);
+      }
+      return bankSortOrder === 'asc' ? comparison : -comparison;
+    });
+  }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
 
     return Array.from(map.values()).map(item => {
       const choice = contractorTermChoices[item.contractorName] || 'term1';
