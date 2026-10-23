@@ -3604,14 +3604,35 @@ const t1 = Math.max(0, rawT1 - advDeduction);
             <form onSubmit={handleSaveGeneralExpense} className="mt-4 space-y-3 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Gider Türü / Kategori</label>
-                <select value={expenseFormData.category} onChange={e => setExpenseFormData({ ...expenseFormData, category: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white">
-                  <option value="maintenance">Tamir / Bakım / Servis</option>
-                  <option value="tires">Lastik / Yedek Parça</option>
-                  <option value="general_fuel">Genel Akaryakıt / Mazot</option>
-                  <option value="taxes_sgk">Devlet / Vergi / SGK</option>
-                  <option value="traffic_fines">Trafik Cezası / Ceza</option>
-                  <option value="advocate_consulting">Avukat / Danışmanlık / Diğer</option>
-                </select>
+                <select 
+            value={expenseFormData.category} 
+            onChange={e => setExpenseFormData({ ...expenseFormData, category: e.target.value })} 
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+          >
+            <optgroup label="🏢 Genel Şirket & Ofis Giderleri">
+              <option value="office_expense">Ofis & Kırtasiye Masrafları</option>
+              <option value="rent_utility">Kira, Elektrik, Su, Doğalgaz</option>
+              <option value="software_telecom">Yazılım, Bilişim & Araç Takip (Arvento vb.)</option>
+              <option value="advocate_consulting">Avukat / Hukuk & Danışmanlık</option>
+              <option value="cargo_stationery">Kargo, Noter & Resmi Evrak</option>
+              <option value="general_expense">Genel Şirket Masrafı (Diğer)</option>
+            </optgroup>
+
+            <optgroup label="🚚 Filo & Araç Giderleri">
+              <option value="maintenance">Tamir / Bakım / Servis</option>
+              <option value="tires">Lastik / Yedek Parça</option>
+              <option value="general_fuel">Genel Akaryakıt / Mazot</option>
+              <option value="traffic_fines">Trafik Cezası / Ceza</option>
+              <option value="insurance_inspection">Muayene, Sigorta & Kasko</option>
+              <option value="hgs">HGS / OGS Geçişleri</option>
+            </optgroup>
+
+            <optgroup label="⚖️ Resmi & Finansal Dengeleme">
+              <option value="taxes_sgk">Devlet / Vergi / SGK Primleri</option>
+              <option value="opening_balance">Kasa Açılış / Geçmiş Dönem Kasa Dengeleme</option>
+              <option value="bank_commission">Banka Masrafı & Komisyonlar</option>
+            </optgroup>
+          </select>
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Tedarikçi / Firma / Açıklama</label>
