@@ -553,20 +553,22 @@ export default function App() {
     }
   };
 
-  // MÜKERRER KORUMALI & EXCEL TARİH HATASIZ TAŞERON FATURA AKTARIMI
+ // MÜKERRER KORUMALI & EXCEL TARİH HATASIZ TAŞERON FATURA AKTARIMI
   const handleImportSubcontractorInvoicesSafe = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const normalizeKey = (text: string) => 
-    (text || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
+    const normalizeKey = (text: string) =>
+      (text || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
     if (!isAdmin) return;
     const file = e.target.files?.[0];
     if (!file) return;
+
     setIsExcelUploading(true);
 
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-// Excel satırlarını dizi olarak alıyoruz (0=A, 1=B, 2=C, 3=D, 4=E, 5=F, 6=G)
+
+      // Excel satırlarını dizi olarak alıyoruz (0=A, 1=B, 2=C, 3=D, 4=E, 5=F, 6=G)
       const rawRows: any[] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' });
 
       const existingInvoicesMap = new Map<string, any>();
@@ -628,7 +630,6 @@ export default function App() {
       }
 
       if (newRowsToInsert.length > 0) {
-        if (newRowsToInsert.length > 0) {
         const { error } = await supabase.from('invoices').insert(newRowsToInsert);
         if (error) throw error;
       }
