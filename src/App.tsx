@@ -574,6 +574,7 @@ export default function App() {
 
       const newRowsToInsert: any[] = [];
       let updatedCount = 0;
+      let skippedCount = 0;
 
       // 0. satır başlıklar olduğu için i=1'den başlıyoruz
       for (let i = 1; i < rawRows.length; i++) {
@@ -603,6 +604,7 @@ export default function App() {
             term2_amount: t2
           }).eq('id', exist.id);
           updatedCount++;
+          skippedCount++;
         } else {
           // Sistemde yoksa: Yeni kayıt olarak ekle
           newRowsToInsert.push({
