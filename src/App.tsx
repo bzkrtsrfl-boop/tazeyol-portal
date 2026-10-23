@@ -46,11 +46,11 @@ import * as XLSX from 'xlsx';
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-2.5">
       <img 
         src="/logo.png" 
         alt="Tazeyol" 
-        className="h-10 w-auto object-contain py-0.5" 
+        className="h-12 max-h-12 w-auto object-contain drop-shadow-xs" 
       />
       <span className="bg-[#009fe3] text-white text-[11px] font-black tracking-widest px-2 py-0.5 rounded-md uppercase shadow-sm">
         ERP
@@ -58,7 +58,6 @@ function TazeyolBrand() {
     </div>
   );
 }
-
 export default function App() {
   // 1. KULLANICI GİRİŞ & YETKİLENDİRME (RBAC)
   const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | null>(() => {
