@@ -810,8 +810,9 @@ export default function App() {
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const pendingReceivablesAllTime = Math.max(0, allTimeSalesRevenue - allTimeCollectedCash);
-
+  const pendingReceivablesAllTime = dbInvoices
+  .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+  .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   let unpaidSubcontractorDebt = 0;
   dbInvoices
     .filter(i => i.category === 'subcontractor_invoice')
