@@ -940,9 +940,8 @@ export default function App() {
     }));
   };
 
- // 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA (TÜRKÇE KARAKTER & TOPLU AVANS GÜVENLİKLİ)
+// 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA (TÜRKÇE KARAKTER & TOPLU AVANS GÜVENLİKLİ)
   const bankPaymentGroupedList = useMemo(() => {
-    // Türkçe karakterleri ve boşlukları tamamen standartlaştıran temizleyici
     const normalizeKey = (str: string) => {
       return (str || '')
         .replace(/İ/g, 'i')
@@ -953,7 +952,6 @@ export default function App() {
 
     const map = new Map<string, { contractorName: string; term1Total: number; term2Total: number; invoiceNos: string[]; iban: string }>();
 
-    // 1. ADIM: Tüm faturaları taşeron bazında ham olarak topla
     dbInvoices
       .filter(i => i.category === 'subcontractor_invoice')
       .forEach(inv => {
@@ -966,7 +964,6 @@ export default function App() {
 
         if (rawT1 > 0 || rawT2 > 0) {
           if (!map.has(key)) {
-            // IBAN eşleştirmesi
             let found = dbSubcontractors.find(sub => {
               const pSub = normalizeKey(sub.name);
               return pSub && key && (key === pSub || key.includes(pSub) || pSub.includes(key));
@@ -982,18 +979,15 @@ export default function App() {
         }
       });
 
-    // 2. ADIM: Taşeronun tüm vadeleri toplandıktan sonra tanımlı avansı 1. Vadeden tek seferde düş
     return Array.from(map.values()).map(item => {
       const normName = normalizeKey(item.contractorName);
 
-      // dbAdvances tablosunda avans ara
       const activeAdv = dbAdvances.find(a => {
         if (a.target_type !== 'contractor') return false;
         const advTarget = normalizeKey(String(a.target_name || a.target_id || ''));
         return normName.length >= 4 && (advTarget === normName || advTarget.includes(normName) || normName.includes(advTarget));
       });
 
-      // Faturalar arasındaki AVANS fişlerinde ara
       const advInvoice = dbInvoices.find(i => {
         const title = String(i.invoice_no || '');
         if (!title.toUpperCase().includes('AVANS')) return false;
@@ -1010,7 +1004,6 @@ export default function App() {
         advDeduction = cleanNumber(advInvoice.total_amount) / inst;
       }
 
-      // Avansı 1. Vade toplamından düş (Asla kısmi kalmaz, fazlası havada kaybolmaz)
       const adjustedTerm1 = Math.max(0, item.term1Total - advDeduction);
 
       const choice = contractorTermChoices[item.contractorName] || 'term1';
@@ -1037,7 +1030,6 @@ export default function App() {
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
   }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
-
     return Array.from(map.values()).map(item => {
       const choice = contractorTermChoices[item.contractorName] || 'term1';
       let activeAmount = 0;
