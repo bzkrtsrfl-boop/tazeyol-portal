@@ -3172,7 +3172,7 @@ export default function App() {
           </table>
         </div>
       </div>
-
+)}
         {/* 7. KREDİ KARTLARI */}
         {activeTab === 'credit_cards' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
