@@ -1055,8 +1055,7 @@ export default function App() {
           choice,
           activeAmount
         };
-      };
-    }).sort((a, b) => {
+      }).sort((a, b) => {
       let comparison = 0;
       if (bankSortField === 'contractorName') {
         comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
