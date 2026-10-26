@@ -3176,17 +3176,19 @@ export default function App() {
                       <button
                         onClick={() => {
                           setEditingEmployeeId(emp.id);
-                          setEmployeeFormData({
-              fullName: emp.full_name || '',
-              roleTitle: emp.role_title || 'Kamyon Şoförü / Dağıtım',
-              baseSalary: String(emp.base_salary || ''),
-              phone: formatPhone(emp.phone || ''),
-              iban: emp.iban || '',
-              monthlyBonus: String(emp.monthly_bonus || ''),
-              bonusDescription: emp.bonus_description || '',
-              monthlyAdvance: String(emp.monthly_advance || ''),
-              advanceDescription: emp.advance_description || ''
-            });
+                    setEmployeeFormData({
+                      fullName: emp.full_name || '',
+                      roleTitle: emp.role_title || 'Kamyon Şoförü / Dağıtım',
+                      baseSalary: String(emp.base_salary || ''),
+                      phone: formatPhone(emp.phone || ''),
+                      iban: emp.iban || '',
+                      monthlyBonus: String(emp.monthly_bonus || ''),
+                      bonusDescription: emp.bonus_description || '',
+                      monthlyAdvance: String(emp.monthly_advance || ''),
+                      advanceDescription: emp.advance_description || '',
+                      advanceTotal: emp.advance_total !== undefined && emp.advance_total !== null ? String(emp.advance_total) : (emp.monthly_advance ? String(emp.monthly_advance) : ''),
+                      advanceInstallments: String(emp.advance_installments || 1)
+                    });
                           setIsEmployeeModalOpen(true);
                         }}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
