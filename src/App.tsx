@@ -973,26 +973,28 @@ export default function App() {
             }
 
             // 3. dbSubcontractors içinde esnek şirket/unvan araması
+           // 3. dbSubcontractors içinde esnek ve güvenli şirket araması
             if (!foundIban || foundIban === 'IBAN Eksik') {
-              const cleanWords = key.replace(/(ltd|sti|tic|san|as|a\.s\.|nakliyat|lojistik)/g, '').trim();
               const found = dbSubcontractors.find(sub => {
                 const pSub = normalizeKey(sub.name);
-                const subCleanWords = pSub.replace(/(ltd|sti|tic|san|as|a\.s\.|nakliyat|lojistik)/g, '').trim();
+                if (!pSub || !key) return false;
+                
+                // Tam eşleşme veya iç içe geçme
+                if (pSub === key || (key.length >= 4 && pSub.includes(key)) || (pSub.length >= 4 && key.includes(pSub))) {
+                  return true;
+                }
 
-                return (
-                  pSub === key ||
-                  (cleanWords.length >= 3 && pSub.includes(cleanWords)) ||
-                  (subCleanWords.length >= 3 && key.includes(subCleanWords)) ||
-                  (key.length >= 4 && pSub.includes(key)) ||
-                  (pSub.length >= 4 && key.includes(pSub))
-                );
+                // Şirket unvanını kelimelere bölüp en az 4 harfli ana kelimeyi arama (kelime ortasını bozmaz)
+                const subWords = pSub.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
+                const keyWords = key.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
+
+                return subWords.some(sw => key.includes(sw)) || keyWords.some(kw => pSub.includes(kw));
               });
 
               if (found?.iban) {
                 foundIban = found.iban;
               }
             }
-
             map.set(key, {
               contractorName,
               term1Total: 0,
