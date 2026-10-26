@@ -2627,12 +2627,12 @@ export default function App() {
                     const cleanInv = cleanTxt(invTitle);
                     const cleanSub = cleanTxt(subNameOnly);
 
-                 // Hem dbAdvances tablosundan hem de dbInvoices avans kayıtlarından eşleştirme
-    const targetKey = normalizeKey(subNameOnly || inv.customer_name || inv.invoice_no || '');
+                // Hem dbAdvances tablosundan hem de dbInvoices avans kayıtlarından eşleştirme
+    const targetKey = cleanTxt(subNameOnly || inv.customer_name || inv.invoice_no || '');
     
     const activeAdv = dbAdvances.find(a => {
       if (a.target_type !== 'contractor') return false;
-      const advTarget = normalizeKey(String(a.target_name || a.target_id || ''));
+      const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
       return targetKey.length >= 4 && (advTarget === targetKey || advTarget.includes(targetKey) || targetKey.includes(advTarget));
     });
 
@@ -2640,7 +2640,7 @@ export default function App() {
       const title = String(i.invoice_no || '');
       if (!title.toUpperCase().includes('AVANS')) return false;
       if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
-      return targetKey.length >= 4 && normalizeKey(title).includes(targetKey);
+      return targetKey.length >= 4 && cleanTxt(title).includes(targetKey);
     });
 
     let advDeduction = 0;
