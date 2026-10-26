@@ -4104,10 +4104,36 @@ export default function App() {
             </optgroup>
           </select>
               </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Tedarikçi / Firma / Açıklama</label>
-                <input type="text" placeholder="Örn: Brisa Lastikçilik" value={expenseFormData.companyName} onChange={e => setExpenseFormData({ ...expenseFormData, companyName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+              {/* Sadece Araç / Filo Gideri Seçildiğinde Görünen Plaka Seçimi */}
+            {['maintenance', 'tires', 'general_fuel', 'traffic_fines', 'insurance_inspection', 'hgs'].includes(expenseFormData.category) && (
+              <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
+                <label className="block font-bold text-blue-900 text-[11px]">İlgili Araç / Plaka Seçimi</label>
+                <select
+                  value={expenseFormData.plateNumber || ''}
+                  onChange={e => setExpenseFormData({ ...expenseFormData, plateNumber: e.target.value })}
+                  className="w-full px-3 py-2 border border-blue-200 rounded-lg text-xs bg-white font-semibold text-slate-800"
+                >
+                  <option value="">Plaka Seçiniz (Opsiyonel / Genel)</option>
+                  {dbVehicles && dbVehicles.map((v: any) => (
+                    <option key={v.id || v.plate_number} value={v.plate_number}>
+                      {v.plate_number} {v.brand ? `(${v.brand})` : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
+            )}
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Tedarikçi / Firma / Açıklama</label>
+              <input 
+                type="text" 
+                placeholder="Örn: Brisa Lastikçilik / Bakım" 
+                value={expenseFormData.companyName} 
+                onChange={e => setExpenseFormData({ ...expenseFormData, companyName: e.target.value })} 
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg" 
+                required 
+              />
+            </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Tutar (TL)</label>
