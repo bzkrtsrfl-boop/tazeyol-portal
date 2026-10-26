@@ -3202,12 +3202,10 @@ export default function App() {
                       baseSalary: String(emp.base_salary || ''),
                       phone: formatPhone(emp.phone || ''),
                       iban: emp.iban || '',
-                      monthlyBonus: String(emp.monthly_bonus || ''),
-                      bonusDescription: emp.bonus_description || '',
-                      monthlyAdvance: String(emp.monthly_advance || ''),
-                      advanceDescription: emp.advance_description || '',
-                      advanceTotal: emp.advance_total !== undefined && emp.advance_total !== null ? String(emp.advance_total) : (emp.monthly_advance ? String(emp.monthly_advance) : ''),
-                      advanceInstallments: String(emp.advance_installments || 1)
+                     advanceTotal: emp.advance_total !== undefined && emp.advance_total !== null ? String(emp.advance_total) : (emp.monthly_advance ? String(emp.monthly_advance) : ''),
+                      advanceInstallments: String(emp.advance_installments || '1'),
+                    monthlyAdvance: String(emp.monthly_advance || ''),
+                   advanceDescription: emp.advance_description || ''
                     });
                           setIsEmployeeModalOpen(true);
                         }}
