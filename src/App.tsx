@@ -1037,19 +1037,24 @@ export default function App() {
         advDeduction = cleanNumber(advInvoice.total_amount) / inst;
       }
 
-      const adjustedTerm1 = Math.max(0, item.term1Total - advDeduction);
+// Kademeli Avans Mahsubu: Önce 1. Vadeden, taşan kısım 2. Vadeden düşer
+        const adjustedTerm1 = Math.max(0, item.term1Total - advDeduction);
+        const remainingAdvAfterTerm1 = Math.max(0, advDeduction - item.term1Total);
+        const adjustedTerm2 = Math.max(0, item.term2Total - remainingAdvAfterTerm1);
 
-      const choice = contractorTermChoices[item.contractorName] || 'term1';
-      let activeAmount = 0;
-      if (choice === 'term1') activeAmount = adjustedTerm1;
-      else if (choice === 'term2') activeAmount = item.term2Total;
-      else if (choice === 'both') activeAmount = adjustedTerm1 + item.term2Total;
+        const choice = contractorTermChoices[item.contractorName] || 'term1';
+        let activeAmount = 0;
+        if (choice === 'term1') activeAmount = adjustedTerm1;
+        else if (choice === 'term2') activeAmount = adjustedTerm2;
+        else if (choice === 'both') activeAmount = adjustedTerm1 + adjustedTerm2;
 
-      return {
-        ...item,
-        term1Total: adjustedTerm1,
-        choice,
-        activeAmount
+        return {
+          ...item,
+          term1Total: adjustedTerm1,
+          term2Total: adjustedTerm2,
+          choice,
+          activeAmount
+        };
       };
     }).sort((a, b) => {
       let comparison = 0;
