@@ -2627,15 +2627,31 @@ export default function App() {
                     const cleanInv = cleanTxt(invTitle);
                     const cleanSub = cleanTxt(subNameOnly);
 
-                    const activeAdv = dbAdvances.find(a => {
-                      if (a.target_type !== 'contractor') return false;
-                      const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
-                      const advNote = cleanTxt(String(a.notes || ''));
-                      return (
-                        (advTarget.length >= 4 && (cleanInv.includes(advTarget) || cleanSub.includes(advTarget))) ||
-                        (cleanSub.length >= 4 && advTarget.includes(cleanSub))
-                      );
-                    });
+                 // Hem dbAdvances tablosundan hem de dbInvoices avans kayıtlarından eşleştirme
+    const targetKey = normalizeKey(subNameOnly || inv.customer_name || inv.invoice_no || '');
+    
+    const activeAdv = dbAdvances.find(a => {
+      if (a.target_type !== 'contractor') return false;
+      const advTarget = normalizeKey(String(a.target_name || a.target_id || ''));
+      return targetKey.length >= 4 && (advTarget === targetKey || advTarget.includes(targetKey) || targetKey.includes(advTarget));
+    });
+
+    const advInvoice = dbInvoices.find(i => {
+      const title = String(i.invoice_no || '');
+      if (!title.toUpperCase().includes('AVANS')) return false;
+      if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
+      return targetKey.length >= 4 && normalizeKey(title).includes(targetKey);
+    });
+
+    let advDeduction = 0;
+    if (activeAdv) {
+      const inst = Math.max(1, activeAdv.total_installments || 1);
+      advDeduction = cleanNumber(activeAdv.total_amount) / inst;
+    } else if (advInvoice) {
+      const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
+      const inst = match ? parseInt(match[1]) : 1;
+      advDeduction = cleanNumber(advInvoice.total_amount) / inst;
+    }
 
                     let advDeduction = 0;
     if (activeAdv) {
