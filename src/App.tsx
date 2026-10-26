@@ -1027,11 +1027,11 @@ export default function App() {
       });
 
       const advInvoice = dbInvoices.find(i => {
-        const title = String(i.invoice_no || '');
-        if (!title.toUpperCase().includes('AVANS')) return false;
-        return normName.length >= 4 && normalizeKey(title).includes(normName);
-      });
-
+      const title = String(i.invoice_no || '');
+      if (!title.toUpperCase().includes('AVANS')) return false;
+      if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
+      return normName.length >= 4 && normalizeKey(title).includes(normName);
+    });
       let advDeduction = 0;
       if (activeAdv) {
         const inst = Math.max(1, activeAdv.total_installments || 1);
