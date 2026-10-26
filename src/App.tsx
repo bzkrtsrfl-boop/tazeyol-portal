@@ -1382,8 +1382,10 @@ export default function App() {
           issue_date: subEditFormData.issueDate,
           term1_due_date: subEditFormData.term1DueDate,
           term1_amount: t1,
+          term1_status: (subEditFormData as any).term1Status || 'pending',
           term2_due_date: subEditFormData.term2DueDate,
-          term2_amount: t2
+          term2_amount: t2,
+          term2_status: (subEditFormData as any).term2Status || 'pending'
         })
         .eq('id', editingSubInvoice.id);
 
@@ -2607,16 +2609,18 @@ export default function App() {
                                 onClick={() => {
                                   setEditingSubInvoice(inv);
                                   setSubEditFormData({
-                                    invoiceNo: inv.invoice_no || '',
-                                    totalAmount: String(inv.total_amount || ''),
-                                    issueDate: sanitizeDate(inv.issue_date),
-                                    term1DueDate: sanitizeDate(inv.term1_due_date),
-                                    term1Amount: String(inv.term1_amount || ''),
-                                    term2DueDate: sanitizeDate(inv.term2_due_date),
-                                    term2Amount: String(inv.term2_amount || ''),
-                                    advanceAmount: '',
-                                    advanceInstallmentCount: '1'
-                                  });
+          invoiceNo: inv.invoice_no || '',
+          totalAmount: String(inv.total_amount || ''),
+          issueDate: sanitizeDate(inv.issue_date),
+          term1DueDate: sanitizeDate(inv.term1_due_date),
+          term1Amount: String(inv.term1_amount || ''),
+          term1Status: inv.term1_status || 'pending',
+          term2DueDate: sanitizeDate(inv.term2_due_date),
+          term2Amount: String(inv.term2_amount || ''),
+          term2Status: inv.term2_status || 'pending',
+          advanceAmount: '',
+          advanceInstallmentCount: '1'
+        } as any);
                                   setIsEditSubModalOpen(true);
                                 }}
                                 className="bg-slate-100 hover:bg-blue-50 text-blue-700 border border-slate-200 font-semibold px-2 py-1 rounded text-[11px] inline-flex items-center gap-1 transition">
@@ -4147,38 +4151,101 @@ export default function App() {
                   <input type="text" value={subEditFormData.totalAmount} onChange={e => setSubEditFormData({ ...subEditFormData, totalAmount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-slate-900" required />
                 </div>
               </div>
-              <div className="p-3 bg-amber-50/50 rounded-xl border border-amber-200 space-y-2">
-                <span className="font-bold text-amber-900 block text-xs">Taksitli Avans Düşümü (Yalnızca 1. Vadeden Düşer)</span>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] text-slate-600">Verilen Toplam Avans (TL)</label>
-                    <input type="text" placeholder="100000" value={subEditFormData.advanceAmount} onChange={e => setSubEditFormData({ ...subEditFormData, advanceAmount: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-bold text-rose-600" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-600">Taksit Sayısı</label>
-                    <select value={subEditFormData.advanceInstallmentCount} onChange={e => setSubEditFormData({ ...subEditFormData, advanceInstallmentCount: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-semibold">
-                      <option value="1">1 Taksit (Tamamı Bu Faturadan)</option>
-                      <option value="2">2 Taksit</option>
-                      <option value="3">3 Taksit</option>
-                      <option value="4">4 Taksit</option>
-                      <option value="5">5 Taksit</option>
-                      <option value="6">6 Taksit</option>
-                    </select>
-                  </div>
-                </div>
+             <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-amber-950 text-xs">Avans / Kısmi Ödeme Mahsubu</span>
+              <span className="text-[10px] text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full font-medium">1. ve Taşan Tutar 2. Vadeden Düşer</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] text-slate-600 mb-1">Düşülecek Avans Tutarı (TL)</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: 50000" 
+                  value={subEditFormData.advanceAmount} 
+                  onChange={e => setSubEditFormData({ ...subEditFormData, advanceAmount: e.target.value })} 
+                  className="w-full px-2 py-1.5 border border-amber-300 rounded-lg text-xs bg-white font-semibold text-slate-800" 
+                />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <span className="font-semibold text-blue-900">1. Vade Tutarı</span>
-                  <input type="text" value={subEditFormData.term1Amount} onChange={e => setSubEditFormData({ ...subEditFormData, term1Amount: e.target.value })} className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg font-bold text-blue-700" />
-                  <input type="date" value={subEditFormData.term1DueDate} onChange={e => setSubEditFormData({ ...subEditFormData, term1DueDate: e.target.value })} className="w-full px-2 py-1 border border-slate-200 rounded text-[11px]" />
-                </div>
-                <div className="space-y-1">
-                  <span className="font-semibold text-blue-900">2. Vade Tutarı</span>
-                  <input type="text" value={subEditFormData.term2Amount} onChange={e => setSubEditFormData({ ...subEditFormData, term2Amount: e.target.value })} className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg font-bold text-blue-700" />
-                  <input type="date" value={subEditFormData.term2DueDate} onChange={e => setSubEditFormData({ ...subEditFormData, term2DueDate: e.target.value })} className="w-full px-2 py-1 border border-slate-200 rounded text-[11px]" />
-                </div>
+              <div>
+                <label className="block text-[10px] text-slate-600 mb-1">Taksit Sayısı</label>
+                <select 
+                  value={subEditFormData.advanceInstallmentCount} 
+                  onChange={e => setSubEditFormData({ ...subEditFormData, advanceInstallmentCount: e.target.value })} 
+                  className="w-full px-2 py-1.5 border border-amber-300 rounded-lg text-xs bg-white text-slate-800"
+                >
+                  <option value="1">1 Taksit (Tamamı Bu Faturadan)</option>
+                  <option value="2">2 Taksit</option>
+                  <option value="3">3 Taksit</option>
+                  <option value="4">4 Taksit</option>
+                  <option value="5">5 Taksit</option>
+                  <option value="6">6 Taksit</option>
+                </select>
               </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-blue-900 text-xs">1. Vade Tutarı</span>
+                <select
+                  value={(subEditFormData as any).term1Status || 'pending'}
+                  onChange={e => setSubEditFormData({ ...subEditFormData, term1Status: e.target.value } as any)}
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                    (subEditFormData as any).term1Status === 'paid' 
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                      : 'bg-amber-100 text-amber-800 border-amber-300'
+                  }`}
+                >
+                  <option value="pending">Bekliyor (Açık)</option>
+                  <option value="paid">Ödendi (Kapalı)</option>
+                </select>
+              </div>
+              <input 
+                type="text" 
+                value={subEditFormData.term1Amount} 
+                onChange={e => setSubEditFormData({ ...subEditFormData, term1Amount: e.target.value })} 
+                className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-semibold" 
+              />
+              <input 
+                type="date" 
+                value={subEditFormData.term1DueDate} 
+                onChange={e => setSubEditFormData({ ...subEditFormData, term1DueDate: e.target.value })} 
+                className="w-full px-2 py-1 border border-slate-200 rounded text-[11px] text-slate-600" 
+              />
+            </div>
+
+            <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-blue-900 text-xs">2. Vade Tutarı</span>
+                <select
+                  value={(subEditFormData as any).term2Status || 'pending'}
+                  onChange={e => setSubEditFormData({ ...subEditFormData, term2Status: e.target.value } as any)}
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                    (subEditFormData as any).term2Status === 'paid' 
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                      : 'bg-amber-100 text-amber-800 border-amber-300'
+                  }`}
+                >
+                  <option value="pending">Bekliyor (Açık)</option>
+                  <option value="paid">Ödendi (Kapalı)</option>
+                </select>
+              </div>
+              <input 
+                type="text" 
+                value={subEditFormData.term2Amount} 
+                onChange={e => setSubEditFormData({ ...subEditFormData, term2Amount: e.target.value })} 
+                className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-semibold" 
+              />
+              <input 
+                type="date" 
+                value={subEditFormData.term2DueDate} 
+                onChange={e => setSubEditFormData({ ...subEditFormData, term2DueDate: e.target.value })} 
+                className="w-full px-2 py-1 border border-slate-200 rounded text-[11px] text-slate-600" 
+              />
+            </div>
+          </div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsEditSubModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
                 <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">Değişiklikleri Kaydet</button>
