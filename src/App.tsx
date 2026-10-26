@@ -2637,12 +2637,16 @@ export default function App() {
                       );
                     });
 
-                    let deductedAdvAmt = 0;
-                    if (activeAdv && !isT1Paid) {
-                      const inst = Math.max(1, activeAdv.total_installments || 1);
-                      deductedAdvAmt = cleanNumber(activeAdv.total_amount) / inst;
-                    }
-                    const dynamicT1 = Math.max(0, t1 - deductedAdvAmt);
+                    let advDeduction = 0;
+    if (activeAdv) {
+      const inst = Math.max(1, activeAdv.total_installments || 1);
+      advDeduction = cleanNumber(activeAdv.total_amount) / inst;
+    }
+    const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
+    const remainingAdvForT2 = isT1Paid ? advDeduction : Math.max(0, advDeduction - t1);
+    const dynamicT2 = Math.max(0, t2 - remainingAdvForT2);
+    const deductedAdvAmt = isT1Paid ? 0 : Math.min(t1, advDeduction);
+    const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
@@ -2660,12 +2664,17 @@ export default function App() {
                 )}
                           <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(inv.term1_due_date)}</span>
                         </td>
-                        <td className="py-3 px-3">
-                          <span className={`font-semibold block ${isT2Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
-                            {t2.toLocaleString('tr-TR')} ₺
-                          </span>
-                          <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : formatDateTR(inv.term2_due_date)}</span>
-                        </td>
+                      <td className="py-3 px-3">
+            <span className={`font-semibold block ${isT2Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
+              {dynamicT2.toLocaleString('tr-TR')} ₺
+            </span>
+            {deductedAdvForT2 > 0 && (
+              <span className="block text-[10px] text-amber-600 font-normal">
+                (-{deductedAdvForT2.toLocaleString('tr-TR')} ₺ Avans Mahsubu)
+              </span>
+            )}
+            <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : formatDateTR(inv.term2_due_date)}</span>
+          </td>
                         {isAdmin && (
                           <td className="py-3 px-3 text-center">
                             <div className="flex items-center justify-center gap-1.5 flex-wrap">
