@@ -1755,7 +1755,7 @@ export default function App() {
 
       setIsEmployeeModalOpen(false);
       setEditingEmployeeId(null);
-      setEmployeeFormData({ fullNsetEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '' });ame: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '' });
+      setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '' });
       loadPortalData();
     } catch (err: any) {
       alert('Personel işlem hatası: ' + err.message);
