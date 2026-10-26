@@ -106,6 +106,9 @@ export default function App() {
   const [subSortOrder, setSubSortOrder] = useState<'asc' | 'desc'>('desc');
   const [bankSortField, setBankSortField] = useState<'contractorName' | 'iban' | 'activeAmount'>('activeAmount');
   const [bankSortOrder, setBankSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [empSearchTerm, setEmpSearchTerm] = useState('');
+  const [empSortField, setEmpSortField] = useState<'name' | 'salary' | 'netPayable'>('name');
+  const [empSortOrder, setEmpSortOrder] = useState<'asc' | 'desc'>('asc');
   const getCurrentMonthRange = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -1037,10 +1040,11 @@ export default function App() {
         advDeduction = cleanNumber(advInvoice.total_amount) / inst;
       }
 
-// Kademeli Avans Mahsubu: Önce 1. Vadeden, taşan kısım 2. Vadeden düşer
+// Kademeli Avans Mahsubu: Önce 1. Vadeden, sonra 2. Vadeden düşer, taşan borç sonraki döneme devreder
         const adjustedTerm1 = Math.max(0, item.term1Total - advDeduction);
         const remainingAdvAfterTerm1 = Math.max(0, advDeduction - item.term1Total);
         const adjustedTerm2 = Math.max(0, item.term2Total - remainingAdvAfterTerm1);
+        const carriedOverDebt = Math.max(0, remainingAdvAfterTerm1 - item.term2Total);
 
         const choice = contractorTermChoices[item.contractorName] || 'term1';
         let activeAmount = 0;
@@ -1052,10 +1056,11 @@ export default function App() {
           ...item,
           term1Total: adjustedTerm1,
           term2Total: adjustedTerm2,
+          carriedOverDebt,
           choice,
           activeAmount
         };
-      }).sort((a, b) => {
+      };.sort((a, b) => {
       let comparison = 0;
       if (bankSortField === 'contractorName') {
         comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
@@ -1067,6 +1072,76 @@ export default function App() {
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
   }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
+  // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
+  const processedEmployees = useMemo(() => {
+    return (dbEmployees || [])
+      .map(emp => {
+        const base = cleanNumber(emp.base_salary);
+        const bonus = cleanNumber(emp.monthly_bonus);
+
+        // Personelin kayıtlı avanslarını çekip topla
+        const empNorm = normalizeKey(emp.full_name || '');
+        const totalAdv = (dbAdvances || [])
+          .filter(a => {
+            if (a.target_type !== 'employee') return false;
+            const targetNorm = normalizeKey(a.target_name || a.target_id || '');
+            return targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm));
+          })
+          .reduce((sum, a) => sum + cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount), 0);
+
+        const grossTotal = base + bonus;
+        const netPayable = Math.max(0, grossTotal - totalAdv);
+        const carriedOverDebt = Math.max(0, totalAdv - grossTotal);
+
+        return {
+          ...emp,
+          baseSalaryNum: base,
+          bonusNum: bonus,
+          advanceDeduction: totalAdv,
+          netPayable,
+          carriedOverDebt
+        };
+      })
+      .filter(emp => {
+        if (!empSearchTerm.trim()) return true;
+        const term = empSearchTerm.toLowerCase();
+        return (
+          (emp.full_name || '').toLowerCase().includes(term) ||
+          (emp.role_title || '').toLowerCase().includes(term) ||
+          (emp.phone || '').includes(term)
+        );
+      })
+      .sort((a, b) => {
+        let comp = 0;
+        if (empSortField === 'name') {
+          comp = (a.full_name || '').localeCompare(b.full_name || '', 'tr-TR', { sensitivity: 'base' });
+        } else if (empSortField === 'salary') {
+          comp = a.baseSalaryNum - b.baseSalaryNum;
+        } else if (empSortField === 'netPayable') {
+          comp = a.netPayable - b.netPayable;
+        }
+        return empSortOrder === 'asc' ? comp : -comp;
+      });
+  }, [dbEmployees, dbAdvances, empSearchTerm, empSortField, empSortOrder]);
+
+  // PERSONEL SAYFASI FİNANSAL ÖZET SAYAÇLARI
+  const empSummary = useMemo(() => {
+    let totalBase = 0;
+    let totalBonus = 0;
+    let totalAdv = 0;
+    let totalNet = 0;
+    let totalDebt = 0;
+
+    processedEmployees.forEach(e => {
+      totalBase += e.baseSalaryNum;
+      totalBonus += e.bonusNum;
+      totalAdv += e.advanceDeduction;
+      totalNet += e.netPayable;
+      totalDebt += e.carriedOverDebt;
+    });
+
+    return { totalBase, totalBonus, totalAdv, totalNet, totalDebt, count: processedEmployees.length };
+  }, [processedEmployees]);
     
   // CANLI SEÇİLEN BANKA TOPLAMI
   const bankLiveSelectionSummary = useMemo(() => {
@@ -2825,7 +2900,16 @@ export default function App() {
                             className="w-4 h-4 rounded text-blue-600"
                           />
                         </td>
-                        <td className="py-3 px-3 font-bold text-slate-900 text-sm">{item.contractorName}</td>
+                       <td className="py-3 px-3 font-bold text-slate-900 text-sm">
+                  <div className="flex flex-col">
+                    <span>{item.contractorName}</span>
+                    {item.carriedOverDebt > 0 && (
+                      <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md w-fit">
+                        Devreden Avans Borcu: -{item.carriedOverDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      </span>
+                    )}
+                  </div>
+                </td>
                         <td className={`py-3 px-3 font-mono ${item.iban === 'IBAN Eksik' ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
                           {item.iban}
                         </td>
@@ -2865,7 +2949,230 @@ export default function App() {
 
         {/* 6. PERSONEL & BORDRO */}
         {activeTab === 'employees' && (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+<div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-5">
+        {/* ÜST BAŞLIK VE BUTONLAR */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
+          <div>
+            <h3 className="font-bold text-lg text-slate-900">
+              Personel & Maaş Yönetimi ({empSummary.count} Personel)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Net hakedişler, sefer/performans primleri, avans mahsupları ve toplu ödeme takibi.
+            </p>
+          </div>
+          {isAdmin && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleOpenBulkSalaryModal}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
+              >
+                <CheckSquare className="w-4 h-4" /> Toplu Maaş Öde (Seçimli)
+              </button>
+              <button
+                onClick={() => {
+                  setEditingEmployeeId(null);
+                  setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '' });
+                  setIsEmployeeModalOpen(true);
+                }}
+                className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
+              >
+                <Plus className="w-4 h-4" /> Yeni Personel Ekle
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* FİNANSAL ÖZET SAYAÇLARI */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Toplam Sözleşmeli Maaş</span>
+            <span className="text-base font-extrabold text-slate-800 mt-0.5 block">
+              {empSummary.totalBase.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+            </span>
+          </div>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
+            <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Toplam Hak Edilen Prim</span>
+            <span className="text-base font-extrabold text-emerald-800 mt-0.5 block">
+              +{empSummary.totalBonus.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+            </span>
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
+            <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Mahsup Edilen Avanslar</span>
+            <span className="text-base font-extrabold text-amber-800 mt-0.5 block">
+              -{empSummary.totalAdv.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+            </span>
+          </div>
+
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
+            <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider block">Bu Ay Ödenecek Net Tutar</span>
+            <span className="text-base font-black text-blue-900 mt-0.5 block">
+              {empSummary.totalNet.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+            </span>
+          </div>
+        </div>
+
+        {/* ARAMA VE SIRALAMA ÇUBUĞU */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+          <div className="relative flex-1 max-w-md">
+            <input
+              type="text"
+              placeholder="Personel adı, görev veya telefon ile filtrele..."
+              value={empSearchTerm}
+              onChange={(e) => setEmpSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+            />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+          </div>
+
+          <div className="flex items-center gap-1.5 self-end sm:self-auto">
+            <span className="text-xs text-slate-500 font-medium mr-1">Sırala:</span>
+            <button
+              type="button"
+              onClick={() => {
+                if (empSortField === 'name') setEmpSortOrder(empSortOrder === 'asc' ? 'desc' : 'asc');
+                else { setEmpSortField('name'); setEmpSortOrder('asc'); }
+              }}
+              className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition ${
+                empSortField === 'name' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Ad Soyad {empSortField === 'name' && (empSortOrder === 'asc' ? '↑' : '↓')}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (empSortField === 'salary') setEmpSortOrder(empSortOrder === 'asc' ? 'desc' : 'asc');
+                else { setEmpSortField('salary'); setEmpSortOrder('desc'); }
+              }}
+              className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition ${
+                empSortField === 'salary' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Sabit Maaş {empSortField === 'salary' && (empSortOrder === 'asc' ? '↑' : '↓')}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (empSortField === 'netPayable') setEmpSortOrder(empSortOrder === 'asc' ? 'desc' : 'asc');
+                else { setEmpSortField('netPayable'); setEmpSortOrder('desc'); }
+              }}
+              className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition ${
+                empSortField === 'netPayable' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Net Alacak {empSortField === 'netPayable' && (empSortOrder === 'asc' ? '↑' : '↓')}
+            </button>
+          </div>
+        </div>
+
+        {/* TABLO */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+              <tr>
+                <th className="py-3 px-3">Personel Bilgisi</th>
+                <th className="py-3 px-3 text-right">Sabit Maaş</th>
+                <th className="py-3 px-3 text-right">Prim / Ek</th>
+                <th className="py-3 px-3 text-right">Kesilen Avans</th>
+                <th className="py-3 px-3 text-right">Net Ödenecek / Durum</th>
+                {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {processedEmployees.map(emp => (
+                <tr key={emp.id} className="hover:bg-slate-50 transition">
+                  <td className="py-3 px-3">
+                    <div className="flex flex-col">
+                      <span className="font-bold text-slate-900 text-sm">{emp.full_name}</span>
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {emp.role_title} • {formatPhone(emp.phone || '') || 'Tel Yok'}
+                      </span>
+                    </div>
+                  </td>
+
+                  <td className="py-3 px-3 text-right font-medium text-slate-700">
+                    {emp.baseSalaryNum.toLocaleString('tr-TR')} ₺
+                  </td>
+
+                  <td className="py-3 px-3 text-right">
+                    {emp.bonusNum > 0 ? (
+                      <span className="inline-flex items-center text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        +{emp.bonusNum.toLocaleString('tr-TR')} ₺
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
+                  </td>
+
+                  <td className="py-3 px-3 text-right">
+                    {emp.advanceDeduction > 0 ? (
+                      <span className="inline-flex items-center text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                        -{emp.advanceDeduction.toLocaleString('tr-TR')} ₺
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
+                  </td>
+
+                  <td className="py-3 px-3 text-right">
+                    <div className="flex flex-col items-end">
+                      <span className="font-extrabold text-sm text-emerald-700">
+                        {emp.netPayable.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      </span>
+                      {emp.carriedOverDebt > 0 && (
+                        <span className="mt-0.5 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded">
+                          Devreden Borç: -{emp.carriedOverDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  {isAdmin && (
+                    <td className="py-3 px-3 text-center space-x-1.5">
+                      <button
+                        onClick={() => {
+                          setEditingEmployeeId(emp.id);
+                          setEmployeeFormData({
+                            fullName: emp.full_name || '',
+                            roleTitle: emp.role_title || 'Kamyon Şoförü / Dağıtım',
+                            baseSalary: String(emp.base_salary || ''),
+                            phone: formatPhone(emp.phone || ''),
+                            iban: emp.iban || '',
+                            monthlyBonus: String(emp.monthly_bonus || ''),
+                            bonusDescription: emp.bonus_description || ''
+                          });
+                          setIsEmployeeModalOpen(true);
+                        }}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
+                        title="Düzenle / Prim Gir"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (window.confirm(`${emp.full_name} personelini silmek istediğinize emin misiniz?`)) {
+                            await supabase.from('employees').delete().eq('id', emp.id);
+                            loadPortalData();
+                          }
+                        }}
+                        className="p-1.5 text-rose-600 hover:bg-rose-50 rounded transition"
+                        title="Sil"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Personel & Maaş Yönetimi ({dbEmployees.length} Personel)</h3>
