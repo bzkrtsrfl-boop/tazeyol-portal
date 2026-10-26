@@ -1726,34 +1726,22 @@ export default function App() {
     if (!employeeFormData.fullName.trim()) return;
 
     try {
-      const payload = {
-        full_name: employeeFormData.fullName.trim(),
-        role_title: employeeFormData.roleTitle,
-        base_salary: cleanNumber(employeeFormData.baseSalary),
-        phone: employeeFormData.phone.trim(),
-        iban: formatIBAN(employeeFormData.iban)
-      };
+    const bonusAmt = cleanNumber(employeeFormData.monthlyBonus);
+    const payload = {
+      full_name: employeeFormData.fullName.trim(),
+      role_title: employeeFormData.roleTitle,
+      base_salary: cleanNumber(employeeFormData.baseSalary),
+      phone: employeeFormData.phone.trim(),
+      iban: formatIBAN(employeeFormData.iban),
+      monthly_bonus: bonusAmt,
+      bonus_description: employeeFormData.bonusDescription.trim()
+    };
 
-      if (editingEmployeeId) {
-        const { error } = await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
-        if (error) throw error;
+    if (editingEmployeeId) {
+      const { error } = await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
+      if (error) throw error;
 
-        // Bu aya ait prim/ek masraf girildiyse avans/prim tablosuna işle
-        const bonusAmt = cleanNumber(employeeFormData.monthlyBonus);
-        if (bonusAmt > 0) {
-          const todayStr = new Date().toISOString().split('T')[0];
-          await supabase.from('advance_payments').insert([{
-            target_type: 'employee',
-            target_id: String(editingEmployeeId),
-            target_name: employeeFormData.fullName.trim(),
-            payment_type: 'employee_bonus',
-            total_amount: bonusAmt,
-            issue_date: todayStr,
-            notes: employeeFormData.bonusDescription.trim() || 'Aylık Hak Ediş Primi / Ek Masraf'
-          }]);
-        }
-
-        alert('Personel bilgileri ve prim başarıyla güncellendi!');
+      alert('Personel bilgileri ve prim başarıyla güncellendi!');
       } else {
         const { error } = await supabase.from('employees').insert([payload]);
         if (error) throw error;
