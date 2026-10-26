@@ -1077,18 +1077,32 @@ export default function App() {
     return (dbEmployees || [])
       .map(emp => {
         const base = cleanNumber(emp.base_salary);
-        const bonus = cleanNumber(emp.monthly_bonus);
-
-        // Personelin kayıtlı avanslarını çekip topla
+        // Personelin kayıtlı avans ve primlerini doğru tipe göre ayır ve topla
         const empNorm = String(emp.full_name || '').toLowerCase().trim();
-        const totalAdv = (dbAdvances || [])
-          .filter(a => {
-            if (a.target_type !== 'employee') return false;
-            const targetNorm = String(a.target_name || a.target_id || '').toLowerCase().trim();
-            return targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm));
-          })
-          .reduce((sum, a) => sum + cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount), 0);
-        const grossTotal = base + bonus;
+        const empIdStr = String(emp.id || '');
+        
+        let totalAdv = 0;
+        let totalBonusFromAdv = cleanNumber(emp.monthly_bonus);
+
+        (dbAdvances || []).forEach(a => {
+          if (a.target_type !== 'employee') return;
+          const targetNorm = String(a.target_name || '').toLowerCase().trim();
+          const targetId = String(a.target_id || '');
+
+          const isMatch = (targetId && targetId === empIdStr) || 
+                          (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
+
+          if (isMatch) {
+            const amt = cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount);
+            if (a.payment_type === 'employee_bonus') {
+              totalBonusFromAdv += amt;
+            } else {
+              totalAdv += amt;
+            }
+          }
+        });
+
+        const bonus = totalBonusFromAdv;        const grossTotal = base + bonus;
         const netPayable = Math.max(0, grossTotal - totalAdv);
         const carriedOverDebt = Math.max(0, totalAdv - grossTotal);
 
@@ -3071,13 +3085,46 @@ export default function App() {
         {/* TABLO */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+           <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200 select-none">
               <tr>
-                <th className="py-3 px-3">Personel Bilgisi</th>
-                <th className="py-3 px-3 text-right">Sabit Maaş</th>
+                <th 
+                  className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition group"
+                  onClick={() => {
+                    if (empSortField === 'name') setEmpSortOrder(empSortOrder === 'asc' ? 'desc' : 'asc');
+                    else { setEmpSortField('name'); setEmpSortOrder('asc'); }
+                  }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Personel Bilgisi</span>
+                    <span className="text-xs text-blue-600">{empSortField === 'name' ? (empSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-3 text-right cursor-pointer hover:bg-slate-100 transition group"
+                  onClick={() => {
+                    if (empSortField === 'salary') setEmpSortOrder(empSortOrder === 'asc' ? 'desc' : 'asc');
+                    else { setEmpSortField('salary'); setEmpSortOrder('desc'); }
+                  }}
+                >
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span>Sabit Maaş</span>
+                    <span className="text-xs text-blue-600">{empSortField === 'salary' ? (empSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                  </div>
+                </th>
                 <th className="py-3 px-3 text-right">Prim / Ek</th>
                 <th className="py-3 px-3 text-right">Kesilen Avans</th>
-                <th className="py-3 px-3 text-right">Net Ödenecek / Durum</th>
+                <th 
+                  className="py-3 px-3 text-right cursor-pointer hover:bg-slate-100 transition group"
+                  onClick={() => {
+                    if (empSortField === 'netPayable') setEmpSortOrder(empSortOrder === 'asc' ? 'desc' : 'asc');
+                    else { setEmpSortField('netPayable'); setEmpSortOrder('desc'); }
+                  }}
+                >
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span>Net Ödenecek / Durum</span>
+                    <span className="text-xs text-blue-600">{empSortField === 'netPayable' ? (empSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
+                  </div>
+                </th>
                 {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
               </tr>
             </thead>
