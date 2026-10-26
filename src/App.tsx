@@ -961,27 +961,52 @@ export default function App() {
         const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
         const rawT2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
 
-        if (rawT1 > 0 || rawT2 > 0) {
+     if (rawT1 > 0 || rawT2 > 0) {
           if (!map.has(key)) {
+            // 1. subIbanMap kontrolü
             let foundIban = subIbanMap?.[contractorName] || subIbanMap?.[key];
 
+            // 2. Fatura üzerindeki IBAN kontrolü
             if (!foundIban || foundIban === 'IBAN Eksik') {
+              if (inv.iban && String(inv.iban).trim().length > 10) foundIban = String(inv.iban).trim();
+              else if ((inv as any).contractor_iban && String((inv as any).contractor_iban).trim().length > 10) foundIban = String((inv as any).contractor_iban).trim();
+            }
+
+            // 3. dbSubcontractors içinde esnek şirket/unvan araması
+            if (!foundIban || foundIban === 'IBAN Eksik') {
+              const cleanWords = key.replace(/(ltd|sti|tic|san|as|a\.s\.|nakliyat|lojistik)/g, '').trim();
               const found = dbSubcontractors.find(sub => {
                 const pSub = normalizeKey(sub.name);
-                return pSub && key && (key === pSub || key.includes(pSub) || pSub.includes(key));
+                const subCleanWords = pSub.replace(/(ltd|sti|tic|san|as|a\.s\.|nakliyat|lojistik)/g, '').trim();
+                
+                return (
+                  pSub === key ||
+                  (cleanWords.length >= 3 && pSub.includes(cleanWords)) ||
+                  (subCleanWords.length >= 3 && key.includes(subCleanWords)) ||
+                  (key.length >= 4 && pSub.includes(key)) ||
+                  (pSub.length >= 4 && key.includes(pSub))
+                );
               });
+
               if (found?.iban) {
                 foundIban = found.iban;
               }
             }
-            map.set(key, { 
-              contractorName, 
-              term1Total: 0, 
-              term2Total: 0, 
-              invoiceNos: [], 
-              iban: foundIban || 'IBAN Eksik' 
+
+            map.set(key, {
+              contractorName,
+              term1Total: 0,
+              term2Total: 0,
+              invoiceNos: [],
+              iban: foundIban || 'IBAN Eksik'
             });
           }
+
+          // TUTARLARI VE VADELERİ TOPLAYAN KISIM
+          const cur = map.get(key)!;
+          cur.term1Total += rawT1;
+          cur.term2Total += rawT2;
+          cur.invoiceNos.push(inv.invoice_no);
         }
       });
 
