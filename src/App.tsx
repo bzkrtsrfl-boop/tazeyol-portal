@@ -1080,15 +1080,14 @@ export default function App() {
         const bonus = cleanNumber(emp.monthly_bonus);
 
         // Personelin kayıtlı avanslarını çekip topla
-        const empNorm = normalizeKey(emp.full_name || '');
+        const empNorm = String(emp.full_name || '').toLowerCase().trim();
         const totalAdv = (dbAdvances || [])
           .filter(a => {
             if (a.target_type !== 'employee') return false;
-            const targetNorm = normalizeKey(a.target_name || a.target_id || '');
+            const targetNorm = String(a.target_name || a.target_id || '').toLowerCase().trim();
             return targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm));
           })
           .reduce((sum, a) => sum + cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount), 0);
-
         const grossTotal = base + bonus;
         const netPayable = Math.max(0, grossTotal - totalAdv);
         const carriedOverDebt = Math.max(0, totalAdv - grossTotal);
