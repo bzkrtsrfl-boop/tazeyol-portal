@@ -966,7 +966,7 @@ export default function App() {
             // 1. subIbanMap kontrolü
             let foundIban = subIbanMap?.[contractorName] || subIbanMap?.[key];
 
-            // 2. Fatura üzerindeki IBAN kontrolü
+          // 2. Fatura üzerindeki IBAN kontrolü
             if (!foundIban || foundIban === 'IBAN Eksik') {
               if (inv.iban && String(inv.iban).trim().length > 10) foundIban = String(inv.iban).trim();
               else if ((inv as any).contractor_iban && String((inv as any).contractor_iban).trim().length > 10) foundIban = String((inv as any).contractor_iban).trim();
@@ -978,7 +978,7 @@ export default function App() {
               const found = dbSubcontractors.find(sub => {
                 const pSub = normalizeKey(sub.name);
                 const subCleanWords = pSub.replace(/(ltd|sti|tic|san|as|a\.s\.|nakliyat|lojistik)/g, '').trim();
-                
+
                 return (
                   pSub === key ||
                   (cleanWords.length >= 3 && pSub.includes(cleanWords)) ||
