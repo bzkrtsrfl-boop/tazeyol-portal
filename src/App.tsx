@@ -1048,7 +1048,8 @@ export default function App() {
         const adjustedTerm2 = Math.max(0, item.term2Total - remainingAdvAfterTerm1);
         const carriedOverDebt = Math.max(0, remainingAdvAfterTerm1 - item.term2Total);
 
-        const choice = contractorTermChoices[item.contractorName] || 'term1';
+        const defaultChoice = (adjustedTerm1 <= 0 && adjustedTerm2 > 0) ? 'term2' : 'term1';
+        const choice = contractorTermChoices[item.contractorName] || defaultChoice;
         let activeAmount = 0;
         if (choice === 'term1') activeAmount = adjustedTerm1;
         else if (choice === 'term2') activeAmount = adjustedTerm2;
