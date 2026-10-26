@@ -3788,25 +3788,65 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Avans Kesintisi Alanı */}
-              <div className="p-3 bg-rose-50/60 rounded-xl border border-rose-200 space-y-2">
-                <span className="font-bold text-rose-900 block text-xs">Bu Aya Ait Kesilecek Avans (Mahsup)</span>
-                <div className="grid grid-cols-2 gap-2">
+             {/* Personel Avans & Taksit Alanı */}
+              <div className="p-3 bg-rose-50/60 rounded-xl border border-rose-200 space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-rose-900 text-xs">Bu Aya Ait Kesilecek Avans (Mahsup)</span>
+                  {Number(employeeFormData.advanceInstallments || 1) > 1 && (
+                    <span className="text-[11px] font-semibold text-rose-700 bg-rose-100 px-2 py-0.5 rounded border border-rose-200">
+                      Aylık Kesinti: {((cleanNumber(employeeFormData.advanceTotal || employeeFormData.monthlyAdvance || 0)) / Math.max(1, Number(employeeFormData.advanceInstallments || 1))).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} ₺
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
                   <div>
-                    <label className="block text-[10px] text-slate-600">Kesinti Tutarı (TL)</label>
+                    <label className="block text-[10px] text-slate-600">Toplam Avans (TL)</label>
                     <input
                       type="text"
-                      placeholder="Örn: 3000"
-                      value={employeeFormData.monthlyAdvance || ''}
-                      onChange={e => setEmployeeFormData({ ...employeeFormData, monthlyAdvance: e.target.value })}
+                      placeholder="Örn: 30000"
+                      value={employeeFormData.advanceTotal !== undefined && employeeFormData.advanceTotal !== '' ? employeeFormData.advanceTotal : (employeeFormData.monthlyAdvance || '')}
+                      onChange={e => {
+                        const total = e.target.value;
+                        const inst = Math.max(1, Number(employeeFormData.advanceInstallments) || 1);
+                        const perMonth = cleanNumber(total) / inst;
+                        setEmployeeFormData({ 
+                          ...employeeFormData, 
+                          advanceTotal: total, 
+                          monthlyAdvance: perMonth > 0 ? String(Math.round(perMonth)) : '' 
+                        });
+                      }}
                       className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-bold text-rose-800"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-600">Taksit Sayısı</label>
+                    <select
+                      value={employeeFormData.advanceInstallments || '1'}
+                      onChange={e => {
+                        const inst = Math.max(1, Number(e.target.value) || 1);
+                        const totalVal = employeeFormData.advanceTotal !== undefined && employeeFormData.advanceTotal !== '' ? employeeFormData.advanceTotal : employeeFormData.monthlyAdvance;
+                        const perMonth = cleanNumber(totalVal) / inst;
+                        setEmployeeFormData({ 
+                          ...employeeFormData, 
+                          advanceInstallments: e.target.value, 
+                          monthlyAdvance: perMonth > 0 ? String(Math.round(perMonth)) : '' 
+                        });
+                      }}
+                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-xs font-semibold text-slate-700"
+                    >
+                      <option value="1">Tek Sefer (1 Ay)</option>
+                      <option value="2">2 Taksit (2 Ay)</option>
+                      <option value="3">3 Taksit (3 Ay)</option>
+                      <option value="4">4 Taksit (4 Ay)</option>
+                      <option value="5">5 Taksit (5 Ay)</option>
+                      <option value="6">6 Taksit (6 Ay)</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-600">Avans Açıklaması</label>
                     <input
                       type="text"
-                      placeholder="Örn: Elden / Nakit Avans"
+                      placeholder="Örn: Nakit / Elden Avans"
                       value={employeeFormData.advanceDescription || ''}
                       onChange={e => setEmployeeFormData({ ...employeeFormData, advanceDescription: e.target.value })}
                       className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]"
