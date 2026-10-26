@@ -432,14 +432,16 @@ export default function App() {
   // PERSONEL MODALI (EKLE / DÜZENLE + PRİM ALANI DAHİL)
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
   const [editingEmployeeId, setEditingEmployeeId] = useState<number | null>(null);
-  const [employeeFormData, setEmployeeFormData] = useState({
+ const [employeeFormData, setEmployeeFormData] = useState({
     fullName: '',
     roleTitle: 'Kamyon Şoförü / Dağıtım',
     baseSalary: '',
     phone: '',
     iban: '',
     monthlyBonus: '',
-    bonusDescription: ''
+    bonusDescription: '',
+    monthlyAdvance: '',
+    advanceDescription: ''
   });
 
   // GENEL GİDER DÜZENLEME / EKLEME MODALI
@@ -1081,7 +1083,7 @@ export default function App() {
         const empNorm = String(emp.full_name || '').toLowerCase().trim();
         const empIdStr = String(emp.id || '');
         
-        let totalAdv = 0;
+        let totalAdv = cleanNumber(emp.monthly_advance);
         let totalBonusFromAdv = cleanNumber(emp.monthly_bonus);
 
         (dbAdvances || []).forEach(a => {
@@ -1727,6 +1729,7 @@ export default function App() {
 
     try {
     const bonusAmt = cleanNumber(employeeFormData.monthlyBonus);
+    const advanceAmt = cleanNumber(employeeFormData.monthlyAdvance);
     const payload = {
       full_name: employeeFormData.fullName.trim(),
       role_title: employeeFormData.roleTitle,
@@ -1734,7 +1737,9 @@ export default function App() {
       phone: employeeFormData.phone.trim(),
       iban: formatIBAN(employeeFormData.iban),
       monthly_bonus: bonusAmt,
-      bonus_description: employeeFormData.bonusDescription.trim()
+      bonus_description: employeeFormData.bonusDescription.trim(),
+      monthly_advance: advanceAmt,
+      advance_description: (employeeFormData.advanceDescription || '').trim()
     };
 
     if (editingEmployeeId) {
@@ -1750,7 +1755,7 @@ export default function App() {
 
       setIsEmployeeModalOpen(false);
       setEditingEmployeeId(null);
-      setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '' });
+      setEmployeeFormData({ fullNsetEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '' });ame: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '' });
       loadPortalData();
     } catch (err: any) {
       alert('Personel işlem hatası: ' + err.message);
@@ -3171,14 +3176,16 @@ export default function App() {
                         onClick={() => {
                           setEditingEmployeeId(emp.id);
                           setEmployeeFormData({
-                            fullName: emp.full_name || '',
-                            roleTitle: emp.role_title || 'Kamyon Şoförü / Dağıtım',
-                            baseSalary: String(emp.base_salary || ''),
-                            phone: formatPhone(emp.phone || ''),
-                            iban: emp.iban || '',
-                            monthlyBonus: String(emp.monthly_bonus || ''),
-                            bonusDescription: emp.bonus_description || ''
-                          });
+              fullName: emp.full_name || '',
+              roleTitle: emp.role_title || 'Kamyon Şoförü / Dağıtım',
+              baseSalary: String(emp.base_salary || ''),
+              phone: formatPhone(emp.phone || ''),
+              iban: emp.iban || '',
+              monthlyBonus: String(emp.monthly_bonus || ''),
+              bonusDescription: emp.bonus_description || '',
+              monthlyAdvance: String(emp.monthly_advance || ''),
+              advanceDescription: emp.advance_description || ''
+            });
                           setIsEmployeeModalOpen(true);
                         }}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
@@ -3728,34 +3735,64 @@ export default function App() {
                 </div>
               </div>
 
-              {/* BU AYA AİT PRİM / EK MASRAF ALANI */}
-              {editingEmployeeId && (
-                <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2">
-                  <span className="font-bold text-amber-900 block text-xs">Bu Aya Ait Prim / Ek Ödeme</span>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-slate-600">Prim Tutarı (TL)</label>
-                      <input 
-                        type="text" 
-                        placeholder="Örn: 5000" 
-                        value={employeeFormData.monthlyBonus} 
-                        onChange={e => setEmployeeFormData({ ...employeeFormData, monthlyBonus: e.target.value })} 
-                        className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-bold text-amber-800" 
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-600">Açıklama / Masraf Nedeni</label>
-                      <input 
-                        type="text" 
-                        placeholder="Örn: Sefer Primi" 
-                        value={employeeFormData.bonusDescription} 
-                        onChange={e => setEmployeeFormData({ ...employeeFormData, bonusDescription: e.target.value })} 
-                        className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]" 
-                      />
-                    </div>
+              {/* BU AYA AİT PRİM VE AVANS KESİNTİSİ ALANLARI */}
+          {editingEmployeeId && (
+            <div className="space-y-2.5">
+              {/* Prim Alanı */}
+              <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2">
+                <span className="font-bold text-amber-900 block text-xs">Bu Aya Ait Prim / Ek Ödeme</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-600">Prim Tutarı (TL)</label>
+                    <input
+                      type="text"
+                      placeholder="Örn: 5000"
+                      value={employeeFormData.monthlyBonus}
+                      onChange={e => setEmployeeFormData({ ...employeeFormData, monthlyBonus: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-bold text-amber-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-600">Açıklama / Sefer Nedeni</label>
+                    <input
+                      type="text"
+                      placeholder="Örn: Sefer Primi"
+                      value={employeeFormData.bonusDescription}
+                      onChange={e => setEmployeeFormData({ ...employeeFormData, bonusDescription: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]"
+                    />
                   </div>
                 </div>
-              )}
+              </div>
+
+              {/* Avans Kesintisi Alanı */}
+              <div className="p-3 bg-rose-50/60 rounded-xl border border-rose-200 space-y-2">
+                <span className="font-bold text-rose-900 block text-xs">Bu Aya Ait Kesilecek Avans (Mahsup)</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-600">Kesinti Tutarı (TL)</label>
+                    <input
+                      type="text"
+                      placeholder="Örn: 3000"
+                      value={employeeFormData.monthlyAdvance || ''}
+                      onChange={e => setEmployeeFormData({ ...employeeFormData, monthlyAdvance: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white font-bold text-rose-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-600">Avans Açıklaması</label>
+                    <input
+                      type="text"
+                      placeholder="Örn: Elden / Nakit Avans"
+                      value={employeeFormData.advanceDescription || ''}
+                      onChange={e => setEmployeeFormData({ ...employeeFormData, advanceDescription: e.target.value })}
+                      className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Cep Telefonu</label>
