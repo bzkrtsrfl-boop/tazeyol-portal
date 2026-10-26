@@ -2653,11 +2653,6 @@ export default function App() {
       advDeduction = cleanNumber(advInvoice.total_amount) / inst;
     }
 
-                    let advDeduction = 0;
-    if (activeAdv) {
-      const inst = Math.max(1, activeAdv.total_installments || 1);
-      advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-    }
     const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
     const remainingAdvForT2 = isT1Paid ? advDeduction : Math.max(0, advDeduction - t1);
     const dynamicT2 = Math.max(0, t2 - remainingAdvForT2);
