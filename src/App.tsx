@@ -869,7 +869,7 @@ export default function App() {
       sumNet += net;
     });
     return sumNet;
-  }, [dbEmployees, dbAdvances, dbEmployeeTransactions]);mpSummary.totalNet;
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions]);empSummary.totalNet;
 
   // TOPLAM ÖDENECEK TİCARİ BORÇLAR
   const totalConsolidatedDebt = unpaidSubcontractorDebt + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
