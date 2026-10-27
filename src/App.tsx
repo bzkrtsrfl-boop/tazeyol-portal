@@ -1732,17 +1732,19 @@ export default function App() {
     const bonusAmt = cleanNumber(employeeFormData.monthlyBonus);
     const advanceAmt = cleanNumber(employeeFormData.monthlyAdvance);
     const payload = {
-      full_name: employeeFormData.fullName.trim(),
-      role_title: employeeFormData.roleTitle,
+      full_name: (employeeFormData.fullName || '').trim(),
+      role_title: employeeFormData.roleTitle || 'Kamyon Şoförü / Dağıtım',
       base_salary: cleanNumber(employeeFormData.baseSalary),
-      phone: employeeFormData.phone.trim(),
-      iban: formatIBAN(employeeFormData.iban),
+      phone: (employeeFormData.phone || '').trim(),
+      iban: formatIBAN(employeeFormData.iban || ''),
       monthly_bonus: bonusAmt,
-      bonus_description: employeeFormData.bonusDescription.trim(),
+      bonus_description: (employeeFormData.bonusDescription || '').trim(),
       monthly_advance: advanceAmt,
-      advance_description: (employeeFormData.advanceDescription || '').trim()
+      advance_description: (employeeFormData.advanceDescription || '').trim(),
+      advance_total: cleanNumber(employeeFormData.advanceTotal || employeeFormData.monthlyAdvance || 0),
+      advance_installments: Number(employeeFormData.advanceInstallments) || 1
     };
-
+      
     if (editingEmployeeId) {
       const { error } = await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
       if (error) throw error;
