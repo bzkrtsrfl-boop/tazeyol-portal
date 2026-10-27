@@ -836,7 +836,41 @@ export default function App() {
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // PERSONEL GELECEK ÖDEMESİ (Bordro sekmesindeki net toplam ile birebir eşitlendi)
-  const totalEmployeeFutureDebt = empSummary.totalNet;
+  const totalEmployeeFutureDebt = e// PERSONEL GELECEK ÖDEMESİ (Yeni cari defter ve net hakediş ile tam uyumlu)
+  const totalEmployeeFutureDebt = useMemo(() => {
+    let sumNet = 0;
+    (dbEmployees || []).forEach(emp => {
+      const base = cleanNumber(emp.base_salary);
+      const empNorm = String(emp.full_name || '').toLowerCase().trim();
+      const empIdStr = String(emp.id || '');
+      
+      let totalBonus = cleanNumber(emp.monthly_bonus);
+      let totalAdv = cleanNumber(emp.monthly_advance);
+
+      (dbAdvances || []).forEach((a: any) => {
+        if (a.target_type !== 'employee') return;
+        const targetNorm = String(a.target_name || '').toLowerCase().trim();
+        const targetId = String(a.target_id || '');
+        if ((targetId && targetId === empIdStr) || (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)))) {
+          const amt = cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount);
+          if (a.payment_type === 'employee_bonus') totalBonus += amt;
+          else totalAdv += amt;
+        }
+      });
+
+      (dbEmployeeTransactions || []).forEach((tx: any) => {
+        if (String(tx.employee_id) === empIdStr) {
+          if (tx.type === 'bonus') totalBonus += cleanNumber(tx.total_amount);
+          else if (tx.type === 'installment_advance') totalAdv += cleanNumber(tx.monthly_cut || Math.round(cleanNumber(tx.total_amount) / Math.max(1, tx.installment_count || 1)));
+          else if (tx.type === 'advance') totalAdv += cleanNumber(tx.total_amount);
+        }
+      });
+
+      const net = Math.max(0, (base + totalBonus) - totalAdv);
+      sumNet += net;
+    });
+    return sumNet;
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions]);mpSummary.totalNet;
 
   // TOPLAM ÖDENECEK TİCARİ BORÇLAR
   const totalConsolidatedDebt = unpaidSubcontractorDebt + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
