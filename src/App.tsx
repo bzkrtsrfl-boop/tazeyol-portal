@@ -1084,7 +1084,13 @@ export default function App() {
         const empNorm = String(emp.full_name || '').toLowerCase().trim();
         const empIdStr = String(emp.id || '');
         
-        let totalAdv = cleanNumber(emp.monthly_advance);
+        // Taksitli avans aylık kesintisi veya sabit avans kesintisi
+      const instCount = Math.max(1, Number(emp.advance_installments) || 1);
+      const installmentMonthlyCut = (emp.advance_total !== undefined && emp.advance_total !== null && Number(emp.advance_total) > 0)
+        ? Math.round(cleanNumber(emp.advance_total) / instCount)
+        : cleanNumber(emp.monthly_advance);
+
+      let totalAdv = installmentMonthlyCut;
         let totalBonusFromAdv = cleanNumber(emp.monthly_bonus);
 
         (dbAdvances || []).forEach(a => {
