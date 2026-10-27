@@ -782,7 +782,7 @@ export default function App() {
     };
   }, [dbInvoices, dbCreditCards, dbVehicles]);
 
-  // 8. FİNANSAL FORMÜLLER
+ // 8. FİNANSAL FORMÜLLER (KESİN MUTABAKAT VE FİİLİ KASA HESAPLAMA MOTORU)
   const isDateInRange = (dateStr: string | null) => {
     if (!dateStr) return true;
     const d = sanitizeDate(dateStr);
@@ -794,25 +794,22 @@ export default function App() {
 
   const filteredInvoices = dbInvoices.filter(i => isDateInRange(i.issue_date || i.created_at));
 
+  // Seçilen dönem satış cirosu
   const totalPeriodSalesRevenue = filteredInvoices
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const totalCollectedCash = filteredInvoices
+  // Fiilen kasaya giren tahsilatlar
+  const totalCollectedCash = dbInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const allTimeSalesRevenue = dbInvoices
-    .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-  const allTimeCollectedCash = dbInvoices
-    .filter(i => i.category === 'customer_collection')
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
+  // Bekleyen müşteri alacakları
   const pendingReceivablesAllTime = dbInvoices
-  .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
-  .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+    .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+  // ÖDENMEMİŞ TAŞERON BORÇLARI (Vadeler ödendikçe buradan düşer)
   let unpaidSubcontractorDebt = 0;
   dbInvoices
     .filter(i => i.category === 'subcontractor_invoice')
@@ -823,66 +820,57 @@ export default function App() {
       if (inv.term2_status !== 'paid') unpaidSubcontractorDebt += t2;
     });
 
+  // DEVLET BORÇLARI
   const totalGovernmentPaymentsDebt = dbInvoices
     .filter(i => i.status !== 'paid' && ['taxes_sgk', 'traffic_fines'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
+  // TEMEL DİĞER TEDARİK FATURALARI
   const totalGeneralCompanyExpensesDebt = dbInvoices
     .filter(i => i.status !== 'paid' && !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'taxes_sgk', 'traffic_fines', 'salary_payroll', 'cash_deposit'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
+  // DÖNEM İÇİ FİİLİ MASRAFLAR (Taşeron hakedişleri hariç, sadece ödenen şirket giderleri)
   const totalPeriodPaidExpenses = filteredInvoices
-    .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit'].includes(i.category))
+    .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'subcontractor_invoice'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const now = new Date();
-  const currentDay = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const monthProgressRatio = Math.min(1, currentDay / daysInMonth);
+  // PERSONEL GELECEK ÖDEMESİ (Bordro sekmesindeki net toplam ile birebir eşitlendi)
+  const totalEmployeeFutureDebt = empSummary.totalNet;
 
-  let accruedEmployeeSalaryDebt = 0;
-  dbEmployees.forEach(emp => {
-    const salary = cleanNumber(emp.base_salary);
-    accruedEmployeeSalaryDebt += (salary * monthProgressRatio);
-  });
-
-  const accruedEmployeeBonusesDebt = dbAdvances
-    .filter(a => a.target_type === 'employee' && ['bonus', 'special_bonus', 'employee_bonus'].includes(a.payment_type))
-    .reduce((sum, a) => sum + cleanNumber(a.total_amount), 0);
-
-  const totalEmployeeFutureDebt = accruedEmployeeSalaryDebt + accruedEmployeeBonusesDebt;
+  // TOPLAM ÖDENECEK TİCARİ BORÇLAR
   const totalConsolidatedDebt = unpaidSubcontractorDebt + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
 
+  // GÜNCEL KASA / BANKA (Fiilen ödenen taşeron vadeleri ve harcamalar düşülür)
   const baseCash = 845200;
   const manualCashDeposits = dbInvoices
     .filter(i => i.category === 'cash_deposit')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const actualPaidOutflows = dbInvoices
-    .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit'].includes(i.category))
+  // Bankadan/Kasadan ödenmiş taşeron çıkışları
+  let paidSubcontractorOutflows = 0;
+  dbInvoices
+    .filter(i => i.category === 'subcontractor_invoice')
+    .forEach(inv => {
+      const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
+      const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
+      if (inv.term1_status === 'paid') paidSubcontractorOutflows += t1;
+      if (inv.term2_status === 'paid') paidSubcontractorOutflows += t2;
+    });
+
+  // Diğer ödenen harcamalar (Maaş, genel giderler, kart ödemeleri)
+  const otherPaidOutflows = dbInvoices
+    .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'subcontractor_invoice'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const currentRealCash = baseCash + totalCollectedCash + manualCashDeposits - actualPaidOutflows;
+  const currentRealCash = baseCash + totalCollectedCash + manualCashDeposits - (paidSubcontractorOutflows + otherPaidOutflows);
 
   // 9. MÜŞTERİ SATIŞLARI (MİGROS & GERÇEK CARİ EŞLEŞMESİ)
   const salesDetailedList = useMemo(() => {
     return dbInvoices
       .filter(i => i.category === 'freight_sales' || i.direction === 'outgoing')
-     return matchesSearch && matchesStatus;
-  })
-  .sort((a, b) => {
-    let comparison = 0;
-    if (subSortField === 'invoice_no') {
-      comparison = (a.invoice_no || '').localeCompare(b.invoice_no || '', 'tr');
-    } else if (subSortField === 'issue_date') {
-      comparison = new Date(a.issue_date || 0).getTime() - new Date(b.issue_date || 0).getTime();
-    } else if (subSortField === 'total_amount') {
-      comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
-    }
-    return subSortOrder === 'asc' ? comparison : -comparison;
-  })
-  .map(inv => {
-     let cust = 'MİGROS TİCARET A.Ş.';
+      .map(inv => {
+        let cust = 'MİGROS TİCARET A.Ş.';
         let fNo = inv.invoice_no || '';
 
         if (fNo.includes(' - ')) {
@@ -898,7 +886,7 @@ export default function App() {
           customerName: cust,
           cleanInvoiceNo: fNo
         };
-      
+      });
   }, [dbInvoices]);
 
   // SATIŞ TABLOSU İÇİN ARAMA VE BAŞLIĞA GÖRE SIRALAMA
@@ -916,7 +904,6 @@ export default function App() {
         (item.cleanInvoiceNo && item.cleanInvoiceNo.toLowerCase().includes(q))
       );
     }
-    // Durum Filtresi (Açık / Tahsil Edildi)
     if (salesStatusFilter !== 'all') {
       list = list.filter(item => {
         const isPaid = item.status === 'paid';
@@ -939,7 +926,7 @@ export default function App() {
     });
 
     return list;
-  }, [salesDetailedList, salesSearchQuery, salesSortConfig]);
+  }, [salesDetailedList, salesSearchQuery, salesStatusFilter, salesSortConfig]);
 
   const handleSalesSort = (key: string) => {
     setSalesSortConfig(prev => ({
@@ -947,7 +934,6 @@ export default function App() {
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
     }));
   };
-
 // 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA (TÜRKÇE KARAKTER & TOPLU AVANS GÜVENLİKLİ)
   const bankPaymentGroupedList = useMemo(() => {
     const normalizeKey = (str: string) => {
