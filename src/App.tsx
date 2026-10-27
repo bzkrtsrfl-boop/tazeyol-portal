@@ -1077,7 +1077,7 @@ export default function App() {
       }
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
-  }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances]);
+  }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances, dbEmployeeTransactions]);
   // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
   const processedEmployees = useMemo(() => {
     return (dbEmployees || [])
@@ -1113,6 +1113,18 @@ export default function App() {
             }
           }
         });
+        // Personel cari hareketleri tablosundaki (çoklu prim, tekil avans ve taksitler) hesaplama
+      (dbEmployeeTransactions || []).forEach(tx => {
+        if (String(tx.employee_id) === empIdStr) {
+          if (tx.type === 'bonus') {
+            totalBonusFromAdv += cleanNumber(tx.total_amount);
+          } else if (tx.type === 'installment_advance') {
+            totalAdv += cleanNumber(tx.monthly_cut || Math.round(cleanNumber(tx.total_amount) / Math.max(1, tx.installment_count || 1)));
+          } else if (tx.type === 'advance') {
+            totalAdv += cleanNumber(tx.total_amount);
+          }
+        }
+      });
 
         const bonus = totalBonusFromAdv;        const grossTotal = base + bonus;
         const netPayable = Math.max(0, grossTotal - totalAdv);
