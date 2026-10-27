@@ -3932,45 +3932,146 @@ export default function App() {
             </div>
           )}
 
-    {/* PERSONEL CARİ HAREKETLERİ (MÜNFERİT AVANS & PRİMLER - DÜZELTME / SİLME) */}
+   {/* PERSONEL CARİ HAREKETLERİ (ÇOKLU PRİM, ÇOKLU TEKİL AVANS, ÇOKLU TAKSİTLİ AVANS YÖNETİMİ) */}
               {editingEmployeeId && (
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-800 text-xs">Bu Personele Ait Ay İçi Cari Hareketler</span>
-                    <span className="text-[10px] text-slate-500 font-medium">Hatalı kayıtları silebilirsiniz</span>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <div>
+                      <span className="font-bold text-slate-800 text-xs block">Personel Cari & Hakediş Defteri</span>
+                      <span className="text-[10px] text-slate-500">Çoklu prim, tekil avans ve taksitli borçları buradan yönetin</span>
+                    </div>
                   </div>
 
+                  {/* 1. HIZLI HAREKET EKLEME PANELİ */}
+                  <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-2">
+                    <span className="text-[11px] font-bold text-slate-700 block">➕ Yeni Hareket Ekle (Prim / Avans / Taksit)</span>
+                    <div className="grid grid-cols-12 gap-1.5 items-end">
+                      <div className="col-span-3">
+                        <label className="block text-[9px] font-medium text-slate-500">İşlem Türü</label>
+                        <select id="new_tx_type" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px] bg-slate-50 font-medium">
+                          <option value="bonus">➕ Sefer / Ek Prim</option>
+                          <option value="advance">➖ Münferit Tekil Avans</option>
+                          <option value="installment_advance">📅 Taksitli Avans</option>
+                        </select>
+                      </div>
+                      <div className="col-span-4">
+                        <label className="block text-[9px] font-medium text-slate-500">Açıklama / Sefer / Sebep</label>
+                        <input id="new_tx_title" type="text" placeholder="Örn: Ankara Seferi veya Nakit Avans" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px]" />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-[9px] font-medium text-slate-500">Tutar (TL)</label>
+                        <input id="new_tx_amount" type="number" placeholder="5000" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px] font-bold text-slate-700" />
+                      </div>
+                      <div className="col-span-1">
+                        <label className="block text-[9px] font-medium text-slate-500">Taksit</label>
+                        <select id="new_tx_inst" className="w-full px-1 py-1 border border-slate-200 rounded text-[11px] bg-slate-50">
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="3">3</option>
+                          <option value="4">4</option>
+                          <option value="5">5</option>
+                          <option value="6">6</option>
+                        </select>
+                      </div>
+                      <div className="col-span-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const typeEl = document.getElementById('new_tx_type') as HTMLSelectElement;
+                            const titleEl = document.getElementById('new_tx_title') as HTMLInputElement;
+                            const amountEl = document.getElementById('new_tx_amount') as HTMLInputElement;
+                            const instEl = document.getElementById('new_tx_inst') as HTMLSelectElement;
+                            
+                            const tVal = typeEl.value as any;
+                            const titleVal = titleEl.value;
+                            const amtVal = cleanNumber(amountEl.value);
+                            const instVal = Number(instEl.value) || 1;
+
+                            if (!titleVal || amtVal <= 0) {
+                              alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
+                              return;
+                            }
+                            await handleAddEmployeeTransaction(editingEmployeeId, tVal, titleVal, amtVal, instVal);
+                            titleEl.value = '';
+                            amountEl.value = '';
+                            instEl.value = '1';
+                          }}
+                          className="w-full py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition shadow-sm"
+                        >
+                          Ekle
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. KAYITLI CARİ HAREKETLER LİSTESİ */}
                   {(() => {
+                    const empTxList = (dbEmployeeTransactions || []).filter(tx => String(tx.employee_id) === String(editingEmployeeId));
+                    
                     const empObj = (dbEmployees || []).find((e: any) => String(e.id) === String(editingEmployeeId));
                     const empName = empObj ? (empObj.full_name || '').toLowerCase().trim() : '';
                     const empIdStr = String(editingEmployeeId || '');
-
-                    const relatedAdvances = (dbAdvances || []).filter((a: any) => {
+                    const legacyAdvances = (dbAdvances || []).filter((a: any) => {
                       if (a.target_type !== 'employee') return false;
                       const tName = String(a.target_name || '').toLowerCase().trim();
                       const tId = String(a.target_id || '');
                       return (tId && tId === empIdStr) || (tName.length >= 3 && (tName.includes(empName) || empName.includes(tName)));
                     });
 
-                    if (relatedAdvances.length === 0) {
-                      return <p className="text-[11px] text-slate-400 italic py-1">Bu dönem için harici girilmiş ek avans veya prim kaydı bulunmuyor.</p>;
+                    if (empTxList.length === 0 && legacyAdvances.length === 0) {
+                      return <p className="text-[11px] text-slate-400 italic py-1 text-center bg-white rounded-lg border border-dashed border-slate-200">Henüz girilmiş bir cari hareket bulunmuyor.</p>;
                     }
 
                     return (
-                      <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                        {relatedAdvances.map((adv: any) => {
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                        {/* Yeni Sistem Hareketleri */}
+                        {empTxList.map((tx: any) => {
+                          const isBonus = tx.type === 'bonus';
+                          const isInst = tx.type === 'installment_advance';
+                          const totAmt = cleanNumber(tx.total_amount);
+                          const mCut = cleanNumber(tx.monthly_cut || Math.round(totAmt / Math.max(1, tx.installment_count || 1)));
+
+                          return (
+                            <div key={'tx-' + tx.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200 text-xs shadow-xs">
+                              <div className="flex items-center gap-2">
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${isBonus ? 'bg-amber-100 text-amber-800' : isInst ? 'bg-purple-100 text-purple-800' : 'bg-rose-100 text-rose-800'}`}>
+                                  {isBonus ? 'PRİM' : isInst ? `TAKSİT (${tx.installment_count} Ay)` : 'MÜNFERİT AVANS'}
+                                </span>
+                                <span className="font-medium text-slate-700">{tx.title}</span>
+                                {isInst && (
+                                  <span className="text-[10px] text-purple-600 font-semibold">(Aylık Kesinti: {mCut.toLocaleString('tr-TR')} ₺)</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className={`font-bold ${isBonus ? 'text-amber-700' : isInst ? 'text-purple-700' : 'text-rose-700'}`}>
+                                  {isBonus ? '+' : '-'}{totAmt.toLocaleString('tr-TR')} ₺
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteEmployeeTransaction(tx.id)}
+                                  className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition font-bold text-xs"
+                                  title="Hatalı Kaydı Sil"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Eski / Kasa Avans Kayıtları */}
+                        {legacyAdvances.map((adv: any) => {
                           const isBonus = adv.payment_type === 'employee_bonus';
                           const amt = cleanNumber(adv.remaining_amount !== undefined ? adv.remaining_amount : adv.total_amount);
                           return (
-                            <div key={adv.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200 text-xs">
+                            <div key={'adv-' + adv.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200 text-xs shadow-xs">
                               <div className="flex items-center gap-2">
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isBonus ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'}`}>
-                                  {isBonus ? 'PRİM' : 'AVANS'}
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${isBonus ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'}`}>
+                                  {isBonus ? 'KASA PRİM' : 'KASA AVANS'}
                                 </span>
-                                <span className="font-medium text-slate-700">{adv.description || adv.reason || 'Cari İşlem'}</span>
-                                <span className="text-[10px] text-slate-400">({adv.date || adv.created_at ? new Date(adv.date || adv.created_at).toLocaleDateString('tr-TR') : '-'})</span>
+                                <span className="font-medium text-slate-700">{adv.description || adv.reason || 'Kasa Hareketi'}</span>
                               </div>
-                              <div className="flex items-center gap-2.5">
+                              <div className="flex items-center gap-2">
                                 <span className={`font-bold ${isBonus ? 'text-amber-700' : 'text-rose-700'}`}>
                                   {isBonus ? '+' : '-'}{amt.toLocaleString('tr-TR')} ₺
                                 </span>
@@ -3978,7 +4079,7 @@ export default function App() {
                                   type="button"
                                   onClick={() => handleDeleteAdvanceRecord(adv.id)}
                                   className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition font-bold text-xs"
-                                  title="Hatalı Kaydı Sil"
+                                  title="Hatalı Kasa Kaydını Sil"
                                 >
                                   ✕
                                 </button>
