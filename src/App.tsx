@@ -143,6 +143,7 @@ export default function App() {
   ]);
   const [loading, setLoading] = useState(true);
   const [isExcelUploading, setIsExcelUploading] = useState(false);
+  const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
 
   const loadPortalData = async () => {
     setLoading(true);
@@ -153,6 +154,7 @@ export default function App() {
       const { data: advData } = await supabase.from('advance_payments').select('*').order('created_at', { ascending: false });
       const { data: ccData } = await supabase.from('credit_cards').select('*').order('due_date', { ascending: true });
       const { data: subData } = await supabase.from('subcontractors').select('*').order('name', { ascending: true });
+      const { data: empTxData } = await supabase.from('employee_transactions').select('*').order('created_at', { ascending: false });
 
       if (vData) setDbVehicles(vData);
       if (invData) setDbInvoices(invData);
@@ -160,6 +162,7 @@ export default function App() {
       if (advData) setDbAdvances(advData);
       if (ccData) setDbCreditCards(ccData);
       if (subData) setDbSubcontractors(subData);
+      if (empTxData) setDbEmployeeTransactions(empTxData);
     } catch (err) {
       console.error('Yükleme hatası:', err);
     } finally {
@@ -1734,6 +1737,48 @@ export default function App() {
     if (!window.confirm('Bu cari kaydı (avans/prim) silmek istediğinize emin misiniz? Bakiye yeniden hesaplanacaktır.')) return;
     try {
       const { error } = await supabase.from('advances').delete().eq('id', advId);
+      if (error) throw error;
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Kayıt silinemedi: ' + err.message);
+    }
+  };
+// PERSONEL ÇOKLU İŞLEM EKLEME (PRİM, TEKİL AVANS, TAKSİTLİ AVANS)
+  const handleAddEmployeeTransaction = async (
+    empId: number | string,
+    type: 'bonus' | 'advance' | 'installment_advance',
+    title: string,
+    totalAmount: number,
+    installments: number = 1
+  ) => {
+    if (!empId || !title.trim() || totalAmount <= 0) {
+      alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
+      return;
+    }
+    const instCount = Math.max(1, Number(installments) || 1);
+    const monthlyCut = type === 'installment_advance' ? Math.round(totalAmount / instCount) : totalAmount;
+
+    try {
+      const { error } = await supabase.from('employee_transactions').insert([{
+        employee_id: empId,
+        type: type,
+        title: title.trim(),
+        total_amount: totalAmount,
+        installment_count: instCount,
+        monthly_cut: monthlyCut
+      }]);
+      if (error) throw error;
+      await loadPortalData();
+    } catch (err: any) {
+      alert('İşlem eklenemedi: ' + err.message);
+    }
+  };
+
+  // PERSONEL İŞLEMİ SİLME
+  const handleDeleteEmployeeTransaction = async (txId: number | string) => {
+    if (!window.confirm('Bu kaydı silmek istediğinize emin misiniz? Bordro tutarları otomatik yeniden hesaplanacaktır.')) return;
+    try {
+      const { error } = await supabase.from('employee_transactions').delete().eq('id', txId);
       if (error) throw error;
       await loadPortalData();
     } catch (err: any) {
