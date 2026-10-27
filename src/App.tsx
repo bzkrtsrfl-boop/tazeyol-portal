@@ -1729,6 +1729,18 @@ export default function App() {
     }
   };
 
+  // PERSONEL CARİ HAREKETİNİ SİL (AVANS / PRİM HATALI GİRİŞ DÜZELTME)
+  const handleDeleteAdvanceRecord = async (advId: string | number) => {
+    if (!window.confirm('Bu cari kaydı (avans/prim) silmek istediğinize emin misiniz? Bakiye yeniden hesaplanacaktır.')) return;
+    try {
+      const { error } = await supabase.from('advances').delete().eq('id', advId);
+      if (error) throw error;
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Kayıt silinemedi: ' + err.message);
+    }
+  };
+  
   // 18. PERSONEL EKLEME & DÜZENLEME FORMU (PRİM / EK MASRAF DESTEKLİ)
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3863,6 +3875,66 @@ export default function App() {
             </div>
           )}
 
+    {/* PERSONEL CARİ HAREKETLERİ (MÜNFERİT AVANS & PRİMLER - DÜZELTME / SİLME) */}
+              {editingEmployeeId && (
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 text-xs">Bu Personele Ait Ay İçi Cari Hareketler</span>
+                    <span className="text-[10px] text-slate-500 font-medium">Hatalı kayıtları silebilirsiniz</span>
+                  </div>
+
+                  {(() => {
+                    const empObj = (dbEmployees || []).find((e: any) => String(e.id) === String(editingEmployeeId));
+                    const empName = empObj ? (empObj.full_name || '').toLowerCase().trim() : '';
+                    const empIdStr = String(editingEmployeeId || '');
+
+                    const relatedAdvances = (dbAdvances || []).filter((a: any) => {
+                      if (a.target_type !== 'employee') return false;
+                      const tName = String(a.target_name || '').toLowerCase().trim();
+                      const tId = String(a.target_id || '');
+                      return (tId && tId === empIdStr) || (tName.length >= 3 && (tName.includes(empName) || empName.includes(tName)));
+                    });
+
+                    if (relatedAdvances.length === 0) {
+                      return <p className="text-[11px] text-slate-400 italic py-1">Bu dönem için harici girilmiş ek avans veya prim kaydı bulunmuyor.</p>;
+                    }
+
+                    return (
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                        {relatedAdvances.map((adv: any) => {
+                          const isBonus = adv.payment_type === 'employee_bonus';
+                          const amt = cleanNumber(adv.remaining_amount !== undefined ? adv.remaining_amount : adv.total_amount);
+                          return (
+                            <div key={adv.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${isBonus ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'}`}>
+                                  {isBonus ? 'PRİM' : 'AVANS'}
+                                </span>
+                                <span className="font-medium text-slate-700">{adv.description || adv.reason || 'Cari İşlem'}</span>
+                                <span className="text-[10px] text-slate-400">({adv.date || adv.created_at ? new Date(adv.date || adv.created_at).toLocaleDateString('tr-TR') : '-'})</span>
+                              </div>
+                              <div className="flex items-center gap-2.5">
+                                <span className={`font-bold ${isBonus ? 'text-amber-700' : 'text-rose-700'}`}>
+                                  {isBonus ? '+' : '-'}{amt.toLocaleString('tr-TR')} ₺
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAdvanceRecord(adv.id)}
+                                  className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition font-bold text-xs"
+                                  title="Hatalı Kaydı Sil"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+              
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Cep Telefonu</label>
                 <input 
