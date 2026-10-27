@@ -804,10 +804,17 @@ export default function App() {
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Bekleyen müşteri alacakları
-  const pendingReceivablesAllTime = dbInvoices
-    .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+// Müşteriden Alınan Faturasız Toplam Cari Avans
+  const customerUnallocatedAdvances = dbInvoices
+    .filter(i => i.category === 'customer_advance')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+  // Bekleyen müşteri alacakları (Açık Faturalar - Alınan Cari Avans)
+  const pendingReceivablesAllTime = Math.max(0, 
+    dbInvoices
+      .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+      .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0) - customerUnallocatedAdvances
+  );
 
   // ÖDENMEMİŞ TAŞERON BORÇLARI (Vadeler ödendikçe buradan düşer)
   let unpaidSubcontractorDebt = 0;
@@ -830,9 +837,16 @@ export default function App() {
     .filter(i => i.status !== 'paid' && !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'taxes_sgk', 'traffic_fines', 'salary_payroll', 'cash_deposit'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // DÖNEM İÇİ FİİLİ MASRAFLAR (Taşeron hakedişleri hariç, sadece ödenen şirket giderleri)
+ // DÖNEM İÇİ FİİLİ MASRAFLAR (Taşeron hakedişleri hariç, sadece ödenen şirket giderleri)
   const totalPeriodPaidExpenses = filteredInvoices
-    .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'subcontractor_invoice'].includes(i.category))
+    .filter(i => {
+      if (i.status !== 'paid') return false;
+      const cat = String(i.category || '');
+      const no = String(i.invoice_no || '').toUpperCase();
+      if (['customer_collection', 'customer_advance', 'freight_sales', 'cash_deposit'].includes(cat)) return false;
+      if (cat === 'subcontractor_invoice' || no.startsWith('GIB') || no.startsWith('OZR') || no.startsWith('RMZ')) return false;
+      return true;
+    })
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
 // PERSONEL GELECEK ÖDEMESİ (Yeni cari defter ve net hakediş ile tam uyumlu)
@@ -1557,11 +1571,11 @@ export default function App() {
 
     try {
       const recTitle = `THS - ${newReceiptFormData.receiptNo || 'Dekont'} - ${newReceiptFormData.customerName || 'Müşteri'} - ${Date.now()}`;
-      
+      const isAdvance = !newReceiptFormData.relatedInvoiceId;
       const { error: insErr } = await supabase.from('invoices').insert([{
         invoice_no: recTitle,
         direction: 'incoming',
-        category: 'customer_collection',
+        category: isAdvance ? 'customer_advance' : 'customer_collection',
         total_amount: amt,
         issue_date: newReceiptFormData.date,
         due_date: newReceiptFormData.date,
@@ -1713,24 +1727,25 @@ export default function App() {
     }
   };
 
-  // 17. GENEL GİDER / TEDARİKÇİ EKLEME & DÜZENLEME
+ // 17. GENEL GİDER / TEDARİKÇİ EKLEME & DÜZENLEME
   const handleSaveGeneralExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = cleanNumber(expenseFormData.amount);
-    if (!expenseFormData.companyName || amt <= 0) {
-      alert('Lütfen tedarikçi ve tutar alanlarını doldurunuz.');
+    if (amt <= 0) {
+      alert('Lütfen geçerli bir tutar giriniz.');
       return;
     }
 
     try {
-      const fullTitle = `${expenseFormData.invoiceNo ? expenseFormData.invoiceNo + ' - ' : ''}${expenseFormData.companyName}${expenseFormData.plateNumber ? ' [' + expenseFormData.plateNumber.toUpperCase() + ']' : ''}`;
+      const desc = expenseFormData.companyName || 'Genel Şirket Masrafı';
+      const fullTitle = `${expenseFormData.invoiceNo ? expenseFormData.invoiceNo + ' - ' : ''}${desc}${expenseFormData.plateNumber ? ' [' + expenseFormData.plateNumber.toUpperCase() + ']' : ''}`;
       const payload = {
         invoice_no: fullTitle,
         direction: 'incoming',
-        category: expenseFormData.category,
+        category: expenseFormData.category || 'other',
         total_amount: amt,
         issue_date: expenseFormData.issueDate,
-        due_date: expenseFormData.dueDate,
+        due_date: expenseFormData.dueDate || expenseFormData.issueDate,
         status: expenseFormData.status
       };
 
@@ -1747,7 +1762,7 @@ export default function App() {
       setIsGeneralExpenseModalOpen(false);
       setEditingExpenseId(null);
       setExpenseFormData({
-        category: 'maintenance',
+        category: 'taxes_sgk',
         companyName: '',
         plateNumber: '',
         invoiceNo: '',
@@ -2368,25 +2383,28 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  {dbInvoices
-                    .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
-                    .slice(0, 5)
-                    .map((inv, idx) => {
-                      const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
-                      return (
-                        <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
-                          <div>
-                            <span className="font-bold text-slate-900 block">{inv.invoice_no}</span>
-                            <span className="text-[12px] text-slate-500">1. Vade: {formatDateTR(inv.term1_due_date)}</span>
-                          </div>
-                          <span className="font-bold text-rose-600 text-sm">{t1.toLocaleString('tr-TR')} ₺</span>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
+              <div className="space-y-2">
+  {dbInvoices
+    .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
+    .slice(0, 5)
+    .map((inv, idx) => {
+      const isT1Paid = inv.term1_status === 'paid';
+      const activeTermLabel = isT1Paid ? '2. Vade' : '1. Vade';
+      const activeDueDate = isT1Paid ? inv.term2_due_date : inv.term1_due_date;
+      const activeAmount = cleanNumber(isT1Paid ? (inv.term2_amount || (inv.total_amount / 2)) : (inv.term1_amount || (inv.total_amount / 2)));
 
+      return (
+        <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
+          <div>
+            <span className="font-bold text-slate-900 block">{inv.invoice_no}</span>
+            <span className="text-[12px] text-slate-500">{activeTermLabel}: {formatDateTR(activeDueDate)}</span>
+          </div>
+          <span className="font-bold text-rose-600 text-sm">{activeAmount.toLocaleString('tr-TR')} ₺</span>
+        </div>
+      );
+    })}
+</div>
+           
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
                 <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
@@ -2426,7 +2444,51 @@ export default function App() {
         )}
 
         {/* 2. SATIŞ & MÜŞTERİLER */}
-        {activeTab === 'sales_customers' && (
+       {activeTab === 'sales_customers' && (
+        <div className="space-y-4">
+          {/* MİGROS TİCARET A.Ş. CARİ VE AVANS YÖNETİM HAVUZU */}
+          <div className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-2xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-white/10">
+              <div>
+                <span className="bg-blue-500/30 text-blue-200 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">Ana Cari Hesap</span>
+                <h4 className="text-lg font-black tracking-tight mt-0.5">MİGROS TİCARET A.Ş.</h4>
+              </div>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewReceiptFormData({
+                      customerName: 'MİGROS TİCARET A.Ş.',
+                      receiptNo: `AVANS-MIGROS-${new Date().getMonth() + 1}`,
+                      amount: '',
+                      targetAccount: 'bank',
+                      date: new Date().toISOString().split('T')[0],
+                      relatedInvoiceId: null
+                    });
+                    setIsNewReceiptModalOpen(true);
+                  }}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-md transition">
+                  <Plus className="w-4 h-4" /> Toplu Cari Avans Ekle (Faturasız)
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10">
+                <span className="text-blue-200 text-[11px] block">Toplam Açık Fatura</span>
+                <span className="text-lg font-bold block mt-0.5">{rawPendingSales.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-emerald-500/20 backdrop-blur-xs p-3 rounded-xl border border-emerald-400/20">
+                <span className="text-emerald-200 text-[11px] block">Alınan Faturasız Cari Avans</span>
+                <span className="text-lg font-bold text-emerald-300 block mt-0.5">+{customerUnallocatedAdvances.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10">
+                <span className="text-amber-200 text-[11px] block">Kalan Net Alacak (Mahsup Sonrası)</span>
+                <span className="text-lg font-black text-amber-300 block mt-0.5">{pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
@@ -2555,6 +2617,7 @@ export default function App() {
               </table>
             </div>
           </div>
+        </div>
         )}
 
         {/* 3. ALT YÜKLENİCİ HAKEDİŞLERİ */}
