@@ -836,8 +836,7 @@ export default function App() {
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // PERSONEL GELECEK ÖDEMESİ (Bordro sekmesindeki net toplam ile birebir eşitlendi)
-  const totalEmployeeFutureDebt = e// PERSONEL GELECEK ÖDEMESİ (Yeni cari defter ve net hakediş ile tam uyumlu)
-  const totalEmployeeFutureDebt = useMemo(() => {
+   const totalEmployeeFutureDebt = useMemo(() => {
     let sumNet = 0;
     (dbEmployees || []).forEach(emp => {
       const base = cleanNumber(emp.base_salary);
