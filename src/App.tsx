@@ -1755,13 +1755,14 @@ export default function App() {
       alert('Kayıt silinemedi: ' + err.message);
     }
   };
-// PERSONEL ÇOKLU İŞLEM EKLEME (PRİM, TEKİL AVANS, TAKSİTLİ AVANS)
+// PERSONEL ÇOKLU İŞLEM EKLEME (PRİM, TEKİL AVANS, TAKSİTLİ AVANS - TARİH DESTEKLİ)
   const handleAddEmployeeTransaction = async (
     empId: number | string,
     type: 'bonus' | 'advance' | 'installment_advance',
     title: string,
     totalAmount: number,
-    installments: number = 1
+    installments: number = 1,
+    txDate?: string
   ) => {
     if (!empId || !title.trim() || totalAmount <= 0) {
       alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
@@ -1769,6 +1770,7 @@ export default function App() {
     }
     const instCount = Math.max(1, Number(installments) || 1);
     const monthlyCut = type === 'installment_advance' ? Math.round(totalAmount / instCount) : totalAmount;
+    const finalDate = txDate || new Date().toISOString().split('T')[0];
 
     try {
       const { error } = await supabase.from('employee_transactions').insert([{
@@ -1777,7 +1779,8 @@ export default function App() {
         title: title.trim(),
         total_amount: totalAmount,
         installment_count: instCount,
-        monthly_cut: monthlyCut
+        monthly_cut: monthlyCut,
+        transaction_date: finalDate
       }]);
       if (error) throw error;
       await loadPortalData();
@@ -3843,21 +3846,30 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 1. HIZLI HAREKET EKLEME PANELİ */}
+                 {/* 1. HIZLI HAREKET EKLEME PANELİ (TARİH SEÇİCİLİ) */}
                   <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-2">
                     <span className="text-[11px] font-bold text-slate-700 block">➕ Yeni Hareket Ekle (Prim / Avans / Taksit)</span>
                     <div className="grid grid-cols-12 gap-1.5 items-end">
-                      <div className="col-span-3">
+                      <div className="col-span-2">
+                        <label className="block text-[9px] font-medium text-slate-500">Tarih</label>
+                        <input
+                          id="new_tx_date"
+                          type="date"
+                          defaultValue={new Date().toISOString().split('T')[0]}
+                          className="w-full px-1.5 py-1 border border-slate-200 rounded text-[11px] bg-slate-50 font-medium text-slate-700"
+                        />
+                      </div>
+                      <div className="col-span-2">
                         <label className="block text-[9px] font-medium text-slate-500">İşlem Türü</label>
-                        <select id="new_tx_type" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px] bg-slate-50 font-medium">
-                          <option value="bonus">➕ Sefer / Ek Prim</option>
-                          <option value="advance">➖ Münferit Tekil Avans</option>
+                        <select id="new_tx_type" className="w-full px-1.5 py-1 border border-slate-200 rounded text-[11px] bg-slate-50 font-medium">
+                          <option value="bonus">➕ Sefer / Prim</option>
+                          <option value="advance">➖ Münferit Avans</option>
                           <option value="installment_advance">📅 Taksitli Avans</option>
                         </select>
                       </div>
                       <div className="col-span-4">
-                        <label className="block text-[9px] font-medium text-slate-500">Açıklama / Sefer / Sebep</label>
-                        <input id="new_tx_title" type="text" placeholder="Örn: Ankara Seferi veya Nakit Avans" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px]" />
+                        <label className="block text-[9px] font-medium text-slate-500">Açıklama / Sefer</label>
+                        <input id="new_tx_title" type="text" placeholder="Örn: Ankara Seferi" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px]" />
                       </div>
                       <div className="col-span-2">
                         <label className="block text-[9px] font-medium text-slate-500">Tutar (TL)</label>
@@ -3874,15 +3886,17 @@ export default function App() {
                           <option value="6">6</option>
                         </select>
                       </div>
-                      <div className="col-span-2">
+                      <div className="col-span-1">
                         <button
                           type="button"
                           onClick={async () => {
+                            const dateEl = document.getElementById('new_tx_date') as HTMLInputElement;
                             const typeEl = document.getElementById('new_tx_type') as HTMLSelectElement;
                             const titleEl = document.getElementById('new_tx_title') as HTMLInputElement;
                             const amountEl = document.getElementById('new_tx_amount') as HTMLInputElement;
                             const instEl = document.getElementById('new_tx_inst') as HTMLSelectElement;
                             
+                            const dVal = dateEl?.value || new Date().toISOString().split('T')[0];
                             const tVal = typeEl.value as any;
                             const titleVal = titleEl.value;
                             const amtVal = cleanNumber(amountEl.value);
@@ -3892,7 +3906,7 @@ export default function App() {
                               alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
                               return;
                             }
-                            await handleAddEmployeeTransaction(editingEmployeeId, tVal, titleVal, amtVal, instVal);
+                            await handleAddEmployeeTransaction(editingEmployeeId, tVal, titleVal, amtVal, instVal, dVal);
                             titleEl.value = '';
                             amountEl.value = '';
                             instEl.value = '1';
@@ -3904,7 +3918,6 @@ export default function App() {
                       </div>
                     </div>
                   </div>
-
                   {/* 2. KAYITLI CARİ HAREKETLER LİSTESİ */}
                   {(() => {
                     const empTxList = (dbEmployeeTransactions || []).filter(tx => String(tx.employee_id) === String(editingEmployeeId));
