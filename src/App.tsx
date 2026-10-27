@@ -835,14 +835,14 @@ export default function App() {
     .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'subcontractor_invoice'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // PERSONEL GELECEK ÖDEMESİ (Bordro sekmesindeki net toplam ile birebir eşitlendi)
-   const totalEmployeeFutureDebt = useMemo(() => {
+// PERSONEL GELECEK ÖDEMESİ (Yeni cari defter ve net hakediş ile tam uyumlu)
+  const totalEmployeeFutureDebt = useMemo(() => {
     let sumNet = 0;
     (dbEmployees || []).forEach(emp => {
       const base = cleanNumber(emp.base_salary);
       const empNorm = String(emp.full_name || '').toLowerCase().trim();
       const empIdStr = String(emp.id || '');
-      
+
       let totalBonus = cleanNumber(emp.monthly_bonus);
       let totalAdv = cleanNumber(emp.monthly_advance);
 
@@ -869,7 +869,7 @@ export default function App() {
       sumNet += net;
     });
     return sumNet;
-  }, [dbEmployees, dbAdvances, dbEmployeeTransactions]);empSummary.totalNet;
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions]);  
 
   // TOPLAM ÖDENECEK TİCARİ BORÇLAR
   const totalConsolidatedDebt = unpaidSubcontractorDebt + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
