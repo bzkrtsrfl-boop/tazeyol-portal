@@ -2440,8 +2440,7 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         {/* 2. SATIŞ & MÜŞTERİLER */}
        {activeTab === 'sales_customers' && (
@@ -3886,7 +3885,6 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               </table>
             </div>
           </div>
-        </div>
         )}
       </main>
 
