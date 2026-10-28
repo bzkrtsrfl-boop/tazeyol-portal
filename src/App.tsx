@@ -2440,7 +2440,7 @@ export default function App() {
              ))}
             </div>
           </div>
-         </div>
+        
         {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           
