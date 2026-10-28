@@ -2816,10 +2816,15 @@ export default function App() {
     }
 
     const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
-    const remainingAdvForT2 = isT1Paid ? advDeduction : Math.max(0, advDeduction - t1);
-    const dynamicT2 = Math.max(0, t2 - remainingAdvForT2);
-    const deductedAdvAmt = isT1Paid ? 0 : Math.min(t1, advDeduction);
-    const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
+const deductedAdvAmt = isT1Paid ? 0 : Math.min(t1, advDeduction);
+
+// 1. vade ödendiyse, o eski avans 1. vadede kapanmıştır; sadece 1. vadeyi aşan veya yeni avans 2. vadeye geçer:
+const remainingAdvForT2 = isT1Paid 
+  ? Math.max(0, advDeduction - t1) 
+  : Math.max(0, advDeduction - t1);
+
+const dynamicT2 = isT2Paid ? 0 : Math.max(0, t2 - remainingAdvForT2);
+const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
