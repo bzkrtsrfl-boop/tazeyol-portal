@@ -58,6 +58,7 @@ function TazeyolBrand() {
     </div>
   );
 }
+
 export default function App() {
   // 1. KULLANICI GİRİŞ & YETKİLENDİRME (RBAC)
   const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | null>(() => {
