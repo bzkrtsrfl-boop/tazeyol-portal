@@ -2971,6 +2971,11 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     );
                   })}
                 </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+                
         {/* 4. TAŞERON IBAN YÖNETİMİ */}
         {activeTab === 'sub_ibans' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
