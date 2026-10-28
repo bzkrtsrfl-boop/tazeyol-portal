@@ -2437,12 +2437,11 @@ export default function App() {
                     <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
                   </div>
                 </div>
-              ))}
+             ))}
             </div>
           </div>
-        </div>
-      )}
-      {activeTab === 'sales_customers' && (
+         </div>
+        {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           
           {/* MİGROS TİCARET A.Ş. CARİ VE AVANS YÖNETİM HAVUZU */}
