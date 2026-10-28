@@ -4967,35 +4967,36 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </div>
               )}
 
-              {drawerData.items?.map((group, gIdx) => (
-                <div key={gIdx} className="space-y-2">
-                  <span className="font-bold text-slate-700 uppercase tracking-wider block text-[11px] pb-1 border-b border-slate-100">
-                    {group.label} ({group.data?.length || 0})
-                  </span>
-                  <div className="space-y-2">
-                    {group.data?.length === 0 && <p className="text-slate-400 italic">Kayıt bulunamadı.</p>}
-                    {group.data?.map((item: any, iIdx: number) => (
-                      <div key={iIdx} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 space-y-1">
-                        <div className="flex justify-between font-bold text-slate-800">
-                          <span>{item.invoice_no || item.month_year || 'Kayıt'}</span>
-                          <span className="text-blue-700">{(item.total_amount || item.invoice_rev || 0).toLocaleString('tr-TR')} ₺</span>
-                        </div>
-                        <div className="flex justify-between text-[11px] text-slate-500">
-                          <span>Tarih: {item.due_date || item.issue_date || '-'}</span>
-                          <span className={item.status === 'paid' ? 'text-emerald-600 font-semibold' : 'text-amber-600'}>
-                            {item.status === 'paid' ? 'Ödendi' : 'Açık'}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+          {drawerData.items?.map((group, gIdx) => (
+  <div key={gIdx} className="space-y-2">
+    <span className="font-bold text-slate-700 uppercase tracking-wider block text-[11px] pb-1 border-b border-slate-100">
+      {group.label} ({group.data?.length || 0})
+    </span>
+    <div className="space-y-2">
+      {group.data?.length === 0 && <p className="text-slate-400 italic">Kayıt bulunamadı.</p>}
+      {group.data?.map((item: any, iIdx: number) => (
+        <div key={iIdx} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 space-y-1">
+          <div className="flex justify-between font-bold text-slate-800">
+            <span>{item.invoice_no || item.month_year || 'Kayıt'}</span>
+            <span className="text-blue-700">{(item.total_amount || item.invoice_rev || 0).toLocaleString('tr-TR')} ₺</span>
+          </div>
+          <div className="flex justify-between text-[11px] text-slate-500">
+            <span>Tarih: {item.due_date || item.issue_date || '-'}</span>
+            <span className={item.status === 'paid' ? 'text-emerald-600 font-semibold' : 'text-amber-600'}>
+              {item.status === 'paid' ? 'Ödendi' : 'Açık'}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+))}
             </div>
           </div>
         </div>
       )}
-                {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
+
+      {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
       {selectedSubcontractorForDetail && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
@@ -5096,7 +5097,3 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
     </div>
   );
 }
-
-    </div>
-  );
-              
