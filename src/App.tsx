@@ -2436,9 +2436,14 @@ export default function App() {
                           <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
                         </div>
                       </div>
-                    ))}
-                </div>
-             )}
+                     </div>
+                   ))}
+        </div>
+      </div>
+    </div>
+  )}
+
+      {/* 2. SATIŞ & MÜŞTERİLER */}
 
         {/* 2. SATIŞ & MÜŞTERİLER */}
        {activeTab === 'sales_customers' && (
