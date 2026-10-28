@@ -2439,8 +2439,7 @@ export default function App() {
                     ))}
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
         {/* 2. SATIŞ & MÜŞTERİLER */}
        {activeTab === 'sales_customers' && (
