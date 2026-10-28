@@ -2474,7 +2474,7 @@ export default function App() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10">
                 <span className="text-blue-200 text-[11px] block">Toplam Açık Fatura</span>
-                <span className="text-lg font-bold block mt-0.5">{rawPendingSales.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</s<span className="text-lg font-bold block mt-0.5">{pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>pan>
+                <span className="text-lg font-bold block mt-0.5">{pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-emerald-500/20 backdrop-blur-xs p-3 rounded-xl border border-emerald-400/20">
                 <span className="text-emerald-200 text-[11px] block">Alınan Faturasız Cari Avans</span>
