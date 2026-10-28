@@ -2444,10 +2444,7 @@ export default function App() {
     </div>
   )}
 
-      {/* 2. SATIŞ & MÜŞTERİLER */}
-
-        {/* 2. SATIŞ & MÜŞTERİLER */}
-       {activeTab === 'sales_customers' && (
+      {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           {/* MİGROS TİCARET A.Ş. CARİ VE AVANS YÖNETİM HAVUZU */}
           <div className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-2xl p-5 shadow-sm space-y-4">
