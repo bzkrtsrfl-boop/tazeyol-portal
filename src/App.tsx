@@ -2425,25 +2425,23 @@ export default function App() {
                     .sort((a, b) => new Date(a.next_inspection_date).getTime() - new Date(b.next_inspection_date).getTime())
                     .slice(0, 5)
                     .map((veh, idx) => (
-                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
-                        <div>
-                          <span className="font-mono font-bold text-blue-700 block">{veh.plate_number}</span>
-                          <span className="text-[11px] text-slate-500">Sürücü: {veh.driver_name || 'Atanmadı'}</span>
-                        </div>
-                        <div className="text-right">
-                          <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[11px] block">
-                            {formatDateTR(veh.next_inspection_date)}
-                          </span>
-                          <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
-                        </div>
-                      </div>
-                     </div>
-                   ))}
+                <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
+                  <div>
+                    <span className="font-mono font-bold text-blue-700 block">{veh.plate_number}</span>
+                    <span className="text-[11px] text-slate-500">Sürücü: {veh.driver_name || 'Atanmadı'}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[11px] block">
+                      {formatDateTR(veh.next_inspection_date)}
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
-  )}
-
+      )}
       {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           {/* MİGROS TİCARET A.Ş. CARİ VE AVANS YÖNETİM HAVUZU */}
