@@ -2442,6 +2442,7 @@ export default function App() {
           </div>
               </div>
             </div>
+          </div>
             )}
             
         {activeTab === 'sales_customers' && (
