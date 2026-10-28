@@ -95,8 +95,7 @@ export default function App() {
 
   const isAdmin = currentUserRole === 'admin';
 
-  
-  // 2. NAVİGASYON & TARİH FİLTRELERİ
+    // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<
     'overview' | 'subcontractors' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
