@@ -98,8 +98,8 @@ export default function App() {
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    'overview' | 'subcontractors' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
+ const [activeTab, setActiveTab] = useState<
+    'overview' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
   >('overview');
   const [subSearchTerm, setSubSearchTerm] = useState('');
   const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
@@ -223,7 +223,9 @@ export default function App() {
       return '';
     }
   };
-
+// SEÇİLEN ALT YÜKLENİCİ CARİ DETAYI STATE'İ
+  const [selectedSubcontractorForDetail, setSelectedSubcontractorForDetail] = useState<any | null>(null);
+  
   // 2. SADECE EKRANDA GÖSTERİM İÇİN TÜRKİYE TARİH FORMATI (GG.AA.YYYY)
   const formatDateTR = (d: any): string => {
     if (!d) return '-';
@@ -2923,7 +2925,45 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             </div>
           </div>
         )}
+        
+{/* ALT YÜKLENİCİ CARİ KARTLARI */}
+        {activeTab === 'sub_accounts' && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Cari Kartları ve Avans Yönetimi</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Taşeronların cari bakiyelerini, geçmiş faturalarını ve avans/ödeme geçmişini yönetin.</p>
+              </div>
+            </div>
 
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-3">Firma / Taşeron Adı</th>
+                    <th className="py-3 px-3">Vergi Numarası</th>
+                    <th className="py-3 px-3">Kayıtlı IBAN</th>
+                    <th className="py-3 px-3 text-right">Toplam Fatura</th>
+                    <th className="py-3 px-3 text-right">Yapılan Ödeme / Avans</th>
+                    <th className="py-3 px-3 text-right">Güncel Bakiye</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dbSubcontractors.map((sub: any) => (
+                   <tr key={sub.id} onClick={() => setSelectedSubcontractorForDetail(sub)} className="hover:bg-blue-50/50 cursor-pointer transition">
+                      <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
+                      <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_number || '-'}</td>
+                      <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
+                      <td className="py-3 px-3 text-right font-bold text-slate-900">0,00 ₺</td>
+                      <td className="py-3 px-3 text-right font-bold text-amber-600">0,00 ₺</td>
+                      <td className="py-3 px-3 text-right font-black text-emerald-600 text-sm">0,00 ₺</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {/* 4. TAŞERON IBAN YÖNETİMİ */}
         {activeTab === 'sub_ibans' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
