@@ -2949,21 +2949,27 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbSubcontractors.map((sub: any) => (
-                   <tr key={sub.id} onClick={() => setSelectedSubcontractorForDetail(sub)} className="hover:bg-blue-50/50 cursor-pointer transition">
-                      <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
-                      <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_number || '-'}</td>
-                      <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
-                      <td className="py-3 px-3 text-right font-bold text-slate-900">0,00 ₺</td>
-                      <td className="py-3 px-3 text-right font-bold text-amber-600">0,00 ₺</td>
-                      <td className="py-3 px-3 text-right font-black text-emerald-600 text-sm">0,00 ₺</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+                  {dbSubcontractors.map((sub: any) => {
+                    const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === sub.id);
+                    
+                    const totalInvoice = subLedgers.filter((l: any) => l.transaction_type === 'invoice').reduce((sum: number, l: any) => sum + cleanNumber(l.amount), 0);
+                    const totalAdvance = subLedgers.filter((l: any) => l.transaction_type === 'advance').reduce((sum: number, l: any) => sum + cleanNumber(l.amount), 0);
+                    const totalPayment = subLedgers.filter((l: any) => l.transaction_type === 'payment').reduce((sum: number, l: any) => sum + cleanNumber(l.amount), 0);
+                    
+                    const totalOut = totalAdvance + totalPayment;
+                    const balance = totalInvoice - totalOut;
+
+                    return (
+                      <tr key={sub.id} onClick={() => setSelectedSubcontractorForDetail(sub)} className="hover:bg-blue-50/50 cursor-pointer transition">
+                        <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
+                        <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_number || '-'}</td>
+                        <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
+                        <td className="py-3 px-3 text-right font-bold text-slate-900">{totalInvoice.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-3 px-3 text-right font-bold text-amber-600">{totalOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-3 px-3 text-right font-black text-emerald-600 text-sm">{balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                      </tr>
+                    );
+                  })}
         {/* 4. TAŞERON IBAN YÖNETİMİ */}
         {activeTab === 'sub_ibans' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
