@@ -4973,8 +4973,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               )}
 
   {drawerData.items?.map((group, gIdx) => (
-  {drawerData.items?.map((group, gIdx) => (
-            <div key={gIdx} className="space-y-2">
+              <div key={gIdx} className="space-y-2">
               <span className="font-bold text-slate-700 uppercase tracking-wider block text-[11px] pb-1 border-b border-slate-100">
                 {group.label} ({group.data?.length || 0})
               </span>
