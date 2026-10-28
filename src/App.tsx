@@ -2424,7 +2424,7 @@ export default function App() {
                     .filter(v => v.next_inspection_date)
                     .sort((a, b) => new Date(a.next_inspection_date).getTime() - new Date(b.next_inspection_date).getTime())
                     .slice(0, 5)
-                    .map((veh, idx) => (
+          .map((veh, idx) => (
                 <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
                   <div>
                     <span className="font-mono font-bold text-blue-700 block">{veh.plate_number}</span>
@@ -2444,6 +2444,7 @@ export default function App() {
       )}
       {activeTab === 'sales_customers' && (
         <div className="space-y-4">
+          
           {/* MİGROS TİCARET A.Ş. CARİ VE AVANS YÖNETİM HAVUZU */}
           <div className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-white/10">
