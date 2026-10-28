@@ -5096,8 +5096,8 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <div className="pt-3 border-t border-slate-100 flex justify-end">
               <button type="button" onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 rounded-lg bg-slate-800 text-white font-medium text-xs">Kapat</button>
             </div>
-          </div>
-       )}
-    </div>
-  );
-
+      </div>
+    )}
+  </div>
+);
+}
