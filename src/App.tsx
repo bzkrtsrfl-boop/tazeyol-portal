@@ -4991,4 +4991,55 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
       )}
     </div>
   );
+  {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
+      {selectedSubcontractorForDetail && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">{selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name}</h3>
+                <span className="text-xs text-slate-500 font-mono">Vergi No: {selectedSubcontractorForDetail.tax_number || '-'} • IBAN: {selectedSubcontractorForDetail.iban || 'Belirtilmedi'}</span>
+              </div>
+              <button onClick={() => setSelectedSubcontractorForDetail(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="py-4 flex-1 overflow-y-auto space-y-4 text-xs">
+              <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 flex justify-between items-center">
+                <div>
+                  <span className="text-blue-900 font-semibold block">Cari Hesap Özeti</span>
+                  <span className="text-[11px] text-blue-700">Tüm fatura ve avans mahsupları</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-lg font-black text-blue-900">0,00 ₺</span>
+                  <span className="text-[10px] text-blue-700 block">Güncel Bakiye</span>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-slate-800 mb-2">Geçmiş Cari Hareketler (Faturalar ve Avanslar)</h4>
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="py-2.5 px-3">Tarih</th>
+                        <th className="py-2.5 px-3">İşlem Türü / Açıklama</th>
+                        <th className="py-2.5 px-3 text-right">Tutar</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td colSpan={3} className="py-4 text-center text-slate-400 italic">Henüz kaydedilmiş hareket bulunmuyor.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button type="button" onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 rounded-lg bg-slate-800 text-white font-medium text-xs">Kapat</button>
+            </div>
+          </div>
+        </div>
+      )}
 }
