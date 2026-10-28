@@ -2948,7 +2948,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     <th className="py-3 px-3 text-right">Güncel Bakiye</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100">
                   {dbSubcontractors.map((sub: any) => {
                     const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === sub.id);
                     
@@ -2970,6 +2970,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       </tr>
                     );
                   })}
+                </tbody>
         {/* 4. TAŞERON IBAN YÖNETİMİ */}
         {activeTab === 'sub_ibans' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
