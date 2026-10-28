@@ -2073,10 +2073,11 @@ export default function App() {
     );
   }
 
-  const menuItems = [
+ const menuItems = [
     { id: 'overview', label: 'Genel Görünüm', icon: LayoutDashboard },
     { id: 'sales_customers', label: 'Satış & Müşteriler', badge: salesDetailedList.length, icon: TrendingUp },
     { id: 'subcontractors', label: 'Alt Yüklenici Hakedişleri', badge: dbInvoices.filter(i => i.category === 'subcontractor_invoice').length, icon: Users },
+    { id: 'sub_accounts', label: 'Alt Yüklenici Cari Kartları', badge: dbSubcontractors.length, icon: Building2 },
     { id: 'sub_ibans', label: 'Taşeron IBAN Yönetimi', badge: dbSubcontractors.length, icon: Wallet },
     { id: 'payments', label: 'Banka Ödeme Talimatı', icon: FileCheck2 },
     { id: 'employees', label: 'Personel & Bordro', badge: dbEmployees.length, icon: UserCheck },
