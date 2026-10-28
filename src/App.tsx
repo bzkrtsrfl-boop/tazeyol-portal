@@ -95,6 +95,7 @@ export default function App() {
 
   const isAdmin = currentUserRole === 'admin';
 
+  
   // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<
