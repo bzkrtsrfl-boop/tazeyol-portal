@@ -3033,9 +3033,19 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
 
                       // 3. Banka Ödeme Talimatları (Payment Batches)
                       (dbPaymentBatches || []).forEach(batch => {
-                        const batchTitle = String(batch.subcontractor_name || '').toLocaleLowerCase('tr-TR');
-                        if (batchTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && batchTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
-                          totalOut += cleanNumber(batch.amount || batch.total_amount || 0);
+                        const batchStr = JSON.stringify(batch).toLocaleLowerCase('tr-TR');
+                        const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
+                        const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
+                        const firstNamePart = subNameLower.split(' ')[0];
+
+                        const isMatch = 
+                          batchStr.includes(subNameLower) || 
+                          (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) ||
+                          (firstNamePart.length >= 3 && batchStr.includes(firstNamePart)) ||
+                          (batch.subcontractor_id && String(batch.subcontractor_id) === String(sub.id));
+
+                        if (isMatch) {
+                          totalOut += cleanNumber(batch.amount || batch.total_amount || batch.paid_amount || 0);
                         }
                       });
 
