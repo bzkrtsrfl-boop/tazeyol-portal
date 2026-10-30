@@ -102,6 +102,9 @@ export default function App() {
     'overview' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
   >('overview');
   const [subSearchTerm, setSubSearchTerm] = useState('');
+  const [ledgerSearchTerm, setLedgerSearchTerm] = useState('');
+  const [ledgerSortField, setLedgerSortField] = useState<'name' | 'tax' | 'balance'>('name');
+  const [ledgerSortOrder, setLedgerSortOrder] = useState<'asc' | 'desc'>('asc');
   const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
   const [subSortField, setSubSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
   const [subSortOrder, setSubSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -2940,39 +2943,119 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             </div>
 
             <div className="overflow-x-auto">
+              {/* ARAMA VE FİLTRE ÇUBUĞU */}
+            <div className="flex flex-col sm:flex-row gap-3 items-center justify-between mb-2 mt-2">
+              <div className="relative w-full sm:w-80">
+                <input
+                  type="text"
+                  placeholder="Taşeron adı veya vergi no ile filtrele..."
+                  value={ledgerSearchTerm}
+                  onChange={(e) => setLedgerSearchTerm(e.target.value)}
+                  className="w-full text-xs pl-8 pr-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 transition-colors"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Firma / Taşeron Adı</th>
-                    <th className="py-3 px-3">Vergi Numarası</th>
+                    <th 
+                      className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (ledgerSortField === 'name') setLedgerSortOrder(ledgerSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setLedgerSortField('name'); setLedgerSortOrder('asc'); }
+                      }}>
+                      Firma / Taşeron Adı {ledgerSortField === 'name' ? (ledgerSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
+                    <th 
+                      className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (ledgerSortField === 'tax') setLedgerSortOrder(ledgerSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setLedgerSortField('tax'); setLedgerSortOrder('asc'); }
+                      }}>
+                      Vergi Numarası {ledgerSortField === 'tax' ? (ledgerSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
                     <th className="py-3 px-3">Kayıtlı IBAN</th>
                     <th className="py-3 px-3 text-right">Toplam Fatura</th>
                     <th className="py-3 px-3 text-right">Yapılan Ödeme / Avans</th>
-                    <th className="py-3 px-3 text-right">Güncel Bakiye</th>
+                    <th 
+                      className="py-3 px-3 text-right cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (ledgerSortField === 'balance') setLedgerSortOrder(ledgerSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setLedgerSortField('balance'); setLedgerSortOrder('desc'); }
+                      }}>
+                      Güncel Bakiye {ledgerSortField === 'balance' ? (ledgerSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
                   </tr>
                 </thead>
-              <tbody className="divide-y divide-slate-100">
-                  {dbSubcontractors.map((sub: any) => {
-                    const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === sub.id);
-                    
-                    const totalInvoice = subLedgers.filter((l: any) => l.transaction_type === 'invoice').reduce((sum: number, l: any) => sum + cleanNumber(l.amount), 0);
-                    const totalAdvance = subLedgers.filter((l: any) => l.transaction_type === 'advance').reduce((sum: number, l: any) => sum + cleanNumber(l.amount), 0);
-                    const totalPayment = subLedgers.filter((l: any) => l.transaction_type === 'payment').reduce((sum: number, l: any) => sum + cleanNumber(l.amount), 0);
-                    
-                    const totalOut = totalAdvance + totalPayment;
-                    const balance = totalInvoice - totalOut;
+                <tbody className="divide-y divide-slate-100">
+                  {dbSubcontractors
+                    .map((sub: any) => {
+                      const subNameLower = (sub.company_name || sub.name || '').toLocaleLowerCase('tr-TR').trim();
+                      const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
 
-                    return (
+                      let totalInvoice = 0;
+                      let totalOut = 0;
+                      let foundTaxNumber = sub.tax_number || '';
+
+                      dbInvoices.forEach(inv => {
+                        if (inv.category === 'subcontractor_invoice') {
+                          const invTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
+                          if (invTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                            totalInvoice += cleanNumber(inv.total_amount);
+                            if (!foundTaxNumber && inv.tax_number) foundTaxNumber = inv.tax_number;
+                          }
+                        } else if (inv.category === 'subcontractor_advance_paid' || inv.category === 'subcontractor_paid_outflow') {
+                          const outTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
+                          if (outTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && outTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                            totalOut += cleanNumber(inv.total_amount);
+                          }
+                        }
+                      });
+
+                      dbAdvances.forEach(adv => {
+                        if (adv.target_type === 'contractor') {
+                          const advTitle = String(adv.target_name || adv.target_id || '').toLocaleLowerCase('tr-TR');
+                          if (advTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && advTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                            totalOut += cleanNumber(adv.total_amount);
+                          }
+                        }
+                      });
+
+                      const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === sub.id);
+                      subLedgers.forEach((l: any) => {
+                        if (l.transaction_type === 'invoice') totalInvoice += cleanNumber(l.amount);
+                        if (l.transaction_type === 'advance' || l.transaction_type === 'payment') totalOut += cleanNumber(l.amount);
+                      });
+
+                      const balance = totalInvoice - totalOut;
+
+                      return { ...sub, computedTax: foundTaxNumber, totalInvoice, totalOut, balance };
+                    })
+                    .filter((item) => {
+                      if (!ledgerSearchTerm) return true;
+                      const term = ledgerSearchTerm.toLowerCase();
+                      return (item.name || '').toLowerCase().includes(term) || (item.computedTax || '').toLowerCase().includes(term);
+                    })
+                    .sort((a, b) => {
+                      let comp = 0;
+                      if (ledgerSortField === 'name') comp = (a.name || '').localeCompare(b.name || '', 'tr-TR', { sensitivity: 'base' });
+                      else if (ledgerSortField === 'tax') comp = (a.computedTax || '').localeCompare(b.computedTax || '', 'tr-TR');
+                      else if (ledgerSortField === 'balance') comp = a.balance - b.balance;
+                      return ledgerSortOrder === 'asc' ? comp : -comp;
+                    })
+                    .map((sub: any) => (
                       <tr key={sub.id} onClick={() => setSelectedSubcontractorForDetail(sub)} className="hover:bg-blue-50/50 cursor-pointer transition">
                         <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
-                        <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_number || '-'}</td>
+                        <td className="py-3 px-3 font-mono text-slate-600">{sub.computedTax || '-'}</td>
                         <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
-                        <td className="py-3 px-3 text-right font-bold text-slate-900">{totalInvoice.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3 px-3 text-right font-bold text-amber-600">{totalOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3 px-3 text-right font-black text-emerald-600 text-sm">{balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-3 px-3 text-right font-bold text-slate-900">{sub.totalInvoice.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-3 px-3 text-right font-bold text-amber-600">{sub.totalOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-3 px-3 text-right font-black text-emerald-600 text-sm">{sub.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                       </tr>
-                    );
-                  })}
+                    ))}
                 </tbody>
               </table>
             </div>
