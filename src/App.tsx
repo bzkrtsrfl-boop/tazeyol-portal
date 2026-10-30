@@ -5283,9 +5283,11 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       }
                     });
 
-                  // 4. Banka Ödeme Talimatları (Payment Batches - Tüm Alanlarda Akıllı Arama)
+                  // 4. Banka Ödeme Talimatları (Payment Batches - Kesin Eşleşme)
                     (dbPaymentBatches || []).forEach((batch, idx) => {
                       const batchStr = JSON.stringify(batch).toLocaleLowerCase('tr-TR');
+                      const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
+                      const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
                       const firstNamePart = subNameLower.split(' ')[0];
                       
                       const isBatchMatch = 
