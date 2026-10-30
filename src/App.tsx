@@ -5209,38 +5209,105 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     <th className="py-2.5 px-3 text-center">İşlem</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
+               <tbody className="divide-y divide-slate-100 bg-white">
                   {(() => {
-                    const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id);
-                    if (subLedgers.length === 0) {
+                    const subNameLower = (selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '').toLocaleLowerCase('tr-TR').trim();
+                    const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
+                    let combinedTx: any[] = [];
+
+                    // 1. Manuel Ledger Kayıtları
+                    (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id).forEach(l => {
+                      combinedTx.push({
+                        id: 'ledger_' + l.id,
+                        date: l.created_at || '-',
+                        type: l.transaction_type === 'invoice' ? 'Fatura (Borç)' : (l.transaction_type === 'advance' ? 'Avans (Borç)' : 'Ödeme (Alacak)'),
+                        desc: l.description || 'Manuel İşlem',
+                        amount: cleanNumber(l.amount),
+                        isManual: true,
+                        rawId: l.id
+                      });
+                    });
+
+                    // 2. Faturalar
+                    (dbInvoices || []).forEach(inv => {
+                      if (inv.category === 'subcontractor_invoice') {
+                        const invTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
+                        if (invTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                          combinedTx.push({
+                            id: 'inv_' + inv.id,
+                            date: inv.issue_date || '-',
+                            type: 'Fatura',
+                            desc: 'Fatura No: ' + (inv.invoice_no || '-'),
+                            amount: cleanNumber(inv.total_amount),
+                            isManual: false
+                          });
+                        }
+                      }
+                    });
+
+                    // 3. Banka Ödeme Talimatları
+                    (dbPaymentBatches || []).forEach((batch, idx) => {
+                      const batchTitle = String(batch.subcontractor_name || '').toLocaleLowerCase('tr-TR');
+                      if (batchTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && batchTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                        combinedTx.push({
+                          id: 'batch_' + idx,
+                          date: batch.created_at || '-',
+                          type: 'Banka Ödemesi',
+                          desc: 'Banka Toplu Ödeme Talimatı',
+                          amount: cleanNumber(batch.amount || batch.total_amount || 0),
+                          isManual: false
+                        });
+                      }
+                    });
+
+                    // 4. Taksitli Avanslar
+                    (dbAdvanceInstallments || []).forEach((inst, idx) => {
+                      if (inst.subcontractor_id === selectedSubcontractorForDetail.id || String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR').includes(subNameLower)) {
+                        combinedTx.push({
+                          id: 'inst_' + idx,
+                          date: inst.created_at || '-',
+                          type: 'Taksitli Avans',
+                          desc: 'Avans Taksidi Ödemesi',
+                          amount: cleanNumber(inst.amount || 0),
+                          isManual: false
+                        });
+                      }
+                    });
+
+                    if (combinedTx.length === 0) {
                       return (
                         <tr>
-                          <td colSpan={5} className="py-6 text-center text-slate-400 italic">Henüz manuel kaydedilmiş hareket bulunmuyor.</td>
+                          <td colSpan={5} className="py-6 text-center text-slate-400 italic">Bu taşerona ait kayıt bulunamadı.</td>
                         </tr>
                       );
                     }
-                    return subLedgers.map((l: any) => (
-                      <tr key={l.id} className="hover:bg-slate-50 transition">
-                        <td className="py-2.5 px-3 text-slate-500">{new Date(l.created_at).toLocaleDateString('tr-TR')}</td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-700 capitalize">{l.transaction_type}</td>
-                        <td className="py-2.5 px-3 text-slate-600">{l.description || '-'}</td>
-                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{cleanNumber(l.amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+
+                    return combinedTx.map((tx: any) => (
+                      <tr key={tx.id} className="hover:bg-slate-50 transition">
+                        <td className="py-2.5 px-3 text-slate-500">{tx.date !== '-' ? new Date(tx.date).toLocaleDateString('tr-TR') : '-'}</td>
+                        <td className="py-2.5 px-3 font-semibold text-slate-700">{tx.type}</td>
+                        <td className="py-2.5 px-3 text-slate-600">{tx.desc}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{tx.amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                         <td className="py-2.5 px-3 text-center">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (!confirm('Bu hareketi silmek istediğinize emin misiniz?')) return;
-                              try {
-                                const { error } = await supabase.from('subcontractor_ledger').delete().eq('id', l.id);
-                                if (error) throw error;
-                                alert('Hareket silindi.');
-                                loadPortalData();
-                                setSelectedSubcontractorForDetail(null);
-                              } catch (err: any) { alert('Silme hatası: ' + err.message); }
-                            }}
-                            className="text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded bg-red-50 hover:bg-red-100 transition">
-                            Sil
-                          </button>
+                          {tx.isManual ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!confirm('Bu hareketi silmek istediğinize emin misiniz?')) return;
+                                try {
+                                  const { error } = await supabase.from('subcontractor_ledger').delete().eq('id', tx.rawId);
+                                  if (error) throw error;
+                                  alert('Hareket silindi.');
+                                  loadPortalData();
+                                  setSelectedSubcontractorForDetail(null);
+                                } catch (err: any) { alert('Silme hatası: ' + err.message); }
+                              }}
+                              className="text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded bg-red-50 hover:bg-red-100 transition">
+                              Sil
+                            </button>
+                          ) : (
+                            <span className="text-slate-400 text-xs">Otomatik</span>
+                          )}
                         </td>
                       </tr>
                     ));
