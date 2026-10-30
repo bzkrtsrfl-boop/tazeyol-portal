@@ -5119,14 +5119,38 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <h3 className="font-bold text-slate-900 text-lg">{selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name}</h3>
             <span className="text-sm text-slate-500 font-mono">Vergi No: {selectedSubcontractorForDetail.computedTax || '-'} • IBAN: {selectedSubcontractorForDetail.iban || 'Belirtilmedi'}</span>
           </div>
-          <button onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition">Kapat</button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const subName = selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name;
+                let csvContent = "data:text/csv;charset=utf-8,Tarih;İşlem Türü;Açıklama;Tutar (TL)\n";
+                
+                const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id);
+                subLedgers.forEach((l: any) => {
+                  csvContent += `${l.created_at || '-'};${l.transaction_type};"${l.description || ''}";${l.amount}\n`;
+                });
+
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `${subName}_cari_dokum.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+              }}
+              className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border border-emerald-200">
+              📥 Cari Döküm (Excel)
+            </button>
+            <button onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition">Kapat</button>
+          </div>
         </div>
 
         <div className="py-4 flex-1 overflow-y-auto space-y-4 text-sm">
           <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-4 flex justify-between items-center">
             <div>
               <span className="text-blue-900 font-semibold block text-base">Cari Hesap Özeti</span>
-              <span className="text-xs text-blue-700">Tüm fatura, avans ve ödeme mahsupları</span>
+              <span className="text-xs text-blue-700">Tüm fatura, avans ve banka ödemeleri mahsuplanmıştır</span>
             </div>
             <div className="text-right">
               <span className="text-xl font-black text-blue-900">{selectedSubcontractorForDetail.balance?.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) || '0,00'} ₺</span>
@@ -5161,14 +5185,69 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     description: descEl.value || 'Cari Hareket'
                   }]);
                   if (error) throw error;
-                  alert('Hareket kaydedildi!');
+                  alert('Hareket başarıyla kaydedildi!');
                   amountEl.value = ''; descEl.value = '';
                   loadPortalData();
+                  setSelectedSubcontractorForDetail(null);
                 } catch (err: any) { alert('Hata: ' + err.message); }
               }}
               className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition shadow-sm">
               Hareketi Kaydet
             </button>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="font-bold text-slate-800">Geçmiş Cari Hareketler</h4>
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Tarih</th>
+                    <th className="py-2.5 px-3">İşlem Türü</th>
+                    <th className="py-2.5 px-3">Açıklama</th>
+                    <th className="py-2.5 px-3 text-right">Tutar</th>
+                    <th className="py-2.5 px-3 text-center">İşlem</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {(() => {
+                    const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id);
+                    if (subLedgers.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={5} className="py-6 text-center text-slate-400 italic">Henüz manuel kaydedilmiş hareket bulunmuyor.</td>
+                        </tr>
+                      );
+                    }
+                    return subLedgers.map((l: any) => (
+                      <tr key={l.id} className="hover:bg-slate-50 transition">
+                        <td className="py-2.5 px-3 text-slate-500">{new Date(l.created_at).toLocaleDateString('tr-TR')}</td>
+                        <td className="py-2.5 px-3 font-semibold text-slate-700 capitalize">{l.transaction_type}</td>
+                        <td className="py-2.5 px-3 text-slate-600">{l.description || '-'}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{cleanNumber(l.amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!confirm('Bu hareketi silmek istediğinize emin misiniz?')) return;
+                              try {
+                                const { error } = await supabase.from('subcontractor_ledger').delete().eq('id', l.id);
+                                if (error) throw error;
+                                alert('Hareket silindi.');
+                                loadPortalData();
+                                setSelectedSubcontractorForDetail(null);
+                              } catch (err: any) { alert('Silme hatası: ' + err.message); }
+                            }}
+                            className="text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded bg-red-50 hover:bg-red-100 transition">
+                            Sil
+                          </button>
+                        </td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
