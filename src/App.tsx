@@ -133,6 +133,7 @@ export default function App() {
   const [dbAdvances, setDbAdvances] = useState<any[]>([]);
   const [dbCreditCards, setDbCreditCards] = useState<any[]>([]);
   const [dbSubcontractors, setDbSubcontractors] = useState<any[]>([]);
+  const [dbSubcontractorsLedger, setDbSubcontractorsLedger] = useState<any[]>([]);
   const [dbProfitability, setDbProfitability] = useState<any[]>([
     { id: 1, month_year: 'Eyl.26', plate_number: '34BHC220', recon_net: 283691.96, invoice_rev: 329082.67, driver_sal: 82500.00, fuel_ex_vat: 78408.74, hgs_ex_vat: 31397.45, bonus: 0, sgk: 11148.00, other_exp: 1000.00 },
     { id: 2, month_year: 'Eyl.26', plate_number: '34CKL472', recon_net: 305726.86, invoice_rev: 354643.16, driver_sal: 82500.00, fuel_ex_vat: 80480.16, hgs_ex_vat: 41648.61, bonus: 0, sgk: 11148.00, other_exp: 3000.00 },
@@ -155,6 +156,7 @@ export default function App() {
       const { data: advData } = await supabase.from('advance_payments').select('*').order('created_at', { ascending: false });
       const { data: ccData } = await supabase.from('credit_cards').select('*').order('due_date', { ascending: true });
       const { data: subData } = await supabase.from('subcontractors').select('*').order('name', { ascending: true });
+      const { data: ledgerData } = await supabase.from('subcontractor_ledger').select('*');
       const { data: empTxData } = await supabase.from('employee_transactions').select('*').order('created_at', { ascending: false });
 
       if (vData) setDbVehicles(vData);
@@ -163,6 +165,7 @@ export default function App() {
       if (advData) setDbAdvances(advData);
       if (ccData) setDbCreditCards(ccData);
       if (subData) setDbSubcontractors(subData);
+      if (ledgerData) setDbSubcontractorsLedger(ledgerData);
       if (empTxData) setDbEmployeeTransactions(empTxData);
     } catch (err) {
       console.error('Yükleme hatası:', err);
