@@ -137,6 +137,8 @@ export default function App() {
   const [dbCreditCards, setDbCreditCards] = useState<any[]>([]);
   const [dbSubcontractors, setDbSubcontractors] = useState<any[]>([]);
   const [dbSubcontractorsLedger, setDbSubcontractorsLedger] = useState<any[]>([]);
+  const [dbPaymentBatches, setDbPaymentBatches] = useState<any[]>([]);
+  const [dbAdvanceInstallments, setDbAdvanceInstallments] = useState<any[]>([]);
   const [dbProfitability, setDbProfitability] = useState<any[]>([
     { id: 1, month_year: 'Eyl.26', plate_number: '34BHC220', recon_net: 283691.96, invoice_rev: 329082.67, driver_sal: 82500.00, fuel_ex_vat: 78408.74, hgs_ex_vat: 31397.45, bonus: 0, sgk: 11148.00, other_exp: 1000.00 },
     { id: 2, month_year: 'Eyl.26', plate_number: '34CKL472', recon_net: 305726.86, invoice_rev: 354643.16, driver_sal: 82500.00, fuel_ex_vat: 80480.16, hgs_ex_vat: 41648.61, bonus: 0, sgk: 11148.00, other_exp: 3000.00 },
@@ -153,6 +155,10 @@ export default function App() {
   const loadPortalData = async () => {
     setLoading(true);
     try {
+      const { data: batchData } = await supabase.from('payment_batches').select('*');
+      const { data: instData } = await supabase.from('advance_installments').select('*');
+      if (batchData) setDbPaymentBatches(batchData);
+      if (instData) setDbAdvanceInstallments(instData);
       const { data: vData } = await supabase.from('vehicles').select('*').order('id', { ascending: true });
       const { data: invData } = await supabase.from('invoices').select('*').order('created_at', { ascending: false });
       const { data: empData } = await supabase.from('employees').select('*').order('id', { ascending: true });
@@ -2999,6 +3005,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       let totalOut = 0;
                       let foundTaxNumber = sub.tax_number || '';
 
+                      // 1. Fatura ve Çıkışlar
                       dbInvoices.forEach(inv => {
                         if (inv.category === 'subcontractor_invoice') {
                           const invTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
@@ -3014,6 +3021,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                         }
                       });
 
+                      // 2. Standart Avanslar
                       dbAdvances.forEach(adv => {
                         if (adv.target_type === 'contractor') {
                           const advTitle = String(adv.target_name || adv.target_id || '').toLocaleLowerCase('tr-TR');
@@ -3023,6 +3031,22 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                         }
                       });
 
+                      // 3. Banka Ödeme Talimatları (Payment Batches)
+                      (dbPaymentBatches || []).forEach(batch => {
+                        const batchTitle = String(batch.subcontractor_name || '').toLocaleLowerCase('tr-TR');
+                        if (batchTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && batchTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                          totalOut += cleanNumber(batch.amount || batch.total_amount || 0);
+                        }
+                      });
+
+                      // 4. Taksitli Avanslar (Advance Installments)
+                      (dbAdvanceInstallments || []).forEach(inst => {
+                        if (inst.subcontractor_id === sub.id || String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR').includes(subNameLower)) {
+                          totalOut += cleanNumber(inst.amount || 0);
+                        }
+                      });
+
+                      // 5. Manuel Ledger Hareketleri
                       const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === sub.id);
                       subLedgers.forEach((l: any) => {
                         if (l.transaction_type === 'invoice') totalInvoice += cleanNumber(l.amount);
@@ -5086,40 +5110,40 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
     </div>
  )}
 
-  {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
+ {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
   {selectedSubcontractorForDetail && (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
         <div className="flex justify-between items-center pb-4 border-b border-slate-100">
           <div>
-            <h3 className="font-bold text-slate-900 text-base">{selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name}</h3>
-            <span className="text-xs text-slate-500 font-mono">Vergi No: {selectedSubcontractorForDetail.tax_number || '-'} • IBAN: {selectedSubcontractorForDetail.iban || 'Belirtilmedi'}</span>
+            <h3 className="font-bold text-slate-900 text-lg">{selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name}</h3>
+            <span className="text-sm text-slate-500 font-mono">Vergi No: {selectedSubcontractorForDetail.computedTax || '-'} • IBAN: {selectedSubcontractorForDetail.iban || 'Belirtilmedi'}</span>
           </div>
-          <button onClick={() => setSelectedSubcontractorForDetail(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+          <button onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition">Kapat</button>
         </div>
 
-        <div className="py-4 flex-1 overflow-y-auto space-y-4 text-xs">
-          <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 flex justify-between items-center">
+        <div className="py-4 flex-1 overflow-y-auto space-y-4 text-sm">
+          <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-4 flex justify-between items-center">
             <div>
-              <span className="text-blue-900 font-semibold block">Cari Hesap Özeti</span>
-              <span className="text-[11px] text-blue-700">Tüm fatura ve avans mahsupları</span>
+              <span className="text-blue-900 font-semibold block text-base">Cari Hesap Özeti</span>
+              <span className="text-xs text-blue-700">Tüm fatura, avans ve ödeme mahsupları</span>
             </div>
             <div className="text-right">
-              <span className="text-lg font-black text-blue-900">0,00 ₺</span>
-              <span className="text-[10px] text-blue-700 block">Güncel Bakiye</span>
+              <span className="text-xl font-black text-blue-900">{selectedSubcontractorForDetail.balance?.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) || '0,00'} ₺</span>
+              <span className="text-xs text-blue-700 block mt-0.5">Güncel Bakiye</span>
             </div>
           </div>
 
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-            <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle (Avans / Ödeme / Fatura)</span>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <select id="sub_tx_type" className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white font-medium">
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <select id="sub_tx_type" className="px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-sm">
                 <option value="advance">Avans Verildi (Borç)</option>
                 <option value="payment">Ödeme Yapıldı (Alacak)</option>
                 <option value="invoice">Fatura Eklendi (Borç)</option>
               </select>
-              <input id="sub_tx_amount" type="number" placeholder="Tutar (TL)" className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white font-bold text-slate-800" />
-              <input id="sub_tx_desc" type="text" placeholder="Açıklama / Belge No" className="px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white" />
+              <input id="sub_tx_amount" type="number" placeholder="Tutar (TL)" className="px-3 py-2 border border-slate-200 rounded-lg bg-white font-bold text-slate-800 text-sm" />
+              <input id="sub_tx_desc" type="text" placeholder="Açıklama / Belge No" className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm" />
             </div>
             <button
               type="button"
@@ -5127,13 +5151,8 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 const typeEl = document.getElementById('sub_tx_type') as HTMLSelectElement;
                 const amountEl = document.getElementById('sub_tx_amount') as HTMLInputElement;
                 const descEl = document.getElementById('sub_tx_desc') as HTMLInputElement;
-
                 const amt = cleanNumber(amountEl.value);
-                if (amt <= 0) {
-                  alert('Lütfen geçerli bir tutar giriniz.');
-                  return;
-                }
-
+                if (amt <= 0) return alert('Lütfen geçerli bir tutar giriniz.');
                 try {
                   const { error } = await supabase.from('subcontractor_ledger').insert([{
                     subcontractor_id: selectedSubcontractorForDetail.id,
@@ -5141,49 +5160,20 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     amount: amt,
                     description: descEl.value || 'Cari Hareket'
                   }]);
-
                   if (error) throw error;
-                  alert('Cari hareket başarıyla eklendi!');
-                  amountEl.value = '';
-                  descEl.value = '';
+                  alert('Hareket kaydedildi!');
+                  amountEl.value = ''; descEl.value = '';
                   loadPortalData();
-                } catch (err: any) {
-                  alert('Kayıt ekleme hatası: ' + err.message);
-                }
+                } catch (err: any) { alert('Hata: ' + err.message); }
               }}
-              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition shadow-xs">
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition shadow-sm">
               Hareketi Kaydet
             </button>
           </div>
-
-          <div>
-            <h4 className="font-bold text-slate-800 mb-2">Geçmiş Cari Hareketler</h4>
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                  <tr>
-                    <th className="py-2.5 px-3">Tarih</th>
-                    <th className="py-2.5 px-3">İşlem Türü / Açıklama</th>
-                    <th className="py-2.5 px-3 text-right">Tutar</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td colSpan={3} className="py-4 text-center text-slate-400 italic">Henüz kaydedilmiş hareket bulunmuyor.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <div className="pt-3 border-t border-slate-100 flex justify-end">
-          <button type="button" onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 rounded-lg bg-slate-800 text-white font-medium text-xs">Kapat</button>
         </div>
       </div>
     </div>
   )}
-
   </main>
 </div>
   );
