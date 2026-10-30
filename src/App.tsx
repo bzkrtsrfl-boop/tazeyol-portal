@@ -5241,10 +5241,8 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     // 2. Faturalar ve Fatura Altındaki Çıkışlar
                     (dbInvoices || []).forEach(inv => {
                       const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
-                      const firstNamePart = subNameLower.split(' ')[0];
                       const isMatch = invTitle.includes(subNameLower) || 
-                                      (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey)) ||
-                                      (firstNamePart.length >= 3 && invTitle.includes(firstNamePart));
+                                      (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey));
 
                       if (isMatch) {
                         if (inv.category === 'subcontractor_invoice') {
@@ -5294,16 +5292,13 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     });
 
                   // 4. Banka Ödeme Talimatları (Payment Batches - Kesin Eşleşme)
-                    (dbPaymentBatches || []).forEach((batch, idx) => {
-                      const batchStr = JSON.stringify(batch).toLocaleLowerCase('tr-TR');
+                  (dbPaymentBatches || []).forEach((batch, idx) => {
                       const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
                       const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
-                      const firstNamePart = subNameLower.split(' ')[0];
                       
                       const isBatchMatch = 
-                        batchStr.includes(subNameLower) || 
-                        (cleanSubKey.length >= 4 && batchStr.includes(cleanSubKey)) || 
-                        (firstNamePart.length >= 3 && batchStr.includes(firstNamePart)) ||
+                        batchTitle.includes(subNameLower) || 
+                        (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) || 
                         (batch.subcontractor_id && String(batch.subcontractor_id) === String(selectedSubcontractorForDetail.id));
 
                       if (isBatchMatch) {
