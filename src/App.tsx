@@ -2942,8 +2942,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              {/* ARAMA VE FİLTRE ÇUBUĞU */}
+            {/* ARAMA VE FİLTRE ÇUBUĞU */}
             <div className="flex flex-col sm:flex-row gap-3 items-center justify-between mb-2 mt-2">
               <div className="relative w-full sm:w-80">
                 <input
@@ -3034,12 +3033,12 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
 
                       return { ...sub, computedTax: foundTaxNumber, totalInvoice, totalOut, balance };
                     })
-                    .filter((item) => {
+                    .filter((item: any) => {
                       if (!ledgerSearchTerm) return true;
                       const term = ledgerSearchTerm.toLowerCase();
                       return (item.name || '').toLowerCase().includes(term) || (item.computedTax || '').toLowerCase().includes(term);
                     })
-                    .sort((a, b) => {
+                    .sort((a: any, b: any) => {
                       let comp = 0;
                       if (ledgerSortField === 'name') comp = (a.name || '').localeCompare(b.name || '', 'tr-TR', { sensitivity: 'base' });
                       else if (ledgerSortField === 'tax') comp = (a.computedTax || '').localeCompare(b.computedTax || '', 'tr-TR');
