@@ -5211,7 +5211,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </thead>
                <tbody className="divide-y divide-slate-100 bg-white">
                   {(() => {
-                   const subNameLower = (selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '').toLocaleLowerCase('tr-TR').trim();
+                  const subNameLower = (selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '').toLocaleLowerCase('tr-TR').trim();
                     const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
                     let combinedTx: any[] = [];
 
@@ -5228,16 +5228,16 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       });
                     });
 
-                    // 2. Faturalar
+                    // 2. Faturalar ve Fatura Altındaki Çıkışlar
                     (dbInvoices || []).forEach(inv => {
-                      if (inv.category === 'subcontractor_invoice') {
-                        const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
-                        const firstNamePart = subNameLower.split(' ')[0];
-                        if (
-                          invTitle.includes(subNameLower) || 
-                          (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey)) ||
-                          (firstNamePart.length >= 3 && invTitle.includes(firstNamePart))
-                        ) {
+                      const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
+                      const firstNamePart = subNameLower.split(' ')[0];
+                      const isMatch = invTitle.includes(subNameLower) || 
+                                      (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey)) ||
+                                      (firstNamePart.length >= 3 && invTitle.includes(firstNamePart));
+
+                      if (isMatch) {
+                        if (inv.category === 'subcontractor_invoice') {
                           combinedTx.push({
                             id: 'inv_' + inv.id,
                             date: inv.issue_date || inv.created_at || '-',
@@ -5246,11 +5246,44 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                             amount: cleanNumber(inv.total_amount),
                             isManual: false
                           });
+                        } else if (inv.category === 'subcontractor_advance_paid' || inv.category === 'subcontractor_paid_outflow') {
+                          combinedTx.push({
+                            id: 'out_' + inv.id,
+                            date: inv.issue_date || inv.created_at || '-',
+                            type: 'Ödeme / Çıkış',
+                            desc: inv.description || 'Alt Yüklenici Ödeme Çıkışı',
+                            amount: cleanNumber(inv.total_amount),
+                            isManual: false
+                          });
                         }
                       }
                     });
 
-                    // 3. Banka Ödeme Talimatları (Esnek Eşleşme)
+                    // 3. Standart Avanslar (dbAdvances) - Eksik olan kısım burasıydı!
+                    (dbAdvances || []).forEach((adv, idx) => {
+                      if (adv.target_type === 'contractor') {
+                        const advTitle = String(adv.target_name || adv.target_id || '').toLocaleLowerCase('tr-TR');
+                        const cleanAdvKey = advTitle.replace(/[^a-z0-9]/g, '');
+                        const advFirstPart = subNameLower.split(' ')[0];
+                        if (
+                          advTitle.includes(subNameLower) || 
+                          (cleanSubKey.length >= 4 && cleanAdvKey.includes(cleanSubKey)) ||
+                          (advFirstPart.length >= 3 && advTitle.includes(advFirstPart)) ||
+                          (String(adv.target_id) === String(selectedSubcontractorForDetail.id))
+                        ) {
+                          combinedTx.push({
+                            id: 'adv_' + (adv.id || idx),
+                            date: adv.created_at || adv.date || '-',
+                            type: 'Avans',
+                            desc: adv.description || 'Verilen Avans',
+                            amount: cleanNumber(adv.total_amount || adv.amount || 0),
+                            isManual: false
+                          });
+                        }
+                      }
+                    });
+
+                    // 4. Banka Ödeme Talimatları (Payment Batches)
                     (dbPaymentBatches || []).forEach((batch, idx) => {
                       const batchTitle = String(batch.subcontractor_name || batch.name || '').toLocaleLowerCase('tr-TR');
                       const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
@@ -5265,14 +5298,14 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                           id: 'batch_' + idx,
                           date: batch.created_at || batch.date || '-',
                           type: 'Banka Ödemesi',
-                          desc: 'Banka Toplu Ödeme Talimatı',
+                          desc: batch.description || 'Banka Toplu Ödeme Talimatı',
                           amount: cleanNumber(batch.amount || batch.total_amount || 0),
                           isManual: false
                         });
                       }
                     });
 
-                    // 4. Taksitli Avanslar
+                    // 5. Taksitli Avanslar (Advance Installments)
                     (dbAdvanceInstallments || []).forEach((inst, idx) => {
                       const instTitle = String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR');
                       const instFirstPart = subNameLower.split(' ')[0];
@@ -5284,12 +5317,13 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                           id: 'inst_' + idx,
                           date: inst.created_at || '-',
                           type: 'Taksitli Avans',
-                          desc: 'Avans Taksidi Ödemesi',
+                          desc: inst.description || 'Avans Taksidi Ödemesi',
                           amount: cleanNumber(inst.amount || 0),
                           isManual: false
                         });
                       }
                     });
+                    
                     if (combinedTx.length === 0) {
                       return (
                         <tr>
