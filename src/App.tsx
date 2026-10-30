@@ -5283,17 +5283,15 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       }
                     });
 
-                    // 4. Banka Ödeme Talimatları (Payment Batches)
-                   (dbPaymentBatches || []).forEach((batch, idx) => {
-                      const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
-                      const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
-                      const batchFirstPart = subNameLower.split(' ')[0];
+                  // 4. Banka Ödeme Talimatları (Payment Batches - Tüm Alanlarda Akıllı Arama)
+                    (dbPaymentBatches || []).forEach((batch, idx) => {
+                      const batchStr = JSON.stringify(batch).toLocaleLowerCase('tr-TR');
+                      const firstNamePart = subNameLower.split(' ')[0];
                       
                       const isBatchMatch = 
-                        batchTitle.includes(subNameLower) || 
-                        subNameLower.includes(batchTitle) ||
-                        (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) || 
-                        (batchFirstPart.length >= 3 && batchTitle.includes(batchFirstPart)) ||
+                        batchStr.includes(subNameLower) || 
+                        (cleanSubKey.length >= 4 && batchStr.includes(cleanSubKey)) || 
+                        (firstNamePart.length >= 3 && batchStr.includes(firstNamePart)) ||
                         (batch.subcontractor_id && String(batch.subcontractor_id) === String(selectedSubcontractorForDetail.id));
 
                       if (isBatchMatch) {
@@ -5301,7 +5299,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                           id: 'batch_' + (batch.id || idx),
                           date: batch.created_at || batch.date || batch.payment_date || '-',
                           type: 'Banka Ödemesi',
-                          desc: batch.description || batch.note || 'Banka Toplu Ödeme Talimatı',
+                          desc: batch.description || batch.note || batch.subcontractor_name || 'Banka Toplu Ödeme Talimatı',
                           amount: cleanNumber(batch.amount || batch.total_amount || batch.paid_amount || 0),
                           isManual: false
                         });
