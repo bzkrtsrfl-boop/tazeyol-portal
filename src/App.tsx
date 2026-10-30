@@ -5211,7 +5211,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </thead>
                <tbody className="divide-y divide-slate-100 bg-white">
                   {(() => {
-                    const subNameLower = (selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '').toLocaleLowerCase('tr-TR').trim();
+                   const subNameLower = (selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '').toLocaleLowerCase('tr-TR').trim();
                     const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
                     let combinedTx: any[] = [];
 
@@ -5231,11 +5231,16 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     // 2. Faturalar
                     (dbInvoices || []).forEach(inv => {
                       if (inv.category === 'subcontractor_invoice') {
-                        const invTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
-                        if (invTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                        const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
+                        const firstNamePart = subNameLower.split(' ')[0];
+                        if (
+                          invTitle.includes(subNameLower) || 
+                          (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey)) ||
+                          (firstNamePart.length >= 3 && invTitle.includes(firstNamePart))
+                        ) {
                           combinedTx.push({
                             id: 'inv_' + inv.id,
-                            date: inv.issue_date || '-',
+                            date: inv.issue_date || inv.created_at || '-',
                             type: 'Fatura',
                             desc: 'Fatura No: ' + (inv.invoice_no || '-'),
                             amount: cleanNumber(inv.total_amount),
@@ -5245,13 +5250,20 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       }
                     });
 
-                    // 3. Banka Ödeme Talimatları
+                    // 3. Banka Ödeme Talimatları (Esnek Eşleşme)
                     (dbPaymentBatches || []).forEach((batch, idx) => {
-                      const batchTitle = String(batch.subcontractor_name || '').toLocaleLowerCase('tr-TR');
-                      if (batchTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && batchTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
+                      const batchTitle = String(batch.subcontractor_name || batch.name || '').toLocaleLowerCase('tr-TR');
+                      const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
+                      const batchFirstPart = subNameLower.split(' ')[0];
+                      if (
+                        batchTitle.includes(subNameLower) || 
+                        (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) || 
+                        (batchFirstPart.length >= 3 && batchTitle.includes(batchFirstPart)) ||
+                        (batch.subcontractor_id && batch.subcontractor_id === selectedSubcontractorForDetail.id)
+                      ) {
                         combinedTx.push({
                           id: 'batch_' + idx,
-                          date: batch.created_at || '-',
+                          date: batch.created_at || batch.date || '-',
                           type: 'Banka Ödemesi',
                           desc: 'Banka Toplu Ödeme Talimatı',
                           amount: cleanNumber(batch.amount || batch.total_amount || 0),
@@ -5262,7 +5274,12 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
 
                     // 4. Taksitli Avanslar
                     (dbAdvanceInstallments || []).forEach((inst, idx) => {
-                      if (inst.subcontractor_id === selectedSubcontractorForDetail.id || String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR').includes(subNameLower)) {
+                      const instTitle = String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR');
+                      const instFirstPart = subNameLower.split(' ')[0];
+                      if (
+                        inst.subcontractor_id === selectedSubcontractorForDetail.id || 
+                        (instTitle && (instTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && instTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey)) || (instFirstPart.length >= 3 && instTitle.includes(instFirstPart))))
+                      ) {
                         combinedTx.push({
                           id: 'inst_' + idx,
                           date: inst.created_at || '-',
@@ -5273,7 +5290,6 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                         });
                       }
                     });
-
                     if (combinedTx.length === 0) {
                       return (
                         <tr>
