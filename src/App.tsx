@@ -2182,7 +2182,7 @@ export default function App() {
 
       {/* ANA İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
-        {/* 1. GENEL GÖRÜNÜM (DOKUNULMAYAN KİLİTLİ BLOK) */}
+ {/* 1. GENEL GÖRÜNÜM (DOKUNULMAYAN KİLİTLİ BLOK) */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
             <div className="bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-200 rounded-2xl p-4 shadow-sm space-y-3">
@@ -2232,7 +2232,7 @@ export default function App() {
                   </div>
                 </div>
 
-               <div 
+                <div 
                   onClick={() => setActiveTab('credit_cards')}
                   className="bg-white p-3.5 rounded-xl border border-purple-200 shadow-xs cursor-pointer hover:bg-purple-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
@@ -2260,6 +2260,8 @@ export default function App() {
                     )}
                   </div>
                 </div>
+              </div>
+            </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div className="flex items-center gap-2">
@@ -2384,8 +2386,8 @@ export default function App() {
 
               <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm bg-emerald-50/20">
                 <span className="text-xs font-semibold text-emerald-800 tracking-wider flex items-center gap-1">
-  <Coins className="w-3.5 h-3.5" /> DÖNEM İÇİ FİİLİ MASRAF
-</span>
+                  <Coins className="w-3.5 h-3.5" /> DÖNEM İÇİ FİİLİ MASRAF
+                </span>
                 <div className="text-xl font-bold text-emerald-800 mt-1.5">
                   {totalPeriodPaidExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
@@ -2407,65 +2409,78 @@ export default function App() {
                   </button>
                 </div>
 
-           <div className="space-y-2">
-                {dbInvoices
-                  .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
-                  .map(inv => {
-                    const isT1Paid = inv.term1_status === 'paid';
-                    const activeTermLabel = isT1Paid ? '2. Vade' : '1. Vade';
-                    const activeDueDate = isT1Paid ? inv.term2_due_date : inv.term1_due_date;
-                    const activeAmount = cleanNumber(isT1Paid ? (inv.term2_amount || (inv.total_amount / 2)) : (inv.term1_amount || (inv.total_amount / 2)));
-                    return { ...inv, activeTermLabel, activeDueDate, activeAmount };
-                  })
-                  .filter(inv => inv.activeAmount > 0)
-                  .sort((a, b) => {
-                    const dateA = new Date(sanitizeDate(a.activeDueDate)).getTime();
-                    const dateB = new Date(sanitizeDate(b.activeDueDate)).getTime();
-                    return dateA - dateB;
-                  })
-                  .slice(0, 5)
-                  .map((inv, idx) => (
-                    <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
-                      <div>
-                        <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={inv.invoice_no}>
-                          {inv.invoice_no}
-                        </span>
-                        <span className={`text-[11px] font-semibold mt-0.5 block ${new Date(sanitizeDate(inv.activeDueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
-                          {inv.activeTermLabel}: {formatDateTR(inv.activeDueDate)}
+                <div className="space-y-2">
+                  {dbInvoices
+                    .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
+                    .map(inv => {
+                      const isT1Paid = inv.term1_status === 'paid';
+                      const activeTermLabel = isT1Paid ? '2. Vade' : '1. Vade';
+                      const activeDueDate = isT1Paid ? inv.term2_due_date : inv.term1_due_date;
+                      const activeAmount = cleanNumber(isT1Paid ? (inv.term2_amount || (inv.total_amount / 2)) : (inv.term1_amount || (inv.total_amount / 2)));
+                      return { ...inv, activeTermLabel, activeDueDate, activeAmount };
+                    })
+                    .filter(inv => inv.activeAmount > 0)
+                    .sort((a, b) => {
+                      const dateA = new Date(sanitizeDate(a.activeDueDate)).getTime();
+                      const dateB = new Date(sanitizeDate(b.activeDueDate)).getTime();
+                      return dateA - dateB;
+                    })
+                    .slice(0, 5)
+                    .map((inv, idx) => (
+                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
+                        <div>
+                          <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={inv.invoice_no}>
+                            {inv.invoice_no}
+                          </span>
+                          <span className={`text-[11px] font-semibold mt-0.5 block ${new Date(sanitizeDate(inv.activeDueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
+                            {inv.activeTermLabel}: {formatDateTR(inv.activeDueDate)}
+                          </span>
+                        </div>
+                        <span className="font-bold text-rose-600 text-sm">
+                          {inv.activeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                         </span>
                       </div>
-                      <span className="font-bold text-rose-600 text-sm">
-                        {inv.activeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                      </span>
-                    </div>
-                  ))}
+                    ))}
+                </div>
               </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+                <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <Truck className="w-4 h-4 text-amber-600" />
+                    <h3 className="font-bold text-slate-900 text-sm">Muayenesi Yaklaşan Araçlar</h3>
+                  </div>
+                  <button 
+                    onClick={() => setActiveTab('fleet')}
+                    className="text-xs text-blue-600 hover:underline font-semibold flex items-center gap-1">
+                    Filoya Git <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
 
                 <div className="space-y-2">
                   {dbVehicles
                     .filter(v => v.next_inspection_date)
                     .sort((a, b) => new Date(a.next_inspection_date).getTime() - new Date(b.next_inspection_date).getTime())
                     .slice(0, 5)
-          .map((veh, idx) => (
-                <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
-                  <div>
-                    <span className="font-mono font-bold text-blue-700 block">{veh.plate_number}</span>
-                    <span className="text-[11px] text-slate-500">Sürücü: {veh.driver_name || 'Atanmadı'}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[11px] block">
-                      {formatDateTR(veh.next_inspection_date)}
-                    </span>
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
-                  </div>
+                    .map((veh, idx) => (
+                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
+                        <div>
+                          <span className="font-mono font-bold text-blue-700 block">{veh.plate_number}</span>
+                          <span className="text-[11px] text-slate-500">Sürücü: {veh.driver_name || 'Atanmadı'}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[11px] block">
+                            {formatDateTR(veh.next_inspection_date)}
+                          </span>
+                          <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
+                        </div>
+                      </div>
+                    ))}
                 </div>
-             ))}
-            </div>
-          </div>
               </div>
             </div>
           </div>
-            )}
+        )}
             
         {activeTab === 'sales_customers' && (
         <div className="space-y-4">
