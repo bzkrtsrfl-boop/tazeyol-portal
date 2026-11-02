@@ -3146,7 +3146,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     .map((sub: any) => (
                       <tr key={sub.id} onClick={() => setSelectedSubcontractorForDetail(sub)} className="hover:bg-blue-50/50 cursor-pointer transition">
                         <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
-                        <td className="py-3 px-3 font-mono text-slate-600">{sub.computedTax || '-'}</td>
+                        <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_no || sub.computedTax || '-'}</td>
                         <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
                         <td className="py-3 px-3 text-right font-bold text-slate-900">{sub.totalInvoice.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                         <td className="py-3 px-3 text-right font-bold text-amber-600">{sub.totalOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
@@ -5194,27 +5194,87 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <span className="text-sm text-slate-500 font-mono">Vergi No: {selectedSubcontractorForDetail.computedTax || '-'} • IBAN: {selectedSubcontractorForDetail.iban || 'Belirtilmedi'}</span>
           </div>
           <div className="flex items-center gap-2">
-            <button
+          <button
               type="button"
               onClick={() => {
-                const subName = selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name;
-                const taxNo = selectedSubcontractorForDetail.computedTax || '-';
+                const subName = selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '';
+                const subNameLower = subName.toLocaleLowerCase('tr-TR').trim();
+                const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
+                const taxNo = selectedSubcontractorForDetail.tax_no || selectedSubcontractorForDetail.computedTax || 'Belirtilmedi';
                 const ibanVal = selectedSubcontractorForDetail.iban || 'Belirtilmedi';
 
                 let csvContent = "\uFEFF";
                 csvContent += "Firma Adı;Vergi Numarası;IBAN;Tarih;İşlem Türü;Açıklama;Tutar (TL);Güncel Bakiye (TL)\n";
                 
-                let runningBalance = 0;
-                const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id);
-                
-                subLedgers.forEach((l: any) => {
-                  const amt = cleanNumber(l.amount);
-                  if (l.transaction_type === 'invoice' || l.transaction_type === 'advance') {
-                    runningBalance += amt;
-                  } else {
-                    runningBalance -= amt;
+                let combinedTx: any[] = [];
+
+                // 1. Manuel Ledger Kayıtları
+                (dbSubcontractorsLedger || []).forEach((l: any) => {
+                  if (String(l.subcontractor_id) === String(selectedSubcontractorForDetail.id)) {
+                    combinedTx.push({
+                      date: l.created_at || '-',
+                      type: l.transaction_type === 'invoice' ? 'Fatura (Borç)' : (l.transaction_type === 'advance' ? 'Avans (Borç)' : 'Ödeme (Alacak)'),
+                      desc: l.description || 'Manuel İşlem',
+                      amount: cleanNumber(l.amount),
+                      isPositive: l.transaction_type === 'invoice' || l.transaction_type === 'advance'
+                    });
                   }
-                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${l.created_at ? new Date(l.created_at).toLocaleDateString('tr-TR') : '-'}";"${l.transaction_type}";"${l.description || ''}";"${amt.toLocaleString('tr-TR')}";"${runningBalance.toLocaleString('tr-TR')}"\n`;
+                });
+
+                // 2. Faturalar ve Ödemeler
+                (dbInvoices || []).forEach(inv => {
+                  const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
+                  const isMatch = invTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey));
+
+                  if (isMatch) {
+                    if (inv.category === 'subcontractor_invoice') {
+                      combinedTx.push({
+                        date: inv.issue_date || inv.created_at || '-',
+                        type: 'Fatura',
+                        desc: 'Fatura No: ' + (inv.invoice_no || '-'),
+                        amount: cleanNumber(inv.total_amount),
+                        isPositive: true
+                      });
+                    } else if (inv.category === 'subcontractor_advance_paid' || inv.category === 'subcontractor_paid_outflow') {
+                      combinedTx.push({
+                        date: inv.issue_date || inv.created_at || '-',
+                        type: 'Ödeme / Çıkış',
+                        desc: inv.description || 'Alt Yüklenici Ödeme Çıkışı',
+                        amount: cleanNumber(inv.total_amount),
+                        isPositive: false
+                      });
+                    }
+                  }
+                });
+
+                // 3. Banka Ödeme Talimatları
+                (dbPaymentBatches || []).forEach((batch) => {
+                  const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
+                  const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
+                  const isBatchMatch = batchTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) || (batch.subcontractor_id && String(batch.subcontractor_id) === String(selectedSubcontractorForDetail.id));
+
+                  if (isBatchMatch) {
+                    combinedTx.push({
+                      date: batch.created_at || batch.date || batch.payment_date || '-',
+                      type: 'Banka Ödemesi',
+                      desc: batch.description || batch.note || 'Banka Toplu Ödeme Talimatı',
+                      amount: cleanNumber(batch.amount || batch.total_amount || 0),
+                      isPositive: false
+                    });
+                  }
+                });
+
+                // Tarihe göre sıralama
+                combinedTx.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                let runningBalance = 0;
+                combinedTx.forEach((tx: any) => {
+                  if (tx.isPositive) {
+                    runningBalance += tx.amount;
+                  } else {
+                    runningBalance -= tx.amount;
+                  }
+                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${tx.date !== '-' ? new Date(tx.date).toLocaleDateString('tr-TR') : '-'}";"${tx.type}";"${tx.desc}";"${tx.amount.toLocaleString('tr-TR')}";"${runningBalance.toLocaleString('tr-TR')}"\n`;
                 });
 
                 const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
