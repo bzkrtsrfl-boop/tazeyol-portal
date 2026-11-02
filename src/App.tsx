@@ -816,7 +816,7 @@ export default function App() {
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // Fiilen kasaya giren tahsilatlar
-  const totalCollectedCash = dbInvoices
+  const totalCollectedCash = filteredInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
