@@ -3139,7 +3139,11 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     .sort((a: any, b: any) => {
                       let comp = 0;
                       if (ledgerSortField === 'name') comp = (a.name || '').localeCompare(b.name || '', 'tr-TR', { sensitivity: 'base' });
-                      else if (ledgerSortField === 'tax') comp = (a.computedTax || '').localeCompare(b.computedTax || '', 'tr-TR');
+                      else if (ledgerSortField === 'tax') {
+                         const taxA = a.tax_no || a.computedTax || '';
+                         const taxB = b.tax_no || b.computedTax || '';
+                         comp = taxA.localeCompare(taxB, 'tr-TR');
+                        }
                       else if (ledgerSortField === 'balance') comp = a.balance - b.balance;
                       return ledgerSortOrder === 'asc' ? comp : -comp;
                     })
