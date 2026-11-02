@@ -5441,8 +5441,8 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                             </button>
                           ) : (
                             <span className="text-slate-400 text-xs">Otomatik</span>
-                          )}
-                        </td>
+                      )}
+                    </td>
                       </tr>
                     ));
                   })()}
@@ -5454,3 +5454,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
       </div>
     </div>
   )}
+  </main>
+</div>
+  );
+} 
