@@ -128,6 +128,7 @@ export default function App() {
 
   const [filterStartDate, setFilterStartDate] = useState(getCurrentMonthRange().start);
   const [filterEndDate, setFilterEndDate] = useState(getCurrentMonthRange().end);
+  const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
 
   // 3. VERİTABANI STATE'LERİ
   const [dbVehicles, setDbVehicles] = useState<any[]>([]);
