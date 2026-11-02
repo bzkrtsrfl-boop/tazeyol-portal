@@ -140,15 +140,67 @@ export default function App() {
   const [dbSubcontractorsLedger, setDbSubcontractorsLedger] = useState<any[]>([]);
   const [dbPaymentBatches, setDbPaymentBatches] = useState<any[]>([]);
   const [dbAdvanceInstallments, setDbAdvanceInstallments] = useState<any[]>([]);
-  const [dbProfitability, setDbProfitability] = useState<any[]>([
-    { id: 1, month_year: 'Eyl.26', plate_number: '34BHC220', recon_net: 283691.96, invoice_rev: 329082.67, driver_sal: 82500.00, fuel_ex_vat: 78408.74, hgs_ex_vat: 31397.45, bonus: 0, sgk: 11148.00, other_exp: 1000.00 },
-    { id: 2, month_year: 'Eyl.26', plate_number: '34CKL472', recon_net: 305726.86, invoice_rev: 354643.16, driver_sal: 82500.00, fuel_ex_vat: 80480.16, hgs_ex_vat: 41648.61, bonus: 0, sgk: 11148.00, other_exp: 3000.00 },
-    { id: 3, month_year: 'Eyl.26', plate_number: '34HNE893', recon_net: 330079.01, invoice_rev: 382891.65, driver_sal: 56000.00, fuel_ex_vat: 107474.25, hgs_ex_vat: 60884.91, bonus: 14400.00, sgk: 11148.00, other_exp: 0 },
-    { id: 4, month_year: 'Eyl.26', plate_number: '34NEL388', recon_net: 451699.97, invoice_rev: 523971.97, driver_sal: 77000.00, fuel_ex_vat: 124513.06, hgs_ex_vat: 24500.00, bonus: 43200.00, sgk: 15148.00, other_exp: 34000.00 },
-    { id: 5, month_year: 'Eyl.26', plate_number: '34NUE791', border: 0, recon_net: 279329.44, invoice_rev: 324022.15, driver_sal: 56000.00, fuel_ex_vat: 85582.16, hgs_ex_vat: 49688.31, bonus: 15600.00, sgk: 11148.00, other_exp: 1500.00 },
-    { id: 6, month_year: 'Eyl.26', plate_number: '34SN1203', recon_net: 497886.39, invoice_rev: 577548.21, driver_sal: 60000.00, fuel_ex_vat: 54328.29, hgs_ex_vat: 3102.76, bonus: 10200.00, sgk: 11148.00, other_exp: 0 },
-    { id: 7, month_year: 'Eyl.26', plate_number: '34UU8372', recon_net: 187228.32, invoice_rev: 217184.85, driver_sal: 56000.00, fuel_ex_vat: 57310.68, hgs_ex_vat: 16070.97, bonus: 15600.00, sgk: 11148.00, other_exp: 0 }
-  ]);
+
+  // ÖZ MAL ARAÇLAR İÇİN DİNAMİK KÂRLILIK MOTORU (Gerçek verilere dayalı)
+  const dbProfitability = useMemo(() => {
+    return dbVehicles.map(veh => {
+      const cleanPlate = (veh.plate_number || '').replace(/\s+/g, '').toUpperCase();
+      
+      // 1. Sadece bu araca ait olan ve seçili döneme uyan faturaları/fişleri bul
+      const vehicleInvoices = filteredInvoices.filter(inv => {
+        const invNo = String(inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
+        const desc = String(inv.description || '').replace(/\s+/g, '').toUpperCase();
+        return invNo.includes(cleanPlate) || desc.includes(cleanPlate);
+      });
+
+      // 2. Gelir ve Giderleri Topla
+      const invoice_rev = vehicleInvoices
+        .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const fuel_ex_vat = vehicleInvoices
+        .filter(i => i.category === 'general_fuel')
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const hgs_ex_vat = vehicleInvoices
+        .filter(i => i.category === 'hgs')
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const other_exp = vehicleInvoices
+        .filter(i => ['maintenance', 'tires', 'traffic_fines', 'general_expense'].includes(i.category))
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      // 3. Sürücü Maaşı ve Otomatik SGK Ataması (Personel tablosundan çeker)
+      let driver_sal = 0;
+      let sgk = 0; 
+      let bonus = 0;
+      
+      if (veh.driver_name) {
+        const driver = dbEmployees.find(emp => 
+          String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim()
+        );
+        if (driver) {
+          driver_sal = cleanNumber(driver.base_salary);
+          sgk = 11148; // Sürücü varsa sabit asgari SGK yükü ekler
+          bonus = cleanNumber(driver.monthly_bonus); 
+        }
+      }
+
+      // Sonuç: Ekrana ve 360° panele gönderilecek kusursuz satır
+      return {
+        id: veh.id,
+        month_year: 'Seçili Dönem',
+        plate_number: veh.plate_number,
+        invoice_rev,
+        driver_sal,
+        fuel_ex_vat,
+        hgs_ex_vat,
+        bonus,
+        sgk,
+        other_exp
+      };
+    });
+  }, [dbVehicles, filteredInvoices, dbEmployees]);
   const [loading, setLoading] = useState(true);
   const [isExcelUploading, setIsExcelUploading] = useState(false);
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
