@@ -4010,51 +4010,78 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
         )}
 
         {/* 9. ÖZ MAL KARLILIK & MALİYET */}
-        {activeTab === 'profitability' && (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-            <div className="flex justify-between items-center pb-5 border-b border-slate-100">
-              <div>
-                <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık & Sefer Analizi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Plaka bazlı fatura cirosu, yakıt, HGS, maaş ve net faaliyet kârı.</p>
-              </div>
-            </div>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
+    <div>
+      <h3 className="font-bold text-xl text-slate-900">Öz Mal Araç Karlılık & Sefer Analizi</h3>
+      <p className="text-xs text-slate-500 mt-0.5">Filodaki araçlarınızın sefer ciroları, yakıt, HGS, şoför ve sabit gider paylarına göre net kârlılık dökümü.</p>
+    </div>
+  </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-3">Dönem</th>
-                    <th className="py-3 px-3">Plaka</th>
-                    <th className="py-3 px-3 text-right">Fatura Cirosu</th>
-                    <th className="py-3 px-3 text-right">Sürücü Maaşı</th>
-                    <th className="py-3 px-3 text-right">Akaryakıt (KDV Hariç)</th>
-                    <th className="py-3 px-3 text-right">HGS (KDV Hariç)</th>
-                    <th className="py-3 px-3 text-right">Net Kâr / Zarar</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dbProfitability.map((item, idx) => {
-                    const totalCost = cleanNumber(item.driver_sal) + cleanNumber(item.fuel_ex_vat) + cleanNumber(item.hgs_ex_vat) + cleanNumber(item.bonus) + cleanNumber(item.sgk) + cleanNumber(item.other_exp);
-                    const netProfit = cleanNumber(item.invoice_rev) - totalCost;
-                    return (
-                      <tr key={idx} className="hover:bg-slate-50 transition">
-                        <td className="py-3 px-3 font-semibold text-slate-700">{item.month_year}</td>
-                        <td className="py-3 px-3 font-mono font-bold text-blue-700">{item.plate_number}</td>
-                        <td className="py-3 px-3 text-right font-bold text-slate-900">{cleanNumber(item.invoice_rev).toLocaleString('tr-TR')} ₺</td>
-                        <td className="py-3 px-3 text-right text-slate-700">{cleanNumber(item.driver_sal).toLocaleString('tr-TR')} ₺</td>
-                        <td className="py-3 px-3 text-right text-slate-700">{cleanNumber(item.fuel_ex_vat).toLocaleString('tr-TR')} ₺</td>
-                        <td className="py-3 px-3 text-right text-slate-700">{cleanNumber(item.hgs_ex_vat).toLocaleString('tr-TR')} ₺</td>
-                        <td className={`py-3 px-3 text-right font-bold text-sm ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+  {/* ÖZET KARTLARI */}
+  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam Sefer Cirosu</span>
+      <span className="text-2xl font-black text-slate-900 mt-1 block">
+        {dbProfitability.reduce((sum, p) => sum + cleanNumber(p.invoice_rev), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+      </span>
+    </div>
+    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam Giderler</span>
+      <span className="text-2xl font-black text-rose-600 mt-1 block">
+        {dbProfitability.reduce((sum, p) => {
+          const cost = cleanNumber(p.driver_sal) + cleanNumber(p.fuel_ex_vat) + cleanNumber(p.hgs_ex_vat) + cleanNumber(p.bonus) + cleanNumber(p.sgk) + cleanNumber(p.other_exp);
+          return sum + cost;
+        }, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+      </span>
+    </div>
+    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+      <span className="text-xs font-bold text-blue-800 uppercase tracking-wider block">Net Faaliyet Kârı</span>
+      <span className="text-2xl font-black text-emerald-600 mt-1 block">
+        {dbProfitability.reduce((sum, p) => {
+          const cost = cleanNumber(p.driver_sal) + cleanNumber(p.fuel_ex_vat) + cleanNumber(p.hgs_ex_vat) + cleanNumber(p.bonus) + cleanNumber(p.sgk) + cleanNumber(p.other_exp);
+          return sum + (cleanNumber(p.invoice_rev) - cost);
+        }, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+      </span>
+    </div>
+  </div>
+
+  {/* ARAÇ LİSTESİ VE TABLO */}
+  <div className="overflow-x-auto">
+    <table className="w-full text-left text-xs border-collapse">
+      <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+        <tr>
+          <th className="py-3 px-4">Dönem</th>
+          <th className="py-3 px-4">Plaka</th>
+          <th className="py-3 px-4 text-right">Fatura Cirosu</th>
+          <th className="py-3 px-4 text-right">Sürücü Maaşı</th>
+          <th className="py-3 px-4 text-right">Akaryakıt (KDV Hariç)</th>
+          <th className="py-3 px-4 text-right">HGS (KDV Hariç)</th>
+          <th className="py-3 px-4 text-right">Net Kâr / Zarar</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-slate-100">
+        {dbProfitability.map((item, idx) => {
+          const totalCost = cleanNumber(item.driver_sal) + cleanNumber(item.fuel_ex_vat) + cleanNumber(item.hgs_ex_vat) + cleanNumber(item.bonus) + cleanNumber(item.sgk) + cleanNumber(item.other_exp);
+          const netProfit = cleanNumber(item.invoice_rev) - totalCost;
+          return (
+            <tr key={idx} className="hover:bg-slate-50 transition">
+              <td className="py-3.5 px-4 font-semibold text-slate-700">{item.month_year}</td>
+              <td className="py-3.5 px-4 font-mono font-bold text-blue-700 text-sm">{item.plate_number}</td>
+              <td className="py-3.5 px-4 text-right font-bold text-slate-900">{cleanNumber(item.invoice_rev).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+              <td className="py-3.5 px-4 text-right text-slate-700">{cleanNumber(item.driver_sal).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+              <td className="py-3.5 px-4 text-right text-slate-700">{cleanNumber(item.fuel_ex_vat).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+              <td className="py-3.5 px-4 text-right text-slate-700">{cleanNumber(item.hgs_ex_vat).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+              <td className={`py-3.5 px-4 text-right font-black text-sm ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</div>
 
         {/* 10. MÜŞTERİ TAHSİLATLARI */}
         {activeTab === 'collections' && (
