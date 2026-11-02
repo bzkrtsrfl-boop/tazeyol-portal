@@ -2263,91 +2263,118 @@ export default function App() {
               </div>
             </div>
 
-            {/* FİNANSAL VERİ FİLTRESİ VE HIZLI SEÇİM BUTONLARI */}
-<div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+{/* FİNANSAL VERİ FİLTRESİ VE AÇILIR POP-UP TAKVİM */}
+<div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative">
   <div className="flex items-center gap-2">
     <Calendar className="w-5 h-5 text-[#009fe3]" />
     <div>
       <h3 className="font-bold text-slate-900 text-sm">Finansal Veri Filtresi</h3>
-      <span className="text-[11px] text-slate-400">Dönem analizi için tarih aralığı belirleyebilir veya hızlı seçim yapabilirsiniz.</span>
+      <span className="text-[11px] text-slate-400">Seçilen döneme ait tüm ciro, tahsilat ve masraflar filtrelenir.</span>
     </div>
   </div>
-  
-  <div className="flex flex-wrap items-center gap-2 text-xs">
-    <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
-      <input  
-        type="date"  
-        value={filterStartDate}
-        onChange={e => setFilterStartDate(e.target.value)}
-        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg font-medium outline-none"
-      />
-      <span className="text-slate-400 font-bold">—</span>
-      <input  
-        type="date"  
-        value={filterEndDate}
-        onChange={e => setFilterEndDate(e.target.value)}
-        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg font-medium outline-none"
-      />
-    </div>
 
-    {/* Hızlı Seçim Butonları */}
-    <div className="flex flex-wrap items-center gap-1">
-      <button  
-        onClick={() => {
-          const now = new Date();
-          const year = now.getFullYear();
-          const month = now.getMonth();
-          const pad = (n: number) => (n < 10 ? '0' + n : String(n));
-          setFilterStartDate(`${year}-${pad(month + 1)}-01`);
-          const lastDay = new Date(year, month + 1, 0);
-          setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
-        }}
-        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
-        Bu Ay
-      </button>
+  {/* Tarih Seçim Butonu (Tıklayınca Pop-up Açılır) */}
+  <div className="relative">
+    <button
+      onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
+      className="flex items-center gap-3 px-4 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-semibold text-xs transition shadow-sm">
+      <Calendar className="w-4 h-4 text-[#009fe3]" />
+      <span>{filterStartDate} — {filterEndDate}</span>
+      <span className="text-slate-400">▼</span>
+    </button>
 
-      <button  
-        onClick={() => {
-          const now = new Date();
-          let year = now.getFullYear();
-          let month = now.getMonth() - 1;
-          if (month < 0) { month = 11; year -= 1; }
-          const pad = (n: number) => (n < 10 ? '0' + n : String(n));
-          setFilterStartDate(`${year}-${pad(month + 1)}-01`);
-          const lastDay = new Date(year, month + 1, 0);
-          setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
-        }}
-        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
-        Geçen Ay
-      </button>
+    {/* Açılır Pop-up Menü */}
+    {isDateDropdownOpen && (
+      <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-4 z-50 flex flex-col gap-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <span className="font-bold text-slate-800 text-xs">Tarih Aralığı Seçin</span>
+          <button 
+            onClick={() => setIsDateDropdownOpen(false)}
+            className="text-slate-400 hover:text-slate-600 font-bold text-sm">
+            ✕
+          </button>
+        </div>
 
-      <button  
-        onClick={() => {
-          const end = new Date();
-          const start = new Date();
-          start.setDate(end.getDate() - 30);
-          setFilterStartDate(start.toISOString().split('T')[0]);
-          setFilterEndDate(end.toISOString().split('T')[0]);
-        }}
-        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
-        Son 30 Gün
-      </button>
+        {/* Manuel Tarih Girişleri */}
+        <div className="flex items-center gap-2">
+          <input  
+            type="date"  
+            value={filterStartDate}
+            onChange={e => setFilterStartDate(e.target.value)}
+            className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none"
+          />
+          <span className="text-slate-400 font-bold">—</span>
+          <input  
+            type="date"  
+            value={filterEndDate}
+            onChange={e => setFilterEndDate(e.target.value)}
+            className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none"
+          />
+        </div>
 
-      <button  
-        onClick={() => {
-          const end = new Date();
-          const start = new Date();
-          start.setMonth(end.getMonth() - 3);
-          setFilterStartDate(start.toISOString().split('T')[0]);
-          setFilterEndDate(end.toISOString().split('T')[0]);
-        }}
-        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
-        Son 3 Ay
-      </button>
-    </div>
+        {/* Hızlı Seçim Butonları (Alt Alta / Grid Düzen) */}
+        <div className="grid grid-cols-2 gap-1.5 pt-1">
+          <button  
+            onClick={() => {
+              const now = new Date();
+              const year = now.getFullYear();
+              const month = now.getMonth();
+              const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+              setFilterStartDate(`${year}-${pad(month + 1)}-01`);
+              const lastDay = new Date(year, month + 1, 0);
+              setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
+              setIsDateDropdownOpen(false);
+            }}
+            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
+            Bu Ay
+          </button>
+
+          <button  
+            onClick={() => {
+              const now = new Date();
+              let year = now.getFullYear();
+              let month = now.getMonth() - 1;
+              if (month < 0) { month = 11; year -= 1; }
+              const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+              setFilterStartDate(`${year}-${pad(month + 1)}-01`);
+              const lastDay = new Date(year, month + 1, 0);
+              setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
+              setIsDateDropdownOpen(false);
+            }}
+            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
+            Geçen Ay
+          </button>
+
+          <button  
+            onClick={() => {
+              const end = new Date();
+              const start = new Date();
+              start.setDate(end.getDate() - 30);
+              setFilterStartDate(start.toISOString().split('T')[0]);
+              setFilterEndDate(end.toISOString().split('T')[0]);
+              setIsDateDropdownOpen(false);
+            }}
+            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
+            Son 30 Gün
+          </button>
+
+          <button  
+            onClick={() => {
+              const end = new Date();
+              const start = new Date();
+              start.setMonth(end.getMonth() - 3);
+              setFilterStartDate(start.toISOString().split('T')[0]);
+              setFilterEndDate(end.toISOString().split('T')[0]);
+              setIsDateDropdownOpen(false);
+            }}
+            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
+            Son 3 Ay
+          </button>
+        </div>
+      </div>
+    )}
   </div>
 </div>
-
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
