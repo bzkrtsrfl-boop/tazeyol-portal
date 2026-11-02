@@ -2182,7 +2182,7 @@ export default function App() {
 
       {/* ANA İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
- {/* 1. GENEL GÖRÜNÜM (DOKUNULMAYAN KİLİTLİ BLOK) */}
+{/* 1. GENEL GÖRÜNÜM (DOKUNULMAYAN KİLİTLİ BLOK) */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
             <div className="bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-200 rounded-2xl p-4 shadow-sm space-y-3">
@@ -2271,7 +2271,6 @@ export default function App() {
                   <span className="text-[11px] text-slate-400">Dönem analizi için tarih aralığı belirleyebilirsiniz.</span>
                 </div>
               </div>
-
               <div className="flex items-center gap-2 text-xs">
                 <input 
                   type="date" 
@@ -2409,84 +2408,82 @@ export default function App() {
                   </button>
                 </div>
 
- <div className="space-y-2">
-                {dbInvoices
-                  .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
-                  .map(inv => {
-                    const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
-                    const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
-                    const isT1Paid = inv.term1_status === 'paid';
-                    const isT2Paid = inv.term2_status === 'paid';
+                <div className="space-y-2">
+                  {dbInvoices
+                    .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
+                    .map(inv => {
+                      const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
+                      const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
+                      const isT1Paid = inv.term1_status === 'paid';
+                      const isT2Paid = inv.term2_status === 'paid';
 
-                    // İsimden avans eşleştirme mantığı
-                    const invTitle = String(inv.invoice_no || '');
-                    const subNameOnly = invTitle.includes(' - ') ? invTitle.split(' - ')[1].trim() : invTitle;
-                    const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
-                    const targetKey = cleanTxt(subNameOnly);
+                      const invTitle = String(inv.invoice_no || '');
+                      const subNameOnly = invTitle.includes(' - ') ? invTitle.split(' - ')[1].trim() : invTitle;
+                      const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
+                      const targetKey = cleanTxt(subNameOnly);
 
-                    const activeAdv = dbAdvances.find(a => {
-                      if (a.target_type !== 'contractor') return false;
-                      const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
-                      return targetKey.length >= 4 && (advTarget === targetKey || advTarget.includes(targetKey) || targetKey.includes(advTarget));
-                    });
+                      const activeAdv = dbAdvances.find(a => {
+                        if (a.target_type !== 'contractor') return false;
+                        const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
+                        return targetKey.length >= 4 && (advTarget === targetKey || advTarget.includes(targetKey) || targetKey.includes(advTarget));
+                      });
 
-                    const advInvoice = dbInvoices.find(i => {
-                      const title = String(i.invoice_no || '');
-                      if (!title.toUpperCase().includes('AVANS')) return false;
-                      if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
-                      return targetKey.length >= 4 && cleanTxt(title).includes(targetKey);
-                    });
+                      const advInvoice = dbInvoices.find(i => {
+                        const title = String(i.invoice_no || '');
+                        if (!title.toUpperCase().includes('AVANS')) return false;
+                        if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
+                        return targetKey.length >= 4 && cleanTxt(title).includes(targetKey);
+                      });
 
-                    let advDeduction = 0;
-                    if (activeAdv) {
-                      const inst = Math.max(1, activeAdv.total_installments || 1);
-                      advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-                    } else if (advInvoice) {
-                      const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
-                      const inst = match ? parseInt(match[1]) : 1;
-                      advDeduction = cleanNumber(advInvoice.total_amount) / inst;
-                    }
+                      let advDeduction = 0;
+                      if (activeAdv) {
+                        const inst = Math.max(1, activeAdv.total_installments || 1);
+                        advDeduction = cleanNumber(activeAdv.total_amount) / inst;
+                      } else if (advInvoice) {
+                        const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
+                        const inst = match ? parseInt(match[1]) : 1;
+                        advDeduction = cleanNumber(advInvoice.total_amount) / inst;
+                      }
 
-                    // Kademeli Düşüm Hesaplaması
-                    const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
-                    const remainingAdvForT2 = isT1Paid ? Math.max(0, advDeduction - t1) : Math.max(0, advDeduction - t1);
-                    const dynamicT2 = isT2Paid ? 0 : Math.max(0, t2 - remainingAdvForT2);
+                      const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
+                      const remainingAdvForT2 = isT1Paid ? Math.max(0, advDeduction - t1) : Math.max(0, advDeduction - t1);
+                      const dynamicT2 = isT2Paid ? 0 : Math.max(0, t2 - remainingAdvForT2);
 
-                    // Ekranda hangisi gösterilecek? (1. vade bittiyse 2. vadeye geçer)
-                    let activeTermLabel = '1. Vade';
-                    let activeDueDate = inv.term1_due_date;
-                    let activeAmount = dynamicT1;
+                      let activeTermLabel = '1. Vade';
+                      let activeDueDate = inv.term1_due_date;
+                      let activeAmount = dynamicT1;
 
-                    if (dynamicT1 <= 0 && dynamicT2 > 0) {
-                      activeTermLabel = '2. Vade';
-                      activeDueDate = inv.term2_due_date;
-                      activeAmount = dynamicT2;
-                    }
+                      if (dynamicT1 <= 0 && dynamicT2 > 0) {
+                        activeTermLabel = '2. Vade';
+                        activeDueDate = inv.term2_due_date;
+                        activeAmount = dynamicT2;
+                      }
 
-                    return { ...inv, activeTermLabel, activeDueDate, activeAmount };
-                  })
-                  .filter(inv => inv.activeAmount > 0) // Sadece bakiyesi kalanları al
-                  .sort((a, b) => {
-                    const dateA = new Date(sanitizeDate(a.activeDueDate)).getTime();
-                    const dateB = new Date(sanitizeDate(b.activeDueDate)).getTime();
-                    return dateA - dateB;
-                  })
-                  .slice(0, 5)
-                  .map((inv, idx) => (
-                    <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
-                      <div>
-                        <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={inv.invoice_no}>
-                          {inv.invoice_no}
-                        </span>
-                        <span className={`text-[11px] font-semibold mt-0.5 block ${new Date(sanitizeDate(inv.activeDueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
-                          {inv.activeTermLabel}: {formatDateTR(inv.activeDueDate)}
+                      return { ...inv, activeTermLabel, activeDueDate, activeAmount };
+                    })
+                    .filter(inv => inv.activeAmount > 0)
+                    .sort((a, b) => {
+                      const dateA = new Date(sanitizeDate(a.activeDueDate)).getTime();
+                      const dateB = new Date(sanitizeDate(b.activeDueDate)).getTime();
+                      return dateA - dateB;
+                    })
+                    .slice(0, 5)
+                    .map((inv, idx) => (
+                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
+                        <div>
+                          <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={inv.invoice_no}>
+                            {inv.invoice_no}
+                          </span>
+                          <span className={`text-[11px] font-semibold mt-0.5 block ${new Date(sanitizeDate(inv.activeDueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
+                            {inv.activeTermLabel}: {formatDateTR(inv.activeDueDate)}
+                          </span>
+                        </div>
+                        <span className="font-bold text-rose-600 text-sm">
+                          {inv.activeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                         </span>
                       </div>
-                      <span className="font-bold text-rose-600 text-sm">
-                        {inv.activeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                      </span>
-                    </div>
-                  ))}
+                    ))}
+                </div>
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
@@ -2526,7 +2523,7 @@ export default function App() {
             </div>
           </div>
         )}
-            
+        
         {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           
