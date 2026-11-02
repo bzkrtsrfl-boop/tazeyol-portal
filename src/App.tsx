@@ -816,7 +816,7 @@ export default function App() {
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // Fiilen kasaya giren tahsilatlar
-  const totalCollectedCash = filteredInvoices
+  const totalCollectedCash = dbInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
@@ -926,7 +926,7 @@ export default function App() {
     .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'subcontractor_invoice'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const currentRealCash = baseCash + totalCollectedCash + manualCashDeposits - (paidSubcontractorOutflows + otherPaidOutflows);
+  const currentRealCash = baseCash + totalCollectedCashAllTime + manualCashDeposits - (paidSubcontractorOutflows + otherPaidOutflows);
 
   // 9. MÜŞTERİ SATIŞLARI (MİGROS & GERÇEK CARİ EŞLEŞMESİ)
   const salesDetailedList = useMemo(() => {
