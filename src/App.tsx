@@ -2263,39 +2263,90 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-5 h-5 text-[#009fe3]" />
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Finansal Veri Filtresi</h3>
-                  <span className="text-[11px] text-slate-400">Dönem analizi için tarih aralığı belirleyebilirsiniz.</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <input 
-                  type="date" 
-                  value={filterStartDate}
-                  onChange={e => setFilterStartDate(e.target.value)}
-                  className="px-3 py-1.5 border border-slate-200 rounded-lg bg-slate-50 font-medium"
-                />
-                <span className="text-slate-400 font-bold">—</span>
-                <input 
-                  type="date" 
-                  value={filterEndDate}
-                  onChange={e => setFilterEndDate(e.target.value)}
-                  className="px-3 py-1.5 border border-slate-200 rounded-lg bg-slate-50 font-medium"
-                />
-                <button 
-                  onClick={() => {
-                    const r = getCurrentMonthRange();
-                    setFilterStartDate(r.start);
-                    setFilterEndDate(r.end);
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition ml-1">
-                  Bu Ay
-                </button>
-              </div>
-            </div>
+            {/* FİNANSAL VERİ FİLTRESİ VE HIZLI SEÇİM BUTONLARI */}
+<div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+  <div className="flex items-center gap-2">
+    <Calendar className="w-5 h-5 text-[#009fe3]" />
+    <div>
+      <h3 className="font-bold text-slate-900 text-sm">Finansal Veri Filtresi</h3>
+      <span className="text-[11px] text-slate-400">Dönem analizi için tarih aralığı belirleyebilir veya hızlı seçim yapabilirsiniz.</span>
+    </div>
+  </div>
+  
+  <div className="flex flex-wrap items-center gap-2 text-xs">
+    <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
+      <input  
+        type="date"  
+        value={filterStartDate}
+        onChange={e => setFilterStartDate(e.target.value)}
+        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg font-medium outline-none"
+      />
+      <span className="text-slate-400 font-bold">—</span>
+      <input  
+        type="date"  
+        value={filterEndDate}
+        onChange={e => setFilterEndDate(e.target.value)}
+        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg font-medium outline-none"
+      />
+    </div>
+
+    {/* Hızlı Seçim Butonları */}
+    <div className="flex flex-wrap items-center gap-1">
+      <button  
+        onClick={() => {
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = now.getMonth();
+          const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+          setFilterStartDate(`${year}-${pad(month + 1)}-01`);
+          const lastDay = new Date(year, month + 1, 0);
+          setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
+        }}
+        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
+        Bu Ay
+      </button>
+
+      <button  
+        onClick={() => {
+          const now = new Date();
+          let year = now.getFullYear();
+          let month = now.getMonth() - 1;
+          if (month < 0) { month = 11; year -= 1; }
+          const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+          setFilterStartDate(`${year}-${pad(month + 1)}-01`);
+          const lastDay = new Date(year, month + 1, 0);
+          setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
+        }}
+        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
+        Geçen Ay
+      </button>
+
+      <button  
+        onClick={() => {
+          const end = new Date();
+          const start = new Date();
+          start.setDate(end.getDate() - 30);
+          setFilterStartDate(start.toISOString().split('T')[0]);
+          setFilterEndDate(end.toISOString().split('T')[0]);
+        }}
+        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
+        Son 30 Gün
+      </button>
+
+      <button  
+        onClick={() => {
+          const end = new Date();
+          const start = new Date();
+          start.setMonth(end.getMonth() - 3);
+          setFilterStartDate(start.toISOString().split('T')[0]);
+          setFilterEndDate(end.toISOString().split('T')[0]);
+        }}
+        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition">
+        Son 3 Ay
+      </button>
+    </div>
+  </div>
+</div>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
