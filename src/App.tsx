@@ -140,67 +140,6 @@ export default function App() {
   const [dbSubcontractorsLedger, setDbSubcontractorsLedger] = useState<any[]>([]);
   const [dbPaymentBatches, setDbPaymentBatches] = useState<any[]>([]);
   const [dbAdvanceInstallments, setDbAdvanceInstallments] = useState<any[]>([]);
-
-  // ÖZ MAL ARAÇLAR İÇİN DİNAMİK KÂRLILIK MOTORU (Gerçek verilere dayalı)
-  const dbProfitability = useMemo(() => {
-    return dbVehicles.map(veh => {
-      const cleanPlate = (veh.plate_number || '').replace(/\s+/g, '').toUpperCase();
-      
-      // 1. Sadece bu araca ait olan ve seçili döneme uyan faturaları/fişleri bul
-      const vehicleInvoices = filteredInvoices.filter(inv => {
-        const invNo = String(inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
-        const desc = String(inv.description || '').replace(/\s+/g, '').toUpperCase();
-        return invNo.includes(cleanPlate) || desc.includes(cleanPlate);
-      });
-
-      // 2. Gelir ve Giderleri Topla
-      const invoice_rev = vehicleInvoices
-        .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-      const fuel_ex_vat = vehicleInvoices
-        .filter(i => i.category === 'general_fuel')
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-      const hgs_ex_vat = vehicleInvoices
-        .filter(i => i.category === 'hgs')
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-      const other_exp = vehicleInvoices
-        .filter(i => ['maintenance', 'tires', 'traffic_fines', 'general_expense'].includes(i.category))
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-      // 3. Sürücü Maaşı ve Otomatik SGK Ataması (Personel tablosundan çeker)
-      let driver_sal = 0;
-      let sgk = 0; 
-      let bonus = 0;
-      
-      if (veh.driver_name) {
-        const driver = dbEmployees.find(emp => 
-          String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim()
-        );
-        if (driver) {
-          driver_sal = cleanNumber(driver.base_salary);
-          sgk = 11148; // Sürücü varsa sabit asgari SGK yükü ekler
-          bonus = cleanNumber(driver.monthly_bonus); 
-        }
-      }
-
-      // Sonuç: Ekrana ve 360° panele gönderilecek kusursuz satır
-      return {
-        id: veh.id,
-        month_year: 'Seçili Dönem',
-        plate_number: veh.plate_number,
-        invoice_rev,
-        driver_sal,
-        fuel_ex_vat,
-        hgs_ex_vat,
-        bonus,
-        sgk,
-        other_exp
-      };
-    });
-  }, [dbVehicles, filteredInvoices, dbEmployees]);
   const [loading, setLoading] = useState(true);
   const [isExcelUploading, setIsExcelUploading] = useState(false);
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
@@ -861,6 +800,67 @@ export default function App() {
   };
 
   const filteredInvoices = dbInvoices.filter(i => isDateInRange(i.issue_date || i.created_at));
+
+  // ÖZ MAL ARAÇLAR İÇİN DİNAMİK KÂRLILIK MOTORU (Gerçek verilere dayalı)
+  const dbProfitability = useMemo(() => {
+    return dbVehicles.map(veh => {
+      const cleanPlate = (veh.plate_number || '').replace(/\s+/g, '').toUpperCase();
+      
+      // 1. Sadece bu araca ait olan ve seçili döneme uyan faturaları/fişleri bul
+      const vehicleInvoices = filteredInvoices.filter(inv => {
+        const invNo = String(inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
+        const desc = String(inv.description || '').replace(/\s+/g, '').toUpperCase();
+        return invNo.includes(cleanPlate) || desc.includes(cleanPlate);
+      });
+
+      // 2. Gelir ve Giderleri Topla
+      const invoice_rev = vehicleInvoices
+        .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const fuel_ex_vat = vehicleInvoices
+        .filter(i => i.category === 'general_fuel')
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const hgs_ex_vat = vehicleInvoices
+        .filter(i => i.category === 'hgs')
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const other_exp = vehicleInvoices
+        .filter(i => ['maintenance', 'tires', 'traffic_fines', 'general_expense'].includes(i.category))
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      // 3. Sürücü Maaşı ve Otomatik SGK Ataması (Personel tablosundan çeker)
+      let driver_sal = 0;
+      let sgk = 0; 
+      let bonus = 0;
+      
+      if (veh.driver_name) {
+        const driver = dbEmployees.find(emp => 
+          String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim()
+        );
+        if (driver) {
+          driver_sal = cleanNumber(driver.base_salary);
+          sgk = 11148; // Sürücü varsa sabit asgari SGK yükü ekler
+          bonus = cleanNumber(driver.monthly_bonus); 
+        }
+      }
+
+      // Sonuç: Ekrana ve 360° panele gönderilecek kusursuz satır
+      return {
+        id: veh.id,
+        month_year: 'Seçili Dönem',
+        plate_number: veh.plate_number,
+        invoice_rev,
+        driver_sal,
+        fuel_ex_vat,
+        hgs_ex_vat,
+        bonus,
+        sgk,
+        other_exp
+      };
+    });
+  }, [dbVehicles, filteredInvoices, dbEmployees]);
 
   // Seçilen dönem satış cirosu
   const totalPeriodSalesRevenue = filteredInvoices
