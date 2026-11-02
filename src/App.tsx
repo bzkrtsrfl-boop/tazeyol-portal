@@ -2407,7 +2407,7 @@ export default function App() {
                   </button>
                 </div>
 
-            <div className="space-y-2">
+           <div className="space-y-2">
                 {dbInvoices
                   .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
                   .map(inv => {
@@ -2440,19 +2440,6 @@ export default function App() {
                     </div>
                   ))}
               </div>
-           
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
-                <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <Truck className="w-4 h-4 text-amber-600" />
-                    <h3 className="font-bold text-slate-900 text-sm">Muayenesi Yaklaşan Araçlar</h3>
-                  </div>
-                  <button 
-                    onClick={() => setActiveTab('fleet')}
-                    className="text-xs text-blue-600 hover:underline font-semibold flex items-center gap-1">
-                    Filoya Git <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
 
                 <div className="space-y-2">
                   {dbVehicles
