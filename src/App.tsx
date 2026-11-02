@@ -5184,7 +5184,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
     </div>
  )}
 
- {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
+{/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
   {selectedSubcontractorForDetail && (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
@@ -5198,23 +5198,35 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               type="button"
               onClick={() => {
                 const subName = selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name;
-                let csvContent = "data:text/csv;charset=utf-8,Tarih;İşlem Türü;Açıklama;Tutar (TL)\n";
+                const taxNo = selectedSubcontractorForDetail.computedTax || '-';
+                const ibanVal = selectedSubcontractorForDetail.iban || 'Belirtilmedi';
+
+                let csvContent = "\uFEFF";
+                csvContent += "Firma Adı;Vergi Numarası;IBAN;Tarih;İşlem Türü;Açıklama;Tutar (TL);Güncel Bakiye (TL)\n";
                 
+                let runningBalance = 0;
                 const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id);
+                
                 subLedgers.forEach((l: any) => {
-                  csvContent += `${l.created_at || '-'};${l.transaction_type};"${l.description || ''}";${l.amount}\n`;
+                  const amt = cleanNumber(l.amount);
+                  if (l.transaction_type === 'invoice' || l.transaction_type === 'advance') {
+                    runningBalance += amt;
+                  } else {
+                    runningBalance -= amt;
+                  }
+                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${l.created_at ? new Date(l.created_at).toLocaleDateString('tr-TR') : '-'}";"${l.transaction_type}";"${l.description || ''}";"${amt.toLocaleString('tr-TR')}";"${runningBalance.toLocaleString('tr-TR')}"\n`;
                 });
 
-                const encodedUri = encodeURI(csvContent);
+                const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
                 const link = document.createElement("a");
                 link.setAttribute("href", encodedUri);
-                link.setAttribute("download", `${subName}_cari_dokum.csv`);
+                link.setAttribute("download", `${subName.replace(/[^a-zA-Z0-9]/g, '_')}_cari_mutabakat.csv`);
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
               }}
-              className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold transition flex items-center gap-1.5 border border-emerald-200">
-              📥 Cari Döküm (Excel)
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
+              📥 Mutabakat Raporunu İndir (Excel)
             </button>
             <button onClick={() => setSelectedSubcontractorForDetail(null)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition">Kapat</button>
           </div>
@@ -5306,7 +5318,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     (dbInvoices || []).forEach(inv => {
                       const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
                       const isMatch = invTitle.includes(subNameLower) || 
-                                      (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey));
+                                    (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey));
 
                       if (isMatch) {
                         if (inv.category === 'subcontractor_invoice') {
@@ -5331,7 +5343,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       }
                     });
 
-                    // 3. Standart Avanslar (dbAdvances) - Eksik olan kısım burasıydı!
+                    // 3. Standart Avanslar (dbAdvances)
                     (dbAdvances || []).forEach((adv, idx) => {
                       if (adv.target_type === 'contractor') {
                         const advTitle = String(adv.target_name || adv.target_id || '').toLocaleLowerCase('tr-TR');
@@ -5355,8 +5367,8 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       }
                     });
 
-                  // 4. Banka Ödeme Talimatları (Payment Batches - Kesin Eşleşme)
-                  (dbPaymentBatches || []).forEach((batch, idx) => {
+                    // 4. Banka Ödeme Talimatları (Payment Batches)
+                    (dbPaymentBatches || []).forEach((batch, idx) => {
                       const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
                       const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
                       
@@ -5442,7 +5454,3 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
       </div>
     </div>
   )}
-  </main>
-</div>
-  );
-}
