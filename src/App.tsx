@@ -4061,108 +4061,156 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
           </div>
         )}
 
-      {/* 9. ÖZ MAL KARLILIK & MALİYET */}
-        {activeTab === 'profitability' && (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
-              <div>
-                <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık & Sefer Analizi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Ciro, Akaryakıt ve HGS manuel girilir; Maaş, SGK ve diğer giderler sistemden dinamik hesaplanır.</p>
+{/* 9. ÖZ MAL KARLILIK & MALİYET */}
+        {activeTab === 'profitability' && (() => {
+          const [manualData, setManualData] = useState<{ [plate: string]: { invoice_rev: string, fuel: string, hgs: string } }>({});
+
+          const updateField = (plate: string, field: 'invoice_rev' | 'fuel' | 'hgs', val: string) => {
+            setManualData(prev => ({
+              ...prev,
+              [plate]: {
+                invoice_rev: field === 'invoice_rev' ? val : (prev[plate]?.invoice_rev ?? ''),
+                fuel: field === 'fuel' ? val : (prev[plate]?.fuel ?? ''),
+                hgs: field === 'hgs' ? val : (prev[plate]?.hgs ?? '')
+              }
+            }));
+          };
+
+          return (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
+                <div>
+                  <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık & Sefer Analizi</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Ciro, Akaryakıt ve HGS manuel girilir; Maaş, SGK ve diğer giderler sistemden dinamik hesaplanır.</p>
+                </div>
+
+                {/* TARİH FİLTRESİ */}
+                <div className="relative">
+                  <button
+                    onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
+                    className="flex items-center gap-3 px-4 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-semibold text-xs transition shadow-sm">
+                    <Calendar className="w-4 h-4 text-[#009fe3]" />
+                    <span>{filterStartDate} — {filterEndDate}</span>
+                    <span className="text-slate-400">▼</span>
+                  </button>
+
+                  {isDateDropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-4 z-50 flex flex-col gap-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span className="font-bold text-slate-800 text-xs">Tarih Aralığı Seçin</span>
+                        <button onClick={() => setIsDateDropdownOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
+                        <span className="text-slate-400 font-bold">—</span>
+                        <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* TARİH FİLTRESİ */}
-              <div className="relative">
-                <button
-                  onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
-                  className="flex items-center gap-3 px-4 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-semibold text-xs transition shadow-sm">
-                  <Calendar className="w-4 h-4 text-[#009fe3]" />
-                  <span>{filterStartDate} — {filterEndDate}</span>
-                  <span className="text-slate-400">▼</span>
-                </button>
+              {/* TABLO */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-3">Dönem</th>
+                      <th className="py-3 px-3">Plaka (Detay için tıkla)</th>
+                      <th className="py-3 px-3">Sürücü (Dinamik)</th>
+                      <th className="py-3 px-3 text-right">Fatura Cirosu (Manuel)</th>
+                      <th className="py-3 px-3 text-right">Sürücü Maaşı (Dinamik)</th>
+                      <th className="py-3 px-3 text-right">Akaryakıt (Manuel)</th>
+                      <th className="py-3 px-3 text-right">HGS (Manuel)</th>
+                      <th className="py-3 px-3 text-right">Net Kâr / Zarar</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {dbVehicles.map((veh, idx) => {
+                      const plate = veh.plate_number;
+                      const currentManual = manualData[plate] || { invoice_rev: '', fuel: '', hgs: '' };
 
-                {isDateDropdownOpen && (
-                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-4 z-50 flex flex-col gap-3">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                      <span className="font-bold text-slate-800 text-xs">Tarih Aralığı Seçin</span>
-                      <button onClick={() => setIsDateDropdownOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
-                      <span className="text-slate-400 font-bold">—</span>
-                      <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* TABLO */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-3">Plaka (Detay için tıkla)</th>
-                    <th className="py-3 px-3">Sürücü (Dinamik)</th>
-                    <th className="py-3 px-3 text-right">Fatura Cirosu (Manuel)</th>
-                    <th className="py-3 px-3 text-right">Sürücü Maaşı (Dinamik)</th>
-                    <th className="py-3 px-3 text-right">Akaryakıt (Manuel)</th>
-                    <th className="py-3 px-3 text-right">HGS (Manuel)</th>
-                    <th className="py-3 px-3 text-right">Net Kâr / Zarar</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dbVehicles.map((veh, idx) => {
-                    const plate = veh.plate_number;
-                    // Sabit verileri tutmak için geçici yerel state yerine güvenli hesaplama
-                    let driver_sal = 0;
-                    let sgk = 0;
-                    if (veh.driver_name) {
-                      const driver = dbEmployees.find(emp => String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim());
-                      if (driver) {
-                        driver_sal = cleanNumber(driver.base_salary);
-                        sgk = 11148;
+                      let driver_sal = 0;
+                      let sgk = 0;
+                      if (veh.driver_name) {
+                        const driver = dbEmployees.find(emp => String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim());
+                        if (driver) {
+                          driver_sal = cleanNumber(driver.base_salary);
+                          sgk = 11148;
+                        }
                       }
-                    }
 
-                    const netProfit = 0 - (driver_sal + sgk);
+                      const rev = cleanNumber(currentManual.invoice_rev);
+                      const fuel = cleanNumber(currentManual.fuel);
+                      const hgs = cleanNumber(currentManual.hgs);
+                      const totalCost = driver_sal + sgk + fuel + hgs;
+                      const netProfit = rev - totalCost;
 
-                    return (
-                      <tr key={idx} className="hover:bg-slate-50 transition">
-                        <td 
-                          onClick={() => openVehicle360(veh)}
-                          className="py-3 px-3 font-mono font-bold text-blue-700 text-sm cursor-pointer underline decoration-blue-300"
-                          title="Araç detaylarını aç">
-                          {plate}
-                        </td>
-                        <td className="py-3 px-3 text-slate-700 font-medium">{veh.driver_name || 'Atanmadı'}</td>
-                        
-                        <td className="py-3 px-3 text-right">
-                          <input type="text" placeholder="0,00" className="w-28 px-2 py-1 border border-slate-200 rounded text-right font-bold text-slate-900 bg-white outline-none" />
-                        </td>
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50 transition">
+                          <td className="py-3 px-3 font-semibold text-slate-700">Seçili Dönem</td>
+                          <td 
+                            onClick={() => openVehicle360(veh)}
+                            className="py-3 px-3 font-mono font-bold text-blue-700 text-sm cursor-pointer underline decoration-blue-300"
+                            title="Araç detaylarını aç">
+                            {plate}
+                          </td>
+                          <td className="py-3 px-3 text-slate-700 font-medium">{veh.driver_name || 'Atanmadı'}</td>
+                          
+                          {/* MANUEL: Fatura Cirosu */}
+                          <td className="py-3 px-3 text-right">
+                            <input 
+                              type="text" 
+                              placeholder="0,00"
+                              value={currentManual.invoice_rev}
+                              onChange={e => updateField(plate, 'invoice_rev', e.target.value)}
+                              className="w-28 px-2 py-1 border border-slate-200 rounded text-right font-bold text-slate-900 bg-white outline-none focus:border-blue-500"
+                            />
+                          </td>
 
-                        <td className="py-3 px-3 text-right font-semibold text-slate-700">
-                          {driver_sal.toLocaleString('tr-TR')} ₺
-                        </td>
+                          {/* DİNAMİK: Sürücü Maaşı */}
+                          <td className="py-3 px-3 text-right font-semibold text-slate-700">
+                            {driver_sal.toLocaleString('tr-TR')} ₺
+                          </td>
 
-                        <td className="py-3 px-3 text-right">
-                          <input type="text" placeholder="0,00" className="w-24 px-2 py-1 border border-slate-200 rounded text-right font-semibold text-slate-700 bg-white outline-none" />
-                        </td>
+                          {/* MANUEL: Akaryakıt */}
+                          <td className="py-3 px-3 text-right">
+                            <input 
+                              type="text" 
+                              placeholder="0,00"
+                              value={currentManual.fuel}
+                              onChange={e => updateField(plate, 'fuel', e.target.value)}
+                              className="w-24 px-2 py-1 border border-slate-200 rounded text-right font-semibold text-slate-700 bg-white outline-none focus:border-blue-500"
+                            />
+                          </td>
 
-                        <td className="py-3 px-3 text-right">
-                          <input type="text" placeholder="0,00" className="w-24 px-2 py-1 border border-slate-200 rounded text-right font-semibold text-slate-700 bg-white outline-none" />
-                        </td>
+                          {/* MANUEL: HGS */}
+                          <td className="py-3 px-3 text-right">
+                            <input 
+                              type="text" 
+                              placeholder="0,00"
+                              value={currentManual.hgs}
+                              onChange={e => updateField(plate, 'hgs', e.target.value)}
+                              className="w-24 px-2 py-1 border border-slate-200 rounded text-right font-semibold text-slate-700 bg-white outline-none focus:border-blue-500"
+                            />
+                          </td>
 
-                        <td className="py-3 px-3 text-right font-black text-sm text-rose-600">
-                          {netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          {/* NET KÂR */}
+                          <td className={`py-3 px-3 text-right font-black text-sm ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
+
+
+        
             {/* ÖZET KARTLARI */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
