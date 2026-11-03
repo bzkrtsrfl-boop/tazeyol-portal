@@ -41,6 +41,7 @@ import {
   Phone
 } from 'lucide-react';
 import { supabase } from './supabase';
+import { fetchUserRole } from './auth';
 import * as XLSX from 'xlsx';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
@@ -61,36 +62,89 @@ function TazeyolBrand() {
 
 export default function App() {
   // 1. KULLANICI GİRİŞ & YETKİLENDİRME (RBAC)
-  const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | null>(() => {
-    return (localStorage.getItem('tazeyol_user_role') as 'admin' | 'reporter') || null;
-  });
+  const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const isAuthenticated = !!currentUserRole;
 
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    const applySession = async (userId: string | undefined) => {
+      if (!userId) {
+        if (!cancelled) setCurrentUserRole(null);
+        return;
+      }
+      const role = await fetchUserRole(userId);
+      if (cancelled) return;
+      if (!role) {
+        await supabase.auth.signOut();
+        setCurrentUserRole(null);
+        return;
+      }
+      setCurrentUserRole(role);
+    };
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      applySession(session?.user.id).finally(() => {
+        if (!cancelled) setAuthReady(true);
+      });
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySession(session?.user.id);
+    });
+
+    return () => {
+      cancelled = true;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const u = loginUsername.trim().toLowerCase();
-    const p = loginPassword;
-
-    if (u === 'admin' && p === 'Flee3533!') {
-      localStorage.setItem('tazeyol_user_role', 'admin');
-      setCurrentUserRole('admin');
-      setLoginError('');
-    } else if (u === 'rapor' && p === 'Rapor2026!') {
-      localStorage.setItem('tazeyol_user_role', 'reporter');
-      setCurrentUserRole('reporter');
-      setLoginError('');
-    } else {
-      setLoginError('Hatalı kullanıcı adı veya şifre girdiniz!');
+    setLoginError('');
+    setLoginBusy(true);
+    try {
+      const email = loginUsername.trim().toLowerCase();
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password: loginPassword,
+      });
+      if (error || !data.user) {
+        const msg = (error?.message || '').toLowerCase();
+        if (msg.includes('email not confirmed')) {
+          setLoginError('E-posta henüz onaylanmamış. Supabase → Authentication → Users içinde kullanıcıya tıklayıp onaylayın (Confirm / Auto Confirm).');
+        } else if (msg.includes('invalid login')) {
+          setLoginError('E-posta veya şifre eşleşmedi. Users listesindeki tam e-postayı yazın; şifreyi Users ekranından sıfırlayabilirsiniz.');
+        } else {
+          setLoginError(error?.message || 'Hatalı e-posta veya şifre girdiniz!');
+        }
+        return;
+      }
+      const role = await fetchUserRole(data.user.id);
+      if (!role) {
+        await supabase.auth.signOut();
+        setLoginError('Hesabınıza rol atanmamış. Supabase profiles kaydını kontrol edin.');
+        return;
+      }
+      localStorage.removeItem('tazeyol_user_role');
+      setCurrentUserRole(role);
+    } catch {
+      setLoginError('Giriş sırasında bir hata oluştu.');
+    } finally {
+      setLoginBusy(false);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     localStorage.removeItem('tazeyol_user_role');
+    await supabase.auth.signOut();
     setCurrentUserRole(null);
   };
 
@@ -129,6 +183,7 @@ export default function App() {
   const [filterStartDate, setFilterStartDate] = useState(getCurrentMonthRange().start);
   const [filterEndDate, setFilterEndDate] = useState(getCurrentMonthRange().end);
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
+  const [manualData, setManualData] = useState<{ [plate: string]: { invoice_rev: string, fuel: string, hgs: string } }>({});
 
   // 3. VERİTABANI STATE'LERİ
   const [dbVehicles, setDbVehicles] = useState<any[]>([]);
@@ -2085,6 +2140,14 @@ export default function App() {
   };
 
   // GİRİŞ EKRANI (AUTH)
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <p className="text-white text-sm font-medium">Oturum kontrol ediliyor…</p>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -2101,12 +2164,13 @@ export default function App() {
               </div>
             )}
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Kullanıcı Adı</label>
+              <label className="block font-bold text-slate-700 mb-1">E-posta</label>
               <input
-                type="text"
+                type="email"
                 value={loginUsername}
                 onChange={e => setLoginUsername(e.target.value)}
-                placeholder="Kullanıcı Adı"
+                placeholder="ornek@tazeyol.com.tr"
+                autoComplete="username"
                 className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm"
                 required
               />
@@ -2119,6 +2183,7 @@ export default function App() {
                   value={loginPassword}
                   onChange={e => setLoginPassword(e.target.value)}
                   placeholder="••••••••"
+                  autoComplete="current-password"
                   className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm pr-10"
                   required
                 />
@@ -2131,8 +2196,11 @@ export default function App() {
               </div>
             </div>
 
-            <button type="submit" className="w-full py-3 bg-[#009fe3] hover:bg-[#0087c2] text-white font-bold rounded-xl transition shadow-md">
-              Giriş Yap
+            <button
+              type="submit"
+              disabled={loginBusy}
+              className="w-full py-3 bg-[#009fe3] hover:bg-[#0087c2] disabled:opacity-60 text-white font-bold rounded-xl transition shadow-md">
+              {loginBusy ? 'Giriş yapılıyor…' : 'Giriş Yap'}
             </button>
           </form>
         </div>
@@ -4063,8 +4131,6 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
 
 {/* 9. ÖZ MAL KARLILIK & MALİYET */}
         {activeTab === 'profitability' && (() => {
-          const [manualData, setManualData] = useState<{ [plate: string]: { invoice_rev: string, fuel: string, hgs: string } }>({});
-
           const updateField = (plate: string, field: 'invoice_rev' | 'fuel' | 'hgs', val: string) => {
             setManualData(prev => ({
               ...prev,
@@ -4205,12 +4271,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </tbody>
                 </table>
               </div>
-            </div>
-          );
-        })()}
 
-
-        
             {/* ÖZET KARTLARI */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
@@ -4281,8 +4342,9 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
+            </div>
+          );
+        })()}
 
         {/* 10. MÜŞTERİ TAHSİLATLARI */}
         {activeTab === 'collections' && (
