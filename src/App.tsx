@@ -13,6 +13,7 @@ import {
   Coins,
   Receipt,
   FileCheck2,
+  FileText,
   UserCheck,
   DollarSign,
   TrendingUp,
@@ -38,10 +39,12 @@ import {
   Search,
   Download,
   ShieldCheck,
-  Phone
+  Phone,
+  Contact
 } from 'lucide-react';
 import { supabase } from './supabase';
 import { fetchUserRole } from './auth';
+import { fetchAllRows, matchCustomer, type Customer } from './db';
 import * as XLSX from 'xlsx';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
@@ -148,12 +151,20 @@ export default function App() {
     setCurrentUserRole(null);
   };
 
+  const saveAppSetting = async (key: string, value: string) => {
+    const { error } = await supabase.from('app_settings').upsert(
+      { key, value, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    );
+    if (error) throw error;
+  };
+
   const isAdmin = currentUserRole === 'admin';
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
   >('overview');
   const [subSearchTerm, setSubSearchTerm] = useState('');
   const [ledgerSearchTerm, setLedgerSearchTerm] = useState('');
@@ -183,7 +194,15 @@ export default function App() {
   const [filterStartDate, setFilterStartDate] = useState(getCurrentMonthRange().start);
   const [filterEndDate, setFilterEndDate] = useState(getCurrentMonthRange().end);
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
-  const [manualData, setManualData] = useState<{ [plate: string]: { invoice_rev: string, fuel: string, hgs: string } }>({});
+  const getPreviousYearMonth = () => {
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 1);
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  };
+  const [profitMonth, setProfitMonth] = useState(getPreviousYearMonth);
+  const [monthlyInputRows, setMonthlyInputRows] = useState<any[]>([]);
 
   // 3. VERİTABANI STATE'LERİ
   const [dbVehicles, setDbVehicles] = useState<any[]>([]);
@@ -198,33 +217,94 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isExcelUploading, setIsExcelUploading] = useState(false);
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
+  const [dbCustomers, setDbCustomers] = useState<Customer[]>([]);
+  const [cashOpening, setCashOpening] = useState(845200);
+  const [sgkDriverAmount, setSgkDriverAmount] = useState(11148);
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
+  const [customerFormData, setCustomerFormData] = useState({
+    name: '',
+    tax_id: '',
+    tax_office: '',
+    address: '',
+    phone: '',
+    email: '',
+    notes: ''
+  });
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [selectedCariCustomer, setSelectedCariCustomer] = useState<Customer | null>(null);
+  const [selectedPayrollEmp, setSelectedPayrollEmp] = useState<any | null>(null);
+  const [payrollFrom, setPayrollFrom] = useState(() => `${new Date().getFullYear()}-01`);
+  const [payrollTo, setPayrollTo] = useState(() => {
+    const d = new Date();
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  });
 
   const loadPortalData = async () => {
     setLoading(true);
     try {
-      const { data: batchData } = await supabase.from('payment_batches').select('*');
-      const { data: instData } = await supabase.from('advance_installments').select('*');
-      if (batchData) setDbPaymentBatches(batchData);
-      if (instData) setDbAdvanceInstallments(instData);
-      const { data: vData } = await supabase.from('vehicles').select('*').order('id', { ascending: true });
-      const { data: invData } = await supabase.from('invoices').select('*').order('created_at', { ascending: false });
-      const { data: empData } = await supabase.from('employees').select('*').order('id', { ascending: true });
-      const { data: advData } = await supabase.from('advance_payments').select('*').order('created_at', { ascending: false });
-      const { data: ccData } = await supabase.from('credit_cards').select('*').order('due_date', { ascending: true });
-      const { data: subData } = await supabase.from('subcontractors').select('*').order('name', { ascending: true });
-      const { data: ledgerData } = await supabase.from('subcontractor_ledger').select('*');
-      const { data: empTxData } = await supabase.from('employee_transactions').select('*').order('created_at', { ascending: false });
+      const load = async (table: string, order?: { column: string; ascending: boolean }) => {
+        try {
+          return await fetchAllRows(table, order);
+        } catch (err) {
+          console.error(table, err);
+          return [];
+        }
+      };
 
-      if (vData) setDbVehicles(vData);
-      if (invData) setDbInvoices(invData);
-      if (empData) setDbEmployees(empData);
-      if (advData) setDbAdvances(advData);
-      if (ccData) setDbCreditCards(ccData);
-      if (subData) setDbSubcontractors(subData);
-      if (ledgerData) setDbSubcontractorsLedger(ledgerData);
-      if (empTxData) setDbEmployeeTransactions(empTxData);
+      const [
+        batchData,
+        instData,
+        vData,
+        invData,
+        empData,
+        advData,
+        ccData,
+        subData,
+        ledgerData,
+        empTxData,
+        customerData,
+        settingsData,
+        monthlyInputData
+      ] = await Promise.all([
+        load('payment_batches'),
+        load('advance_installments'),
+        load('vehicles', { column: 'id', ascending: true }),
+        load('invoices', { column: 'created_at', ascending: false }),
+        load('employees', { column: 'id', ascending: true }),
+        load('advance_payments', { column: 'created_at', ascending: false }),
+        load('credit_cards', { column: 'due_date', ascending: true }),
+        load('subcontractors', { column: 'name', ascending: true }),
+        load('subcontractor_ledger'),
+        load('employee_transactions', { column: 'created_at', ascending: false }),
+        load('customers', { column: 'name', ascending: true }),
+        load('app_settings'),
+        load('vehicle_monthly_inputs')
+      ]);
+
+      setDbPaymentBatches(batchData);
+      setDbAdvanceInstallments(instData);
+      setDbVehicles(vData);
+      setDbInvoices(invData);
+      setDbEmployees(empData);
+      setDbAdvances(advData);
+      setDbCreditCards(ccData);
+      setDbSubcontractors(subData);
+      setDbSubcontractorsLedger(ledgerData);
+      setDbEmployeeTransactions(empTxData);
+      setDbCustomers(customerData as Customer[]);
+      setMonthlyInputRows(monthlyInputData);
+
+      const settings: Record<string, string> = {};
+      settingsData.forEach((row: any) => {
+        if (row?.key) settings[row.key] = String(row.value ?? '');
+      });
+      if (settings.cash_opening) setCashOpening(cleanNumber(settings.cash_opening));
+      if (settings.sgk_driver_amount) setSgkDriverAmount(cleanNumber(settings.sgk_driver_amount));
     } catch (err) {
       console.error('Yükleme hatası:', err);
+      alert('Veriler yüklenirken hata oluştu. Sayfayı yenileyin veya bağlantıyı kontrol edin.');
     } finally {
       setLoading(false);
     }
@@ -282,6 +362,71 @@ export default function App() {
       return '';
     }
   };
+
+  const resolveEmployeeStart = (emp: any) => {
+    const hire = sanitizeDate(emp?.hire_date);
+    if (hire) return { date: hire, label: 'işe giriş' };
+    const dates: string[] = [];
+    const created = sanitizeDate(emp?.created_at);
+    if (created) dates.push(created);
+    const empIdStr = String(emp?.id || '');
+    const empNorm = String(emp?.full_name || '').toLowerCase().trim();
+    (dbEmployeeTransactions || []).forEach((tx: any) => {
+      if (String(tx.employee_id) !== empIdStr) return;
+      const d = sanitizeDate(tx.transaction_date || tx.created_at);
+      if (d) dates.push(d);
+    });
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'salary_payroll') return;
+      if (!empNorm || !String(inv.invoice_no || '').toLowerCase().includes(empNorm)) return;
+      const d = sanitizeDate(inv.issue_date || inv.created_at);
+      if (d) dates.push(d);
+    });
+    (dbAdvances || []).forEach((a: any) => {
+      if (a.target_type !== 'employee') return;
+      const targetId = String(a.target_id || '');
+      const targetNorm = String(a.target_name || '').toLowerCase().trim();
+      const isMatch =
+        (targetId && targetId === empIdStr) ||
+        (targetNorm.length >= 3 && empNorm && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
+      if (!isMatch) return;
+      const d = sanitizeDate(a.created_at || a.payment_date || a.issue_date);
+      if (d) dates.push(d);
+    });
+    dates.sort();
+    if (dates[0]) {
+      const label = created && dates[0] === created ? 'kayıt tarihi' : 'ilk veri girişi';
+      return { date: dates[0], label };
+    }
+    return { date: '', label: 'yok' };
+  };
+
+  const namesMatch = (a: string, b: string) => {
+    const n = (s: string) => String(s || '').toLocaleLowerCase('tr-TR').replace(/\s+/g, ' ').trim();
+    const left = n(a);
+    const right = n(b);
+    return !!left && !!right && left === right;
+  };
+
+  const employmentShareForMonth = (startDateRaw: any, yearMonth: string) => {
+    const start = sanitizeDate(startDateRaw);
+    if (!start || !yearMonth) return { factor: 0, daysWorked: 0, daysInMonth: 0, hireYm: '', startedThisMonth: false };
+    const hireYm = start.slice(0, 7);
+    const [y, m] = yearMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    if (yearMonth < hireYm) return { factor: 0, daysWorked: 0, daysInMonth, hireYm, startedThisMonth: false };
+    if (yearMonth > hireYm) return { factor: 1, daysWorked: daysInMonth, daysInMonth, hireYm, startedThisMonth: false };
+    const startDay = Math.max(1, Number(start.slice(8, 10)) || 1);
+    const daysWorked = Math.max(0, daysInMonth - startDay + 1);
+    return {
+      factor: daysInMonth > 0 ? daysWorked / daysInMonth : 1,
+      daysWorked,
+      daysInMonth,
+      hireYm,
+      startedThisMonth: startDay > 1
+    };
+  };
+
 // SEÇİLEN ALT YÜKLENİCİ CARİ DETAYI STATE'İ
   const [selectedSubcontractorForDetail, setSelectedSubcontractorForDetail] = useState<any | null>(null);
   
@@ -501,12 +646,14 @@ export default function App() {
     fullName: '',
     roleTitle: 'Kamyon Şoförü / Dağıtım',
     baseSalary: '',
+    employerSgk: '',
     phone: '',
     iban: '',
     monthlyBonus: '',
     bonusDescription: '',
     monthlyAdvance: '',
-    advanceDescription: ''
+    advanceDescription: '',
+    hireDate: ''
   });
 
   // GENEL GİDER DÜZENLEME / EKLEME MODALI
@@ -536,8 +683,9 @@ export default function App() {
     trackingSystem: 'Var',
     fuelSystem: 'UTTS',
     hgsSystem: 'SHELL',
-    vehicleType: 'Kamyon Frigo (10 Palet)',
+    vehicleType: 'Kamyon',
     ownershipType: 'Öz Mal',
+    isActive: true,
     nextInspectionDate: '',
     inspectionCost: '',
     insuranceCompany: '',
@@ -725,49 +873,81 @@ export default function App() {
           .map(i => String(i.invoice_no || '').trim().toUpperCase())
       );
 
+      const parsedRows = rawRows.map((row: any) => {
+        const invNo = String(
+          row['Fatura no'] ||
+          row['Fatura No'] ||
+          row['Fatura Numarası'] ||
+          row['Belge No'] ||
+          ''
+        ).trim();
+        const excelCust = String(
+          row['Müşteri'] ||
+          row['Cari'] ||
+          row['Unvan'] ||
+          row['Firma Adı'] ||
+          row['Alıcı'] ||
+          row['Müşteri Adı'] ||
+          ''
+        ).trim();
+        const excelTax = String(row['VKN'] || row['Vergi No'] || row['Vergi Numarası'] || row['TCKN'] || '').trim();
+        const totalAmt = cleanNumber(row['Genel Toplam'] || row['Tutar'] || row['Toplam Tutar'] || row['Ödenecek Tutar']);
+        const rawDate = row['Düzenleme tarihi'] || row['Tarih'] || row['Fatura Tarihi'];
+        const rowIssueDate = sanitizeDate(rawDate) || new Date().toISOString().split('T')[0];
+        const rawDueDate = row['Vade'] || row['Vade Tarihi'];
+        const rowDueDate = sanitizeDate(rawDueDate) || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+        return { invNo, excelCust, excelTax, totalAmt, rowIssueDate, rowDueDate };
+      });
+
+      let customersForMatch: Customer[] = [...dbCustomers];
+      const pendingCards = new Map<string, { name: string; tax_id: string | null }>();
+
+      parsedRows.forEach(row => {
+        if (!row.excelCust) return;
+        if (matchCustomer(row.excelCust, row.excelTax, customersForMatch)) return;
+        const key = `${row.excelCust.trim().toLocaleUpperCase('tr-TR')}|${row.excelTax.replace(/\D/g, '')}`;
+        if (!pendingCards.has(key)) {
+          pendingCards.set(key, {
+            name: row.excelCust.trim(),
+            tax_id: row.excelTax.replace(/\D/g, '') || null
+          });
+        }
+      });
+
+      let createdCustomerCount = 0;
+      if (pendingCards.size > 0) {
+        const toInsert = [...pendingCards.values()];
+        const { data: created, error: custErr } = await supabase
+          .from('customers')
+          .upsert(toInsert, { onConflict: 'name' })
+          .select('id, name, tax_id, tax_office, address, phone, email, notes');
+        if (custErr) throw custErr;
+        createdCustomerCount = toInsert.length;
+        (created || []).forEach((c: Customer) => {
+          const idx = customersForMatch.findIndex(x => x.name === c.name);
+          if (idx >= 0) customersForMatch[idx] = c;
+          else customersForMatch.push(c);
+        });
+      }
+
       const newRowsToInsert: any[] = [];
       let skippedCount = 0;
 
-      rawRows.forEach((row: any) => {
-        // 'Fatura no' ve 'Fatura No' esnek arama
-        const invNo = String(
-          row['Fatura no'] || 
-          row['Fatura No'] || 
-          row['Fatura Numarası'] || 
-          row['Belge No'] || 
-          ''
-        ).trim();
+      parsedRows.forEach(row => {
+        const matched = matchCustomer(row.excelCust, row.excelTax, customersForMatch);
+        const custName = matched?.name || row.excelCust;
+        const fullTitle = `${row.invNo} - ${custName}`.trim();
 
-        const custName = String(
-          row['Müşteri'] || 
-          row['Cari'] || 
-          row['Unvan'] || 
-          row['Firma Adı'] || 
-          row['Alıcı'] || 
-          'MİGROS TİCARET A.Ş.'
-        ).trim();
-
-        const totalAmt = cleanNumber(row['Genel Toplam'] || row['Tutar'] || row['Toplam Tutar'] || row['Ödenecek Tutar']);
-        
-        // 'Düzenleme tarihi' veya 'Tarih' esnek arama
-        const rawDate = row['Düzenleme tarihi'] || row['Tarih'] || row['Fatura Tarihi'];
-        const rowIssueDate = sanitizeDate(rawDate) || new Date().toISOString().split('T')[0];
-        
-        const rawDueDate = row['Vade'] || row['Vade Tarihi'];
-        const rowDueDate = sanitizeDate(rawDueDate) || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-
-        const fullTitle = `${invNo} - ${custName}`.trim();
-
-        if (existingInvoices.has(fullTitle.toUpperCase()) || (invNo && existingInvoices.has(invNo.toUpperCase()))) {
+        if (existingInvoices.has(fullTitle.toUpperCase()) || (row.invNo && existingInvoices.has(row.invNo.toUpperCase()))) {
           skippedCount++;
-        } else if (invNo && totalAmt > 0) {
+        } else if (row.invNo && row.totalAmt > 0 && custName) {
           newRowsToInsert.push({
             invoice_no: fullTitle,
             direction: 'outgoing',
             category: 'freight_sales',
-            total_amount: totalAmt,
-            issue_date: rowIssueDate,
-            due_date: rowDueDate,
+            total_amount: row.totalAmt,
+            issue_date: row.rowIssueDate,
+            due_date: row.rowDueDate,
             status: 'unpaid'
           });
         }
@@ -778,10 +958,17 @@ export default function App() {
         if (error) throw error;
       }
 
-      alert(`Satış Faturaları İçe Aktarıldı!\n• ${newRowsToInsert.length} adet yeni satış faturası eklendi.\n• ${skippedCount} adet mevcut fatura mükerrer olmaması için atlandı.`);
+      alert(
+        `Satış Faturaları İçe Aktarıldı!\n• ${newRowsToInsert.length} adet yeni satış faturası eklendi.\n• ${skippedCount} adet mevcut fatura mükerrer olmaması için atlandı.` +
+        (createdCustomerCount
+          ? `\n• ${createdCustomerCount} yeni müşteri kartı otomatik açıldı. Müşteri Kartları menüsünden VKN ve iletişim bilgilerini tamamlayabilirsiniz.`
+          : '')
+      );
       loadPortalData();
     } catch (err: any) {
       alert('Satış faturası yükleme hatası: ' + err.message);
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -856,66 +1043,172 @@ export default function App() {
 
   const filteredInvoices = dbInvoices.filter(i => isDateInRange(i.issue_date || i.created_at));
 
-  // ÖZ MAL ARAÇLAR İÇİN DİNAMİK KÂRLILIK MOTORU (Gerçek verilere dayalı)
+  const isOzMalVehicle = (v: any) => {
+    const t = String(v.ownership_type || 'Öz Mal').toLocaleLowerCase('tr-TR');
+    return t.includes('öz') || t.includes('oz mal') || t.includes('ozmal') || !String(v.ownership_type || '').trim();
+  };
+
+  const isActiveVehicle = (v: any) => v.is_active !== false;
+
+  const normalizeVehicleType = (raw: string) => {
+    const t = String(raw || '').toLocaleLowerCase('tr-TR');
+    if (t.includes('binek') || t.includes('otomobil')) return 'Binek';
+    if (t.includes('kamyonet')) return 'Kamyonet';
+    if (t.includes('dorse')) return 'Dorse';
+    if (t.includes('tır') || t === 'tir' || t.includes(' tir') || t.startsWith('tir')) return 'TIR';
+    if (t.includes('kamyon')) return 'Kamyon';
+    return 'Kamyon';
+  };
+
+  const isProfitVehicleType = (v: any) => {
+    const t = normalizeVehicleType(v.vehicle_type);
+    return t === 'Kamyonet' || t === 'Kamyon' || t === 'TIR';
+  };
+
+  const defaultProfitIncluded = (vehicleType: string) => {
+    const t = normalizeVehicleType(vehicleType);
+    return t === 'Kamyonet' || t === 'Kamyon' || t === 'TIR';
+  };
+
+  const saveMonthlyProfitInput = async (
+    plate: string,
+    field: 'invoice_rev' | 'fuel' | 'hgs' | 'included',
+    raw: string | boolean
+  ) => {
+    if (!isAdmin) return;
+    const plateKey = String(plate || '').trim();
+    if (!plateKey) return;
+    const veh = dbVehicles.find(v => String(v.plate_number).trim() === plateKey);
+    const existing = monthlyInputRows.find(
+      r => String(r.plate_number).trim() === plateKey && r.year_month === profitMonth
+    );
+    const includedDefault =
+      typeof existing?.included === 'boolean'
+        ? existing.included
+        : defaultProfitIncluded(veh?.vehicle_type);
+    const payload = {
+      plate_number: plateKey,
+      year_month: profitMonth,
+      invoice_rev: field === 'invoice_rev' ? cleanNumber(raw) : cleanNumber(existing?.invoice_rev),
+      fuel: field === 'fuel' ? cleanNumber(raw) : cleanNumber(existing?.fuel),
+      hgs: field === 'hgs' ? cleanNumber(raw) : cleanNumber(existing?.hgs),
+      included: field === 'included' ? !!raw : includedDefault,
+      updated_at: new Date().toISOString()
+    };
+    setMonthlyInputRows(prev => {
+      const idx = prev.findIndex(r => String(r.plate_number).trim() === plateKey && r.year_month === profitMonth);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...payload };
+        return next;
+      }
+      return [...prev, payload];
+    });
+    const { error } = await supabase
+      .from('vehicle_monthly_inputs')
+      .upsert(payload, { onConflict: 'plate_number,year_month' });
+    if (error) {
+      alert('Ay verisi kaydedilemedi. setup_profit_month.sql dosyasını SQL Editor’da çalıştırın.\n' + error.message);
+    }
+  };
+
   const dbProfitability = useMemo(() => {
-    return dbVehicles.map(veh => {
-      const cleanPlate = (veh.plate_number || '').replace(/\s+/g, '').toUpperCase();
-      
-      // 1. Sadece bu araca ait olan ve seçili döneme uyan faturaları/fişleri bul
-      const vehicleInvoices = filteredInvoices.filter(inv => {
-        const invNo = String(inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
-        const desc = String(inv.description || '').replace(/\s+/g, '').toUpperCase();
-        return invNo.includes(cleanPlate) || desc.includes(cleanPlate);
-      });
+    const monthStart = `${profitMonth}-01`;
+    const [yy, mm] = profitMonth.split('-').map(Number);
+    const monthEndDate = new Date(yy, mm, 0);
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    const monthEnd = `${yy}-${pad(mm)}-${pad(monthEndDate.getDate())}`;
 
-      // 2. Gelir ve Giderleri Topla
-      const invoice_rev = vehicleInvoices
-        .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+    return dbVehicles
+      .filter(v => isOzMalVehicle(v) && isActiveVehicle(v) && isProfitVehicleType(v))
+      .map(veh => {
+      const plate = String(veh.plate_number || '').trim();
+      const cleanPlate = plate.replace(/\s+/g, '').toUpperCase();
+      const stored = monthlyInputRows.find(
+        r => String(r.plate_number).trim() === plate && r.year_month === profitMonth
+      );
 
-      const fuel_ex_vat = vehicleInvoices
-        .filter(i => i.category === 'general_fuel')
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+      const invoice_rev = cleanNumber(stored?.invoice_rev);
+      const fuel = cleanNumber(stored?.fuel);
+      const hgs = cleanNumber(stored?.hgs);
+      const vehicleType = normalizeVehicleType(veh.vehicle_type);
+      const included =
+        typeof stored?.included === 'boolean' ? stored.included : defaultProfitIncluded(veh.vehicle_type);
 
-      const hgs_ex_vat = vehicleInvoices
-        .filter(i => i.category === 'hgs')
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-      const other_exp = vehicleInvoices
-        .filter(i => ['maintenance', 'tires', 'traffic_fines', 'general_expense'].includes(i.category))
-        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
-      // 3. Sürücü Maaşı ve Otomatik SGK Ataması (Personel tablosundan çeker)
       let driver_sal = 0;
-      let sgk = 0; 
       let bonus = 0;
-      
-      if (veh.driver_name) {
-        const driver = dbEmployees.find(emp => 
-          String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim()
-        );
-        if (driver) {
-          driver_sal = cleanNumber(driver.base_salary);
-          sgk = 11148; // Sürücü varsa sabit asgari SGK yükü ekler
-          bonus = cleanNumber(driver.monthly_bonus); 
+      let sgk = 0;
+      const driver = veh.driver_name
+        ? dbEmployees.find(emp => namesMatch(emp.full_name, veh.driver_name))
+        : null;
+      if (driver) {
+        const hire = sanitizeDate(driver.hire_date);
+        const share = hire ? employmentShareForMonth(hire, profitMonth) : { factor: 1 };
+        if (share.factor > 0) {
+          driver_sal = Math.round(cleanNumber(driver.base_salary) * share.factor * 100) / 100;
+          bonus = Math.round(cleanNumber(driver.monthly_bonus) * share.factor * 100) / 100;
+          const fullSgk =
+            driver.employer_sgk === null || driver.employer_sgk === undefined || driver.employer_sgk === ''
+              ? sgkDriverAmount
+              : cleanNumber(driver.employer_sgk);
+          sgk = Math.round(fullSgk * share.factor * 100) / 100;
         }
+        (dbEmployeeTransactions || []).forEach((tx: any) => {
+          if (String(tx.employee_id) !== String(driver.id) || tx.type !== 'bonus') return;
+          const d = sanitizeDate(tx.transaction_date || tx.created_at);
+          if (d >= monthStart && d <= monthEnd) bonus += cleanNumber(tx.total_amount);
+        });
       }
 
-      // Sonuç: Ekrana ve 360° panele gönderilecek kusursuz satır
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      const insurance_m = round2(cleanNumber(veh.insurance_cost) / 12);
+      const kasko_m = round2(cleanNumber(veh.kasko_cost) / 12);
+      const mtv_m = round2(cleanNumber(veh.last_mtv_cost) / 12);
+      const inspection_m = round2(cleanNumber(veh.inspection_cost) / 12);
+      const fixed_monthly = round2(insurance_m + kasko_m + mtv_m + inspection_m);
+
+      const bakim = cleanPlate.length >= 5
+        ? dbInvoices
+            .filter(inv => {
+              const d = sanitizeDate(inv.issue_date || inv.created_at);
+              if (d < monthStart || d > monthEnd) return false;
+              if (!['maintenance', 'tires'].includes(String(inv.category || ''))) return false;
+              const haystack = `${inv.invoice_no || ''} ${inv.description || ''}`.replace(/\s+/g, '').toUpperCase();
+              return haystack.includes(cleanPlate);
+            })
+            .reduce((sum, inv) => sum + cleanNumber(inv.total_amount), 0)
+        : 0;
+
+      const payroll = driver_sal + bonus;
+      const totalCost = payroll + sgk + fuel + hgs + fixed_monthly + bakim;
+      const netProfit = invoice_rev - totalCost;
+
       return {
         id: veh.id,
-        month_year: 'Seçili Dönem',
-        plate_number: veh.plate_number,
+        vehicle: veh,
+        month_year: profitMonth,
+        plate_number: plate,
+        driver_name: veh.driver_name || '',
         invoice_rev,
+        fuel,
+        hgs,
         driver_sal,
-        fuel_ex_vat,
-        hgs_ex_vat,
         bonus,
+        payroll,
         sgk,
-        other_exp
+        insurance_m,
+        kasko_m,
+        mtv_m,
+        inspection_m,
+        fixed_monthly,
+        bakim,
+        totalCost,
+        netProfit,
+        included,
+        vehicleType
       };
     });
-  }, [dbVehicles, filteredInvoices, dbEmployees]);
+  }, [dbVehicles, dbEmployees, dbEmployeeTransactions, dbInvoices, monthlyInputRows, profitMonth, sgkDriverAmount]);
 
   // Seçilen dönem satış cirosu
   const totalPeriodSalesRevenue = filteredInvoices
@@ -1012,7 +1305,7 @@ export default function App() {
   const totalConsolidatedDebt = unpaidSubcontractorDebt + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
 
   // GÜNCEL KASA / BANKA (Fiilen ödenen taşeron vadeleri ve harcamalar düşülür)
-  const baseCash = 845200;
+  const baseCash = cashOpening;
   const manualCashDeposits = dbInvoices
     .filter(i => i.category === 'cash_deposit')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
@@ -1040,16 +1333,18 @@ export default function App() {
     return dbInvoices
       .filter(i => i.category === 'freight_sales' || i.direction === 'outgoing')
       .map(inv => {
-        let cust = 'MİGROS TİCARET A.Ş.';
+        let cust = '';
         let fNo = inv.invoice_no || '';
 
         if (fNo.includes(' - ')) {
           const parts = fNo.split(' - ');
           fNo = parts[0].trim();
           cust = parts.slice(1).join(' - ').trim();
-        } else if (fNo.toUpperCase().startsWith('EF') || fNo.toUpperCase().startsWith('EA') || fNo.toUpperCase().includes('MİGROS') || fNo.toUpperCase().includes('MIGROS')) {
-          cust = 'MİGROS TİCARET A.Ş.';
         }
+
+        const matched = matchCustomer(cust || fNo, '', dbCustomers);
+        if (matched) cust = matched.name;
+        else if (!cust) cust = 'Eşleşmeyen müşteri';
 
         return {
           ...inv,
@@ -1057,7 +1352,61 @@ export default function App() {
           cleanInvoiceNo: fNo
         };
       });
-  }, [dbInvoices]);
+  }, [dbInvoices, dbCustomers]);
+
+  const customerBalances = useMemo(() => {
+    const belongsTo = (inv: any, customer: Customer) =>
+      !!matchCustomer(String(inv.invoice_no || ''), '', [customer]);
+
+    const rows = dbCustomers.map(customer => {
+      const openSales = dbInvoices
+        .filter(i =>
+          (i.category === 'freight_sales' || i.direction === 'outgoing') &&
+          i.status !== 'paid' &&
+          belongsTo(i, customer)
+        )
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const collections = dbInvoices
+        .filter(i => i.category === 'customer_collection' && belongsTo(i, customer))
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const advances = dbInvoices
+        .filter(i => i.category === 'customer_advance' && belongsTo(i, customer))
+        .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+
+      const net = openSales - advances;
+      return { customer, openSales, collections, advances, net };
+    });
+
+    return rows.sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+  }, [dbCustomers, dbInvoices]);
+
+  const selectedCariLedger = useMemo(() => {
+    if (!selectedCariCustomer) return [];
+    const belongs = (inv: any) => !!matchCustomer(String(inv.invoice_no || ''), '', [selectedCariCustomer]);
+    const lines: { date: string; type: string; title: string; debit: number; credit: number }[] = [];
+
+    dbInvoices.filter(belongs).forEach(inv => {
+      const amt = cleanNumber(inv.total_amount);
+      const date = sanitizeDate(inv.issue_date || inv.created_at) || '';
+      const title = String(inv.invoice_no || '');
+      if (inv.category === 'freight_sales' || inv.direction === 'outgoing') {
+        lines.push({ date, type: inv.status === 'paid' ? 'Fatura (tahsil edildi)' : 'Satış faturası', title, debit: amt, credit: 0 });
+      } else if (inv.category === 'customer_collection') {
+        lines.push({ date, type: 'Tahsilat / ödeme', title, debit: 0, credit: amt });
+      } else if (inv.category === 'customer_advance') {
+        lines.push({ date, type: 'Cari avans', title, debit: 0, credit: amt });
+      }
+    });
+
+    lines.sort((a, b) => a.date.localeCompare(b.date));
+    let running = 0;
+    return lines.map(line => {
+      running += line.debit - line.credit;
+      return { ...line, balance: running };
+    });
+  }, [selectedCariCustomer, dbInvoices]);
 
   // SATIŞ TABLOSU İÇİN ARAMA VE BAŞLIĞA GÖRE SIRALAMA
   const [salesSearchQuery, setSalesSearchQuery] = useState('');
@@ -1104,6 +1453,240 @@ export default function App() {
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
     }));
   };
+
+  const exportCariExcel = (customer: Customer, ledger: typeof selectedCariLedger) => {
+    const header = [
+      ['Tazeyol ERP Cari Ekstre'],
+      ['Müşteri', customer.name],
+      ['VKN', customer.tax_id || ''],
+      ['Telefon', customer.phone || ''],
+      ['Döküm tarihi', new Date().toLocaleDateString('tr-TR')],
+      [],
+      ['Tarih', 'İşlem', 'Açıklama', 'Borç (Fatura)', 'Alacak (Ödeme)', 'Bakiye']
+    ];
+    const body = ledger.map(line => [
+      line.date,
+      line.type,
+      line.title,
+      line.debit || 0,
+      line.credit || 0,
+      line.balance
+    ]);
+    const kapanis = ledger.length ? ledger[ledger.length - 1].balance : 0;
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ...header,
+      ...body,
+      [],
+      ['', '', 'Kapanış bakiyesi', '', '', kapanis]
+    ]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Cari');
+    const safeName = customer.name.replace(/[\\/:*?"<>|]/g, ' ').slice(0, 40).trim();
+    XLSX.writeFile(workbook, `Tazeyol_Cari_${safeName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const payrollMonthList = useMemo(() => {
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    let from = payrollFrom || '2020-01';
+    let to = payrollTo || from;
+    if (from > to) {
+      const tmp = from;
+      from = to;
+      to = tmp;
+    }
+    const months: string[] = [];
+    let [y, m] = from.split('-').map(Number);
+    const [ty, tm] = to.split('-').map(Number);
+    let guard = 0;
+    while ((y < ty || (y === ty && m <= tm)) && guard < 120) {
+      months.push(`${y}-${pad(m)}`);
+      m += 1;
+      if (m > 12) {
+        m = 1;
+        y += 1;
+      }
+      guard += 1;
+    }
+    return months;
+  }, [payrollFrom, payrollTo]);
+
+  const selectedPayrollLedger = useMemo(() => {
+    if (!selectedPayrollEmp) return [];
+    const emp = selectedPayrollEmp;
+    const empIdStr = String(emp.id || '');
+    const empNorm = String(emp.full_name || '').toLowerCase().trim();
+    const months = payrollMonthList;
+    if (!months.length) return [];
+    const startInfo = resolveEmployeeStart(emp);
+    const hire = startInfo.date;
+    const hireYm = hire ? hire.slice(0, 7) : '';
+    const rangeStart = `${months[0]}-01`;
+    const lastYm = months[months.length - 1];
+    const [ly, lm] = lastYm.split('-').map(Number);
+    const lastDay = new Date(ly, lm, 0).getDate();
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    const rangeEnd = `${ly}-${pad(lm)}-${pad(lastDay)}`;
+    const inRange = (d: string) => {
+      if (!d) return false;
+      if (hire && d < hire) return false;
+      return d >= rangeStart && d <= rangeEnd;
+    };
+
+    const lines: { date: string; type: string; title: string; earn: number; cut: number }[] = [];
+    const base = cleanNumber(emp.base_salary);
+    const cardBonus = cleanNumber(emp.monthly_bonus);
+
+    months.forEach(ym => {
+      if (hireYm && ym < hireYm) return;
+      const share = employmentShareForMonth(hire, ym);
+      if (share.factor <= 0) return;
+      const date = hireYm === ym && hire ? hire : `${ym}-01`;
+      const [yy, mm] = ym.split('-');
+      const label = `${mm}.${yy}`;
+      const proNote = share.startedThisMonth
+        ? ` · ${startInfo.label} ${formatDateTR(hire)}, ${share.daysWorked}/${share.daysInMonth} gün`
+        : '';
+      if (base > 0) {
+        lines.push({
+          date,
+          type: 'Sabit maaş',
+          title: `${label} sözleşmeli maaş (güncel tarife)${proNote}`,
+          earn: Math.round(base * share.factor * 100) / 100,
+          cut: 0
+        });
+      }
+      if (cardBonus > 0) {
+        lines.push({
+          date,
+          type: 'Kart primi',
+          title: `${label} kart aylık prim (güncel tarife)${proNote}`,
+          earn: Math.round(cardBonus * share.factor * 100) / 100,
+          cut: 0
+        });
+      }
+    });
+
+    (dbEmployeeTransactions || []).forEach((tx: any) => {
+      if (String(tx.employee_id) !== empIdStr) return;
+      const d = sanitizeDate(tx.transaction_date || tx.created_at);
+      const tot = cleanNumber(tx.total_amount);
+      if (tx.type === 'bonus') {
+        if (!inRange(d)) return;
+        lines.push({ date: d, type: 'Sefer / prim', title: tx.title || 'Prim', earn: tot, cut: 0 });
+      } else if (tx.type === 'advance') {
+        if (!inRange(d)) return;
+        lines.push({ date: d, type: 'Münferit avans', title: tx.title || 'Avans', earn: 0, cut: tot });
+      } else if (tx.type === 'installment_advance') {
+        const inst = Math.max(1, Number(tx.installment_count) || 1);
+        const cutAmt = cleanNumber(tx.monthly_cut || Math.round(tot / inst));
+        const startYm = (d || rangeStart).slice(0, 7);
+        months.forEach(ym => {
+          if (ym < startYm) return;
+          const [sy, sm] = startYm.split('-').map(Number);
+          const [cy, cm] = ym.split('-').map(Number);
+          const elapsed = (cy - sy) * 12 + (cm - sm);
+          if (elapsed < 0 || elapsed >= inst) return;
+          lines.push({
+            date: `${ym}-01`,
+            type: 'Taksit kesintisi',
+            title: `${tx.title || 'Taksitli avans'} (${elapsed + 1}/${inst})`,
+            earn: 0,
+            cut: cutAmt
+          });
+        });
+      }
+    });
+
+    (dbAdvances || []).forEach((a: any) => {
+      if (a.target_type !== 'employee') return;
+      const targetNorm = String(a.target_name || '').toLowerCase().trim();
+      const targetId = String(a.target_id || '');
+      const isMatch =
+        (targetId && targetId === empIdStr) ||
+        (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
+      if (!isMatch) return;
+      const d = sanitizeDate(a.created_at || a.payment_date || a.issue_date);
+      if (!inRange(d)) return;
+      const amt = cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount);
+      const isBonus = a.payment_type === 'employee_bonus';
+      lines.push({
+        date: d,
+        type: isBonus ? 'Kasa prim' : 'Kasa avans',
+        title: a.description || a.reason || 'Kasa hareketi',
+        earn: isBonus ? amt : 0,
+        cut: isBonus ? 0 : amt
+      });
+    });
+
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'salary_payroll') return;
+      const hay = String(inv.invoice_no || '').toLowerCase();
+      if (!empNorm || !hay.includes(empNorm)) return;
+      const d = sanitizeDate(inv.issue_date || inv.created_at);
+      if (!inRange(d)) return;
+      lines.push({
+        date: d,
+        type: 'Maaş ödemesi',
+        title: inv.invoice_no || 'Maaş',
+        earn: 0,
+        cut: cleanNumber(inv.total_amount)
+      });
+    });
+
+    lines.sort((a, b) => a.date.localeCompare(b.date) || a.type.localeCompare(b.type, 'tr'));
+    let running = 0;
+    return lines.map(line => {
+      running += line.earn - line.cut;
+      return { ...line, balance: running };
+    });
+  }, [selectedPayrollEmp, payrollMonthList, dbEmployeeTransactions, dbAdvances, dbInvoices]);
+
+  const exportPayrollExcel = (emp: any, ledger: typeof selectedPayrollLedger) => {
+    const header = [
+      ['Tazeyol ERP Personel Hakediş Raporu'],
+      ['Personel', emp.full_name || ''],
+      ['Görev', emp.role_title || ''],
+      ['İşe giriş / başlangıç', emp.hire_date ? formatDateTR(emp.hire_date) : `${resolveEmployeeStart(emp).label}: ${formatDateTR(resolveEmployeeStart(emp).date)}`],
+      ['Dönem', `${payrollFrom} — ${payrollTo}`],
+      ['Döküm tarihi', new Date().toLocaleDateString('tr-TR')],
+      [],
+      ['Tarih', 'İşlem', 'Açıklama', 'Hakediş', 'Kesinti / ödeme', 'Bakiye']
+    ];
+    const body = ledger.map(line => [
+      line.date,
+      line.type,
+      line.title,
+      line.earn || 0,
+      line.cut || 0,
+      line.balance
+    ]);
+    const kapanis = ledger.length ? ledger[ledger.length - 1].balance : 0;
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ...header,
+      ...body,
+      [],
+      ['', '', 'Kapanış bakiyesi', '', '', kapanis]
+    ]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Hakedis');
+    const safeName = String(emp.full_name || 'personel').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 40).trim();
+    XLSX.writeFile(workbook, `Tazeyol_Hakedis_${safeName}_${payrollFrom}_${payrollTo}.xlsx`);
+  };
+
+  const openPayrollReport = (emp: any) => {
+    const d = new Date();
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    const nowYm = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    const yearStart = `${d.getFullYear()}-01`;
+    const hireYm = resolveEmployeeStart(emp).date.slice(0, 7);
+    let from = yearStart;
+    if (hireYm && hireYm > from) from = hireYm;
+    if (from > nowYm) from = nowYm;
+    setPayrollFrom(from);
+    setPayrollTo(nowYm);
+    setSelectedPayrollEmp(emp);
+  };
+
 // 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA (TÜRKÇE KARAKTER & TOPLU AVANS GÜVENLİKLİ)
   const bankPaymentGroupedList = useMemo(() => {
     const normalizeKey = (str: string) => {
@@ -1902,11 +2485,85 @@ export default function App() {
   };
 
   // PERSONEL CARİ HAREKETİNİ SİL (AVANS / PRİM HATALI GİRİŞ DÜZELTME)
+  const openCustomerModal = (customer?: Customer) => {
+    if (customer) {
+      setEditingCustomerId(customer.id);
+      setCustomerFormData({
+        name: customer.name || '',
+        tax_id: customer.tax_id || '',
+        tax_office: customer.tax_office || '',
+        address: customer.address || '',
+        phone: customer.phone || '',
+        email: customer.email || '',
+        notes: customer.notes || ''
+      });
+    } else {
+      setEditingCustomerId(null);
+      setCustomerFormData({
+        name: '',
+        tax_id: '',
+        tax_office: '',
+        address: '',
+        phone: '',
+        email: '',
+        notes: ''
+      });
+    }
+    setIsCustomerModalOpen(true);
+  };
+
+  const handleSaveCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    const name = customerFormData.name.trim();
+    if (!name) {
+      alert('Müşteri unvanı zorunludur.');
+      return;
+    }
+    const payload = {
+      name,
+      tax_id: customerFormData.tax_id.trim() || null,
+      tax_office: customerFormData.tax_office.trim() || null,
+      address: customerFormData.address.trim() || null,
+      phone: customerFormData.phone.trim() || null,
+      email: customerFormData.email.trim() || null,
+      notes: customerFormData.notes.trim() || null
+    };
+    try {
+      if (editingCustomerId) {
+        const { error } = await supabase.from('customers').update(payload).eq('id', editingCustomerId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('customers').insert([payload]);
+        if (error) throw error;
+      }
+      setIsCustomerModalOpen(false);
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Müşteri kaydedilemedi: ' + (err.message || 'Tablo yoksa supabase/setup_customers.sql dosyasını SQL Editor’da çalıştırın.'));
+    }
+  };
+
+  const handleDeleteCustomer = async (customer: Customer) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`${customer.name} kartı silinsin mi? Eski faturalar durur; yeni Excel eşleşmesi bu unvanı bulamaz.`)) return;
+    try {
+      const { error } = await supabase.from('customers').delete().eq('id', customer.id);
+      if (error) throw error;
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Müşteri silinemedi: ' + err.message);
+    }
+  };
+
   const handleDeleteAdvanceRecord = async (advId: string | number) => {
     if (!window.confirm('Bu cari kaydı (avans/prim) silmek istediğinize emin misiniz? Bakiye yeniden hesaplanacaktır.')) return;
     try {
-      const { error } = await supabase.from('advances').delete().eq('id', advId);
-      if (error) throw error;
+      let { error } = await supabase.from('advance_payments').delete().eq('id', advId);
+      if (error) {
+        const second = await supabase.from('advances').delete().eq('id', advId);
+        if (second.error) throw error;
+      }
       await loadPortalData();
     } catch (err: any) {
       alert('Kayıt silinemedi: ' + err.message);
@@ -1970,6 +2627,8 @@ export default function App() {
       full_name: (employeeFormData.fullName || '').trim(),
       role_title: employeeFormData.roleTitle || 'Kamyon Şoförü / Dağıtım',
       base_salary: cleanNumber(employeeFormData.baseSalary),
+      employer_sgk: cleanNumber(employeeFormData.employerSgk),
+      hire_date: employeeFormData.hireDate || null,
       phone: (employeeFormData.phone || '').trim(),
       iban: formatIBAN(employeeFormData.iban || ''),
       monthly_bonus: bonusAmt,
@@ -1980,23 +2639,38 @@ export default function App() {
       advance_installments: Number(employeeFormData.advanceInstallments) || 1
     };
       
-    if (editingEmployeeId) {
-      const { error } = await supabase.from('employees').update(payload).eq('id', editingEmployeeId);
-      if (error) throw error;
-
-      alert('Personel bilgileri ve prim başarıyla güncellendi!');
-      } else {
-        const { error } = await supabase.from('employees').insert([payload]);
-        if (error) throw error;
-        alert('Yeni personel başarıyla kaydedildi!');
+    const savePayload = async (data: typeof payload) => {
+      if (editingEmployeeId) {
+        return supabase.from('employees').update(data).eq('id', editingEmployeeId);
       }
+      return supabase.from('employees').insert([data]);
+    };
+
+    let { error } = await savePayload(payload);
+    let missingColumn = false;
+    if (error && /could not find the/i.test(error.message)) {
+      missingColumn = true;
+      const fallback: any = { ...payload };
+      if (error.message.includes('hire_date')) delete fallback.hire_date;
+      if (error.message.includes('employer_sgk')) delete fallback.employer_sgk;
+      const retry = await savePayload(fallback);
+      error = retry.error;
+    }
+    if (error) throw error;
+    alert(
+      missingColumn
+        ? 'Personel kaydedildi. İşe girişin kalması için setup_employee_sgk.sql dosyasını SQL Editor’da bir kez Run deyin.'
+        : editingEmployeeId
+          ? 'Personel bilgileri ve prim başarıyla güncellendi!'
+          : 'Yeni personel başarıyla kaydedildi!'
+    );
 
       setIsEmployeeModalOpen(false);
       setEditingEmployeeId(null);
-      setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '' });
+      setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', employerSgk: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '', hireDate: '' });
       loadPortalData();
     } catch (err: any) {
-      alert('Personel işlem hatası: ' + err.message);
+      alert('Personel işlem hatası: ' + err.message + '\nsetup_employee_hire.sql ve setup_employee_sgk.sql dosyalarını SQL Editor’da çalıştırın.');
     }
   };
 
@@ -2053,6 +2727,7 @@ export default function App() {
         hgs_system: vehicleFormData.hgsSystem,
         vehicle_type: vehicleFormData.vehicleType,
         ownership_type: vehicleFormData.ownershipType,
+        is_active: vehicleFormData.isActive !== false,
         next_inspection_date: vehicleFormData.nextInspectionDate || null,
         inspection_cost: cleanNumber(vehicleFormData.inspectionCost),
         insurance_company: vehicleFormData.insuranceCompany.trim() || null,
@@ -2080,7 +2755,7 @@ export default function App() {
       setEditingVehicleId(null);
       loadPortalData();
     } catch (err: any) {
-      alert('Araç işlem hatası: ' + (err.message || err));
+      alert('Araç işlem hatası: ' + (err.message || err) + '\nGerekirse setup_vehicles.sql dosyasını SQL Editor’da çalıştırın.');
     } finally {
       setIsSavingVehicle(false);
     }
@@ -2097,8 +2772,9 @@ export default function App() {
       trackingSystem: v.tracking_system || 'Var',
       fuelSystem: v.fuel_system || 'UTTS',
       hgsSystem: v.hgs_system || 'SHELL',
-      vehicleType: v.vehicle_type || 'Kamyon Frigo (10 Palet)',
+      vehicleType: normalizeVehicleType(v.vehicle_type),
       ownershipType: v.ownership_type || 'Öz Mal',
+      isActive: v.is_active !== false,
       nextInspectionDate: sanitizeDate(v.next_inspection_date),
       inspectionCost: String(v.inspection_cost || ''),
       insuranceCompany: v.insurance_company || '',
@@ -2210,7 +2886,8 @@ export default function App() {
 
  const menuItems = [
     { id: 'overview', label: 'Genel Görünüm', icon: LayoutDashboard },
-    { id: 'sales_customers', label: 'Satış & Müşteriler', badge: salesDetailedList.length, icon: TrendingUp },
+    { id: 'customers', label: 'Müşteri Kartları', badge: dbCustomers.length, icon: Contact },
+    { id: 'sales_customers', label: 'Satış Faturaları', badge: salesDetailedList.length, icon: TrendingUp },
     { id: 'subcontractors', label: 'Alt Yüklenici Hakedişleri', badge: dbInvoices.filter(i => i.category === 'subcontractor_invoice').length, icon: Users },
     { id: 'sub_accounts', label: 'Alt Yüklenici Cari Kartları', badge: dbSubcontractors.length, icon: Building2 },
     { id: 'sub_ibans', label: 'Taşeron IBAN Yönetimi', badge: dbSubcontractors.length, icon: Wallet },
@@ -2537,17 +3214,34 @@ export default function App() {
                     <DollarSign className="w-3.5 h-3.5" /> Güncel Kasa / Banka
                   </span>
                   {isAdmin && (
+                    <div className="flex gap-1">
+                    <button 
+                      onClick={async () => {
+                        const raw = window.prompt('Kasa açılış bakiyesi (₺)', String(cashOpening));
+                        if (raw === null) return;
+                        const next = cleanNumber(raw);
+                        try {
+                          await saveAppSetting('cash_opening', String(next));
+                          setCashOpening(next);
+                        } catch (err: any) {
+                          alert('Açılış bakiyesi kaydedilemedi. setup_customers.sql dosyasını SQL Editor’da çalıştırın.\n' + (err.message || ''));
+                        }
+                      }}
+                      className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded text-[10px] font-bold transition">
+                      Açılış
+                    </button>
                     <button 
                       onClick={() => setIsCashDepositModalOpen(true)}
                       className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded text-[10px] font-bold transition flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Para Ekle
                     </button>
+                    </div>
                   )}
                 </div>
                 <div className="text-2xl font-bold mt-2">
                   {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-xs text-blue-100 mt-1 block">Ortak Fonları ve Tahsilatlar Dahil Net Nakit</span>
+                <span className="text-xs text-blue-100 mt-1 block">Açılış {cashOpening.toLocaleString('tr-TR')} ₺ + tahsilat − ödemeler</span>
               </div>
             </div>
 
@@ -2723,23 +3417,144 @@ export default function App() {
           </div>
         )}
         
+        {activeTab === 'customers' && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Müşteri Kartları</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Her müşterinin açık faturası, tahsilatı ve net bakiyesi. Artı = müşteriden alacak, eksi = fazla avans (borç).</p>
+              </div>
+              {isAdmin && (
+                <button
+                  onClick={() => openCustomerModal()}
+                  className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5">
+                  <Plus className="w-4 h-4" /> Yeni Müşteri
+                </button>
+              )}
+            </div>
+            <input
+              type="text"
+              placeholder="Unvan, VKN veya telefon ara..."
+              value={customerSearchTerm}
+              onChange={e => setCustomerSearchTerm(e.target.value)}
+              className="w-full sm:w-80 px-3.5 py-2 border border-slate-200 rounded-xl text-xs"
+            />
+            {dbCustomers.length === 0 ? (
+              <p className="text-sm text-slate-500 bg-amber-50 border border-amber-100 rounded-xl p-4">
+                Henüz müşteri yok. Önce Supabase SQL Editor’da <b>setup_customers.sql</b> dosyasını çalıştırın, sonra buradan kart ekleyin.
+              </p>
+            ) : (
+              <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                  <span className="text-[11px] text-amber-800 font-semibold block">Toplam açık fatura</span>
+                  <span className="text-lg font-bold text-slate-900">{customerBalances.reduce((s, r) => s + r.openSales, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+                  <span className="text-[11px] text-emerald-800 font-semibold block">Toplam cari avans</span>
+                  <span className="text-lg font-bold text-emerald-800">{customerBalances.reduce((s, r) => s + r.advances, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <span className="text-[11px] text-slate-600 font-semibold block">Net bakiye (alacak − avans)</span>
+                  <span className={`text-lg font-bold ${customerBalances.reduce((s, r) => s + r.net, 0) >= 0 ? 'text-amber-800' : 'text-rose-700'}`}>
+                    {customerBalances.reduce((s, r) => s + r.net, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  </span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-slate-500 border-b border-slate-100">
+                      <th className="py-2 pr-3">Unvan</th>
+                      <th className="py-2 pr-3 text-right">Açık fatura</th>
+                      <th className="py-2 pr-3 text-right">Tahsilat</th>
+                      <th className="py-2 pr-3 text-right">Cari avans</th>
+                      <th className="py-2 pr-3 text-right">Net bakiye</th>
+                      <th className="py-2 pr-3">Durum</th>
+                      <th className="py-2 text-center">İşlem</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customerBalances
+                      .filter(row => {
+                        const q = customerSearchTerm.trim().toLocaleLowerCase('tr-TR');
+                        if (!q) return true;
+                        const c = row.customer;
+                        return [c.name, c.tax_id, c.phone, c.email].join(' ').toLocaleLowerCase('tr-TR').includes(q);
+                      })
+                      .map(row => {
+                        const c = row.customer;
+                        const durum = row.net > 0.5 ? 'Alacak' : row.net < -0.5 ? 'Borç / avans fazla' : 'Kapalı';
+                        return (
+                        <tr key={c.id} className="border-b border-slate-50">
+                          <td className="py-2.5 pr-3">
+                            <div className="font-semibold text-slate-800">{c.name}</div>
+                            <div className="text-[10px] text-slate-400">{c.tax_id || 'VKN yok'}{c.phone ? ` · ${c.phone}` : ''}</div>
+                          </td>
+                          <td className="py-2.5 pr-3 text-right font-semibold">{row.openSales.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                          <td className="py-2.5 pr-3 text-right text-emerald-700">{row.collections.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                          <td className="py-2.5 pr-3 text-right text-blue-700">{row.advances.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                          <td className={`py-2.5 pr-3 text-right font-black ${row.net > 0.5 ? 'text-amber-800' : row.net < -0.5 ? 'text-rose-700' : 'text-slate-500'}`}>
+                            {row.net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          </td>
+                          <td className="py-2.5 pr-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${durum === 'Alacak' ? 'bg-amber-100 text-amber-800' : durum === 'Kapalı' ? 'bg-slate-100 text-slate-600' : 'bg-rose-100 text-rose-700'}`}>
+                              {durum}
+                            </span>
+                          </td>
+                          <td className="py-2.5 text-center space-x-1 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedCariCustomer(c)}
+                                className="text-[10px] font-bold text-slate-800 hover:underline"
+                              >
+                                Cari döküm
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSalesSearchQuery(c.name);
+                                  setActiveTab('sales_customers');
+                                }}
+                                className="text-[10px] font-bold text-[#009fe3] hover:underline"
+                              >
+                                Faturalar
+                              </button>
+                              {isAdmin && (
+                                <>
+                              <button type="button" onClick={() => openCustomerModal(c)} className="p-1.5 text-slate-500 hover:text-blue-600"><Edit2 className="w-4 h-4 inline" /></button>
+                              <button type="button" onClick={() => handleDeleteCustomer(c)} className="p-1.5 text-slate-500 hover:text-rose-600"><Trash2 className="w-4 h-4 inline" /></button>
+                                </>
+                              )}
+                            </td>
+                        </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+              </>
+            )}
+          </div>
+        )}
+
         {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           
-          {/* MİGROS TİCARET A.Ş. CARİ VE AVANS YÖNETİM HAVUZU */}
           <div className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-white/10">
               <div>
-                <span className="bg-blue-500/30 text-blue-200 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">Ana Cari Hesap</span>
-                <h4 className="text-lg font-black tracking-tight mt-0.5">MİGROS TİCARET A.Ş.</h4>
+                <span className="bg-blue-500/30 text-blue-200 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">Cari Havuz</span>
+                <h4 className="text-lg font-black tracking-tight mt-0.5">{dbCustomers.length} kayıtlı müşteri</h4>
+                <p className="text-blue-100 text-[11px] mt-1">Excel yüklemeden önce Müşteri Kartları menüsünden unvanları tanıtın.</p>
               </div>
               {isAdmin && (
                 <button
                   type="button"
                   onClick={() => {
                     setNewReceiptFormData({
-                      customerName: 'MİGROS TİCARET A.Ş.',
-                      receiptNo: `AVANS-MIGROS-${new Date().getMonth() + 1}`,
+                      customerName: dbCustomers[0]?.name || '',
+                      receiptNo: `AVANS-${new Date().getMonth() + 1}`,
                       amount: '',
                       targetAccount: 'bank',
                       date: new Date().toISOString().split('T')[0],
@@ -2812,7 +3627,7 @@ export default function App() {
             </div>
             {/* BEKLEYEN VE SEÇİLİ TAHSİLAT ÖZET KARTI */}
         {(() => {
-          const salesInvoices = dbInvoices.filter((i: any) => i.direction === 'outgoing' || i.category === 'sales_invoice');
+          const salesInvoices = dbInvoices.filter((i: any) => i.direction === 'outgoing' || i.category === 'freight_sales');
           const uncollected = salesInvoices.filter((i: any) => i.status !== 'paid');
           const totalUncollectedAmt = uncollected.reduce((acc: number, cur: any) => acc + (Number(cur.total_amount) || 0), 0);
 
@@ -3606,7 +4421,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               <button
                 onClick={() => {
                   setEditingEmployeeId(null);
-                  setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '' });
+                  setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', employerSgk: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '', hireDate: '' });
                   setIsEmployeeModalOpen(true);
                 }}
                 className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
@@ -3733,6 +4548,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     <span className="text-xs text-blue-600">{empSortField === 'salary' ? (empSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
                   </div>
                 </th>
+                <th className="py-3 px-3 text-right">SGK işveren</th>
                 <th className="py-3 px-3 text-right">Prim / Ek</th>
                 <th className="py-3 px-3 text-right">Kesilen Avans</th>
                 <th 
@@ -3747,7 +4563,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     <span className="text-xs text-blue-600">{empSortField === 'netPayable' ? (empSortOrder === 'asc' ? '▲' : '▼') : '↕'}</span>
                   </div>
                 </th>
-                {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
+                <th className="py-3 px-3 text-center">İşlem</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -3758,12 +4574,23 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       <span className="font-bold text-slate-900 text-sm">{emp.full_name}</span>
                       <span className="text-[11px] text-slate-500 font-medium">
                         {emp.role_title} • {formatPhone(emp.phone || '') || 'Tel Yok'}
+                        {emp.hire_date
+                          ? ` • Giriş: ${formatDateTR(emp.hire_date)}`
+                          : emp.created_at
+                            ? ` • Kayıt: ${formatDateTR(emp.created_at)}`
+                            : ''}
                       </span>
                     </div>
                   </td>
 
                   <td className="py-3 px-3 text-right font-medium text-slate-700">
                     {emp.baseSalaryNum.toLocaleString('tr-TR')} ₺
+                  </td>
+
+                  <td className="py-3 px-3 text-right font-medium text-slate-600">
+                    {cleanNumber(emp.employer_sgk) > 0
+                      ? `${cleanNumber(emp.employer_sgk).toLocaleString('tr-TR')} ₺`
+                      : <span className="text-slate-400">-</span>}
                   </td>
 
                   <td className="py-3 px-3 text-right">
@@ -3799,8 +4626,17 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     </div>
                   </td>
 
-                  {isAdmin && (
-                    <td className="py-3 px-3 text-center space-x-1.5">
+                  <td className="py-3 px-3 text-center space-x-1.5">
+                      <button
+                        type="button"
+                        onClick={() => openPayrollReport(emp)}
+                        className="p-1.5 text-slate-600 hover:bg-slate-100 rounded transition"
+                        title="Hakediş raporu (PDF / Excel)"
+                      >
+                        <FileText className="w-4 h-4" />
+                      </button>
+                      {isAdmin && (
+                        <>
                       <button
                         onClick={() => {
                           setEditingEmployeeId(emp.id);
@@ -3808,8 +4644,12 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       fullName: emp.full_name || '',
                       roleTitle: emp.role_title || 'Kamyon Şoförü / Dağıtım',
                       baseSalary: String(emp.base_salary || ''),
+                      employerSgk: emp.employer_sgk !== undefined && emp.employer_sgk !== null ? String(emp.employer_sgk) : '',
+                      hireDate: sanitizeDate(emp.hire_date),
                       phone: formatPhone(emp.phone || ''),
                       iban: emp.iban || '',
+                      monthlyBonus: String(emp.monthly_bonus || ''),
+                      bonusDescription: emp.bonus_description || '',
                      advanceTotal: emp.advance_total !== undefined && emp.advance_total !== null ? String(emp.advance_total) : (emp.monthly_advance ? String(emp.monthly_advance) : ''),
                       advanceInstallments: String(emp.advance_installments || '1'),
                     monthlyAdvance: String(emp.monthly_advance || ''),
@@ -3834,8 +4674,9 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
+                        </>
+                      )}
                     </td>
-                  )}
                 </tr>
               ))}
             </tbody>
@@ -3968,8 +4809,9 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       trackingSystem: 'Var',
                       fuelSystem: 'UTTS',
                       hgsSystem: 'SHELL',
-                      vehicleType: 'Kamyon Frigo (10 Palet)',
+                      vehicleType: 'Kamyon',
                       ownershipType: 'Öz Mal',
+                      isActive: true,
                       nextInspectionDate: '',
                       inspectionCost: '',
                       insuranceCompany: '',
@@ -4031,6 +4873,8 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
                     <th className="py-3 px-3">PLAKA</th>
+                    <th className="py-3 px-3">TİP</th>
+                    <th className="py-3 px-3">DURUM</th>
                     <th className="py-3 px-3">SÜRÜCÜ</th>
                     <th className="py-3 px-3">SİGORTA (TUTAR / BİTİŞ)</th>
                     <th className="py-3 px-3">KASKO (TUTAR / BİTİŞ)</th>
@@ -4066,9 +4910,17 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     const fixedCost = sigortaAmt + kaskoAmt + mtvAmt + muayeneAmt;
                     const totalCost = fixedCost + otherCost;
 
+                    const vehType = normalizeVehicleType(v.vehicle_type);
+                    const active = isActiveVehicle(v);
                     return (
-                      <tr key={v.id || idx} className="hover:bg-slate-50 transition">
+                      <tr key={v.id || idx} className={`hover:bg-slate-50 transition ${active ? '' : 'opacity-45'}`}>
                         <td className="py-3 px-3 font-mono font-bold text-blue-700">{plate || '-'}</td>
+                        <td className="py-3 px-3 text-slate-600">{vehType}</td>
+                        <td className="py-3 px-3">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                            {active ? 'Aktif' : 'Pasif'}
+                          </span>
+                        </td>
                         <td className="py-3 px-3 text-slate-700 font-medium">{v.driver_name || '-'}</td>
                         <td className="py-3 px-3">
                           <span className="font-semibold text-slate-800">
@@ -4130,140 +4982,131 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
         )}
 
 {/* 9. ÖZ MAL KARLILIK & MALİYET */}
-        {activeTab === 'profitability' && (() => {
-          const updateField = (plate: string, field: 'invoice_rev' | 'fuel' | 'hgs', val: string) => {
-            setManualData(prev => ({
-              ...prev,
-              [plate]: {
-                invoice_rev: field === 'invoice_rev' ? val : (prev[plate]?.invoice_rev ?? ''),
-                fuel: field === 'fuel' ? val : (prev[plate]?.fuel ?? ''),
-                hgs: field === 'hgs' ? val : (prev[plate]?.hgs ?? '')
-              }
-            }));
-          };
-
-          return (
+        {activeTab === 'profitability' && (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
                 <div>
-                  <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık & Sefer Analizi</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Ciro, Akaryakıt ve HGS manuel girilir; Maaş, SGK ve diğer giderler sistemden dinamik hesaplanır.</p>
+                  <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Ayın ilk haftasında bir önceki ay kapanır. Ciro, yakıt ve HGS diğer portaldan elle girilir; maaş+prim, SGK ve sigorta/kasko/MTV/muayene (yıllık÷12) sistemden gelir.
+                  </p>
                 </div>
+                <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700">
+                  <Calendar className="w-4 h-4 text-[#009fe3]" />
+                  <span>Ay</span>
+                  <input
+                    type="month"
+                    value={profitMonth}
+                    onChange={e => setProfitMonth(e.target.value)}
+                    className="bg-transparent outline-none font-bold"
+                  />
+                </label>
+              </div>
 
-                {/* TARİH FİLTRESİ */}
-                <div className="relative">
-                  <button
-                    onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
-                    className="flex items-center gap-3 px-4 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-semibold text-xs transition shadow-sm">
-                    <Calendar className="w-4 h-4 text-[#009fe3]" />
-                    <span>{filterStartDate} — {filterEndDate}</span>
-                    <span className="text-slate-400">▼</span>
-                  </button>
-
-                  {isDateDropdownOpen && (
-                    <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-4 z-50 flex flex-col gap-3">
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                        <span className="font-bold text-slate-800 text-xs">Tarih Aralığı Seçin</span>
-                        <button onClick={() => setIsDateDropdownOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
-                        <span className="text-slate-400 font-bold">—</span>
-                        <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
-                      </div>
-                    </div>
-                  )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam ciro</span>
+                  <span className="text-2xl font-black text-slate-900 mt-1 block">
+                    {dbProfitability.filter(p => p.included).reduce((sum, p) => sum + p.invoice_rev, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  </span>
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam gider</span>
+                  <span className="text-2xl font-black text-rose-600 mt-1 block">
+                    {dbProfitability.filter(p => p.included).reduce((sum, p) => sum + p.totalCost, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  </span>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                  <span className="text-xs font-bold text-blue-800 uppercase tracking-wider block">Net kâr / zarar</span>
+                  <span className="text-2xl font-black text-emerald-600 mt-1 block">
+                    {dbProfitability.filter(p => p.included).reduce((sum, p) => sum + p.netProfit, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  </span>
                 </div>
               </div>
 
-              {/* TABLO */}
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                     <tr>
-                      <th className="py-3 px-3">Dönem</th>
-                      <th className="py-3 px-3">Plaka (Detay için tıkla)</th>
-                      <th className="py-3 px-3">Sürücü (Dinamik)</th>
-                      <th className="py-3 px-3 text-right">Fatura Cirosu (Manuel)</th>
-                      <th className="py-3 px-3 text-right">Sürücü Maaşı (Dinamik)</th>
-                      <th className="py-3 px-3 text-right">Akaryakıt (Manuel)</th>
-                      <th className="py-3 px-3 text-right">HGS (Manuel)</th>
-                      <th className="py-3 px-3 text-right">Net Kâr / Zarar</th>
+                      <th className="py-3 px-3">Bu ay</th>
+                      <th className="py-3 px-3">Tip</th>
+                      <th className="py-3 px-3">Plaka</th>
+                      <th className="py-3 px-3">Şoför</th>
+                      <th className="py-3 px-3 text-right">Ciro (elle)</th>
+                      <th className="py-3 px-3 text-right">Yakıt (elle)</th>
+                      <th className="py-3 px-3 text-right">HGS (elle)</th>
+                      <th className="py-3 px-3 text-right">Maaş + prim</th>
+                      <th className="py-3 px-3 text-right">SGK</th>
+                      <th className="py-3 px-3 text-right">Sabit / ay</th>
+                      <th className="py-3 px-3 text-right">Bakım</th>
+                      <th className="py-3 px-3 text-right">Net kâr</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {dbVehicles.map((veh, idx) => {
-                      const plate = veh.plate_number;
-                      const currentManual = manualData[plate] || { invoice_rev: '', fuel: '', hgs: '' };
-
-                      let driver_sal = 0;
-                      let sgk = 0;
-                      if (veh.driver_name) {
-                        const driver = dbEmployees.find(emp => String(emp.full_name).toLowerCase().trim() === String(veh.driver_name).toLowerCase().trim());
-                        if (driver) {
-                          driver_sal = cleanNumber(driver.base_salary);
-                          sgk = 11148;
-                        }
-                      }
-
-                      const rev = cleanNumber(currentManual.invoice_rev);
-                      const fuel = cleanNumber(currentManual.fuel);
-                      const hgs = cleanNumber(currentManual.hgs);
-                      const totalCost = driver_sal + sgk + fuel + hgs;
-                      const netProfit = rev - totalCost;
-
+                    {dbProfitability.map(item => {
+                      const stored = monthlyInputRows.find(
+                        r => String(r.plate_number).trim() === item.plate_number && r.year_month === profitMonth
+                      );
+                      const fmtInput = (n: number) => (n ? String(n) : '');
                       return (
-                        <tr key={idx} className="hover:bg-slate-50 transition">
-                          <td className="py-3 px-3 font-semibold text-slate-700">Seçili Dönem</td>
-                          <td 
-                            onClick={() => openVehicle360(veh)}
-                            className="py-3 px-3 font-mono font-bold text-blue-700 text-sm cursor-pointer underline decoration-blue-300"
-                            title="Araç detaylarını aç">
-                            {plate}
-                          </td>
-                          <td className="py-3 px-3 text-slate-700 font-medium">{veh.driver_name || 'Atanmadı'}</td>
-                          
-                          {/* MANUEL: Fatura Cirosu */}
-                          <td className="py-3 px-3 text-right">
-                            <input 
-                              type="text" 
-                              placeholder="0,00"
-                              value={currentManual.invoice_rev}
-                              onChange={e => updateField(plate, 'invoice_rev', e.target.value)}
-                              className="w-28 px-2 py-1 border border-slate-200 rounded text-right font-bold text-slate-900 bg-white outline-none focus:border-blue-500"
+                        <tr key={item.id || item.plate_number} className={`hover:bg-slate-50 ${item.included ? '' : 'opacity-40'}`}>
+                          <td className="py-3 px-3">
+                            <input
+                              type="checkbox"
+                              checked={item.included}
+                              disabled={!isAdmin}
+                              onChange={e => saveMonthlyProfitInput(item.plate_number, 'included', e.target.checked)}
+                              title="Bu ay kârlılığa dahil et"
                             />
                           </td>
-
-                          {/* DİNAMİK: Sürücü Maaşı */}
-                          <td className="py-3 px-3 text-right font-semibold text-slate-700">
-                            {driver_sal.toLocaleString('tr-TR')} ₺
+                          <td className="py-3 px-3 text-slate-600">{item.vehicleType}</td>
+                          <td
+                            onClick={() => openVehicle360(item.vehicle)}
+                            className="py-3 px-3 font-mono font-bold text-blue-700 cursor-pointer underline decoration-blue-300"
+                          >
+                            {item.plate_number}
                           </td>
-
-                          {/* MANUEL: Akaryakıt */}
+                          <td className="py-3 px-3 font-medium text-slate-700">{item.driver_name || 'Atanmadı'}</td>
                           <td className="py-3 px-3 text-right">
-                            <input 
-                              type="text" 
-                              placeholder="0,00"
-                              value={currentManual.fuel}
-                              onChange={e => updateField(plate, 'fuel', e.target.value)}
-                              className="w-24 px-2 py-1 border border-slate-200 rounded text-right font-semibold text-slate-700 bg-white outline-none focus:border-blue-500"
+                            <input
+                              type="text"
+                              disabled={!isAdmin}
+                              defaultValue={fmtInput(item.invoice_rev)}
+                              key={`rev-${item.plate_number}-${profitMonth}-${stored?.updated_at || ''}`}
+                              onBlur={e => saveMonthlyProfitInput(item.plate_number, 'invoice_rev', e.target.value)}
+                              className="w-28 px-2 py-1 border border-slate-200 rounded text-right font-bold bg-white"
                             />
                           </td>
-
-                          {/* MANUEL: HGS */}
                           <td className="py-3 px-3 text-right">
-                            <input 
-                              type="text" 
-                              placeholder="0,00"
-                              value={currentManual.hgs}
-                              onChange={e => updateField(plate, 'hgs', e.target.value)}
-                              className="w-24 px-2 py-1 border border-slate-200 rounded text-right font-semibold text-slate-700 bg-white outline-none focus:border-blue-500"
+                            <input
+                              type="text"
+                              disabled={!isAdmin}
+                              defaultValue={fmtInput(item.fuel)}
+                              key={`fuel-${item.plate_number}-${profitMonth}-${stored?.updated_at || ''}`}
+                              onBlur={e => saveMonthlyProfitInput(item.plate_number, 'fuel', e.target.value)}
+                              className="w-24 px-2 py-1 border border-slate-200 rounded text-right bg-white"
                             />
                           </td>
-
-                          {/* NET KÂR */}
-                          <td className={`py-3 px-3 text-right font-black text-sm ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          <td className="py-3 px-3 text-right">
+                            <input
+                              type="text"
+                              disabled={!isAdmin}
+                              defaultValue={fmtInput(item.hgs)}
+                              key={`hgs-${item.plate_number}-${profitMonth}-${stored?.updated_at || ''}`}
+                              onBlur={e => saveMonthlyProfitInput(item.plate_number, 'hgs', e.target.value)}
+                              className="w-24 px-2 py-1 border border-slate-200 rounded text-right bg-white"
+                            />
+                          </td>
+                          <td className="py-3 px-3 text-right text-slate-700" title={`Maaş ${item.driver_sal.toLocaleString('tr-TR')} + prim ${item.bonus.toLocaleString('tr-TR')}`}>
+                            {item.payroll.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                          </td>
+                          <td className="py-3 px-3 text-right text-slate-700">{item.sgk.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
+                          <td className="py-3 px-3 text-right text-slate-700" title={`Sigorta ${item.insurance_m.toFixed(0)} + kasko ${item.kasko_m.toFixed(0)} + MTV ${item.mtv_m.toFixed(0)} + muayene ${item.inspection_m.toFixed(0)}`}>
+                            {item.fixed_monthly.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                          </td>
+                          <td className="py-3 px-3 text-right text-slate-700">{item.bakim.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                          <td className={`py-3 px-3 text-right font-black ${item.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {item.netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                           </td>
                         </tr>
                       );
@@ -4271,80 +5114,12 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </tbody>
                 </table>
               </div>
-
-            {/* ÖZET KARTLARI */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam Sefer Cirosu</span>
-                <span className="text-2xl font-black text-slate-900 mt-1 block">
-                  {dbProfitability.reduce((sum, p) => sum + cleanNumber(p.invoice_rev), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-              </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam Giderler</span>
-                <span className="text-2xl font-black text-rose-600 mt-1 block">
-                  {dbProfitability.reduce((sum, p) => {
-                    const cost = cleanNumber(p.driver_sal) + cleanNumber(p.fuel_ex_vat) + cleanNumber(p.hgs_ex_vat) + cleanNumber(p.bonus) + cleanNumber(p.sgk) + cleanNumber(p.other_exp);
-                    return sum + cost;
-                  }, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-              </div>
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
-                <span className="text-xs font-bold text-blue-800 uppercase tracking-wider block">Net Faaliyet Kârı</span>
-                <span className="text-2xl font-black text-emerald-600 mt-1 block">
-                  {dbProfitability.reduce((sum, p) => {
-                    const cost = cleanNumber(p.driver_sal) + cleanNumber(p.fuel_ex_vat) + cleanNumber(p.hgs_ex_vat) + cleanNumber(p.bonus) + cleanNumber(p.sgk) + cleanNumber(p.other_exp);
-                    return sum + (cleanNumber(p.invoice_rev) - cost);
-                  }, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-              </div>
+              <p className="text-[11px] text-slate-400">Listede yalnızca filoda Aktif işaretli öz mal kamyonet, kamyon ve TIR görünür. Binek ve dorse burada yer almaz. “Bu ay” kutusu kamyonet gibi araçları bazı aylar toplamdan çıkarır.</p>
+              {dbProfitability.length === 0 && (
+                <p className="text-sm text-slate-500">Gösterilecek araç yok. Filoda tipi Kamyonet/Kamyon/TIR, sahiplik Öz Mal ve durum Aktif olsun.</p>
+              )}
             </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Dönem</th>
-                    <th className="py-3 px-4">Plaka (Detay için tıkla)</th>
-                    <th className="py-3 px-4 text-right">Fatura Cirosu</th>
-                    <th className="py-3 px-4 text-right">Sürücü Maaşı</th>
-                    <th className="py-3 px-4 text-right">Akaryakıt (KDV Hariç)</th>
-                    <th className="py-3 px-4 text-right">HGS (KDV Hariç)</th>
-                    <th className="py-3 px-4 text-right">Net Kâr / Zarar</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dbProfitability.map((item, idx) => {
-                    const totalCost = cleanNumber(item.driver_sal) + cleanNumber(item.fuel_ex_vat) + cleanNumber(item.hgs_ex_vat) + cleanNumber(item.bonus) + cleanNumber(item.sgk) + cleanNumber(item.other_exp);
-                    const netProfit = cleanNumber(item.invoice_rev) - totalCost;
-                    return (
-                      <tr 
-                        key={idx} 
-                        onClick={() => {
-                          const matchedVeh = dbVehicles.find(v => String(v.plate_number).replace(/\s+/g, '').toUpperCase() === String(item.plate_number).replace(/\s+/g, '').toUpperCase()) || { plate_number: item.plate_number };
-                          openVehicle360(matchedVeh);
-                        }}
-                        className="hover:bg-blue-50/50 cursor-pointer transition"
-                        title="Aracın detaylarını açmak için tıklayın"
-                      >
-                        <td className="py-3.5 px-4 font-semibold text-slate-700">{item.month_year}</td>
-                        <td className="py-3.5 px-4 font-mono font-bold text-blue-700 text-sm underline decoration-blue-300">{item.plate_number}</td>
-                        <td className="py-3.5 px-4 text-right font-bold text-slate-900">{cleanNumber(item.invoice_rev).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3.5 px-4 text-right text-slate-700">{cleanNumber(item.driver_sal).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3.5 px-4 text-right text-slate-700">{cleanNumber(item.fuel_ex_vat).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3.5 px-4 text-right text-slate-700">{cleanNumber(item.hgs_ex_vat).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className={`py-3.5 px-4 text-right font-black text-sm ${netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            </div>
-          );
-        })()}
+        )}
 
         {/* 10. MÜŞTERİ TAHSİLATLARI */}
         {activeTab === 'collections' && (
@@ -4502,12 +5277,12 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
       {/* MODAL: PERSONEL EKLE & DÜZENLE (PRİM / EK MASRAF DESTEKLİ) */}
       {isEmployeeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">{editingEmployeeId ? 'Personeli Düzenle' : 'Yeni Personel Ekle'}</h3>
               <button onClick={() => setIsEmployeeModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={handleSaveEmployee} className="mt-4 space-y-3 text-xs">
+            <form onSubmit={handleSaveEmployee} className="mt-4 space-y-3 text-sm">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Adı Soyadı</label>
                 <input type="text" placeholder="Örn: Ahmet Yılmaz" value={employeeFormData.fullName} onChange={e => setEmployeeFormData({ ...employeeFormData, fullName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
@@ -4532,6 +5307,27 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   <input type="text" placeholder="56000" value={employeeFormData.baseSalary} onChange={e => setEmployeeFormData({ ...employeeFormData, baseSalary: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-indigo-700" required />
                 </div>
               </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">İşe giriş tarihi</label>
+                <input
+                  type="date"
+                  value={employeeFormData.hireDate}
+                  onChange={e => setEmployeeFormData({ ...employeeFormData, hireDate: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Hakediş ve öz mal maliyeti bu tarihten önce hesaplanmaz. Ayın ortasında girişte o ay gün oranına bölünür.</p>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">SGK işveren maliyeti (aylık)</label>
+                <input
+                  type="text"
+                  placeholder="11148"
+                  value={employeeFormData.employerSgk}
+                  onChange={e => setEmployeeFormData({ ...employeeFormData, employerSgk: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-slate-800"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Asgari ücret / tarife değişince bu kişiyi düzenleyip yeni tutarı yazın. Öz mal kârlılık bu alanı kullanır.</p>
+              </div>
           
    {/* PERSONEL CARİ HAREKETLERİ (ÇOKLU PRİM, ÇOKLU TEKİL AVANS, ÇOKLU TAKSİTLİ AVANS YÖNETİMİ) */}
               {editingEmployeeId && (
@@ -4544,76 +5340,77 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </div>
 
                  {/* 1. HIZLI HAREKET EKLEME PANELİ (TARİH SEÇİCİLİ) */}
-                  <div className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-2">
-                    <span className="text-[11px] font-bold text-slate-700 block">➕ Yeni Hareket Ekle (Prim / Avans / Taksit)</span>
-                    <div className="grid grid-cols-12 gap-1.5 items-end">
-                      <div className="col-span-2">
-                        <label className="block text-[9px] font-medium text-slate-500">Tarih</label>
+                  <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-3">
+                    <div>
+                      <span className="text-sm font-bold text-slate-800 block">Yeni hareket ekle</span>
+                      <span className="text-xs text-slate-500">Prim, münferit avans veya taksitli avans. Taksit sayısı yalnızca taksitli avansta kullanılır.</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">İşlem türü</label>
+                        <select id="new_tx_type" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white font-medium">
+                          <option value="bonus">Sefer / prim (maaşa ek)</option>
+                          <option value="advance">Münferit avans (tek sefer kesilir)</option>
+                          <option value="installment_advance">Taksitli avans (aylara bölünür)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Tarih</label>
                         <input
                           id="new_tx_date"
                           type="date"
                           defaultValue={new Date().toISOString().split('T')[0]}
-                          className="w-full px-1.5 py-1 border border-slate-200 rounded text-[11px] bg-slate-50 font-medium text-slate-700"
+                          className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white font-medium text-slate-700"
                         />
                       </div>
-                      <div className="col-span-2">
-                        <label className="block text-[9px] font-medium text-slate-500">İşlem Türü</label>
-                        <select id="new_tx_type" className="w-full px-1.5 py-1 border border-slate-200 rounded text-[11px] bg-slate-50 font-medium">
-                          <option value="bonus">➕ Sefer / Prim</option>
-                          <option value="advance">➖ Münferit Avans</option>
-                          <option value="installment_advance">📅 Taksitli Avans</option>
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Açıklama</label>
+                        <input id="new_tx_title" type="text" placeholder="Örn: Ankara seferi, ramazan avansı" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Tutar (TL)</label>
+                        <input id="new_tx_amount" type="text" placeholder="5000" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Taksit sayısı</label>
+                        <select id="new_tx_inst" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white">
+                          <option value="1">1 (tek sefer)</option>
+                          <option value="2">2 ay</option>
+                          <option value="3">3 ay</option>
+                          <option value="4">4 ay</option>
+                          <option value="5">5 ay</option>
+                          <option value="6">6 ay</option>
                         </select>
-                      </div>
-                      <div className="col-span-4">
-                        <label className="block text-[9px] font-medium text-slate-500">Açıklama / Sefer</label>
-                        <input id="new_tx_title" type="text" placeholder="Örn: Ankara Seferi" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px]" />
-                      </div>
-                      <div className="col-span-2">
-                        <label className="block text-[9px] font-medium text-slate-500">Tutar (TL)</label>
-                        <input id="new_tx_amount" type="number" placeholder="5000" className="w-full px-2 py-1 border border-slate-200 rounded text-[11px] font-bold text-slate-700" />
-                      </div>
-                      <div className="col-span-1">
-                        <label className="block text-[9px] font-medium text-slate-500">Taksit</label>
-                        <select id="new_tx_inst" className="w-full px-1 py-1 border border-slate-200 rounded text-[11px] bg-slate-50">
-                          <option value="1">1</option>
-                          <option value="2">2</option>
-                          <option value="3">3</option>
-                          <option value="4">4</option>
-                          <option value="5">5</option>
-                          <option value="6">6</option>
-                        </select>
-                      </div>
-                      <div className="col-span-1">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const dateEl = document.getElementById('new_tx_date') as HTMLInputElement;
-                            const typeEl = document.getElementById('new_tx_type') as HTMLSelectElement;
-                            const titleEl = document.getElementById('new_tx_title') as HTMLInputElement;
-                            const amountEl = document.getElementById('new_tx_amount') as HTMLInputElement;
-                            const instEl = document.getElementById('new_tx_inst') as HTMLSelectElement;
-                            
-                            const dVal = dateEl?.value || new Date().toISOString().split('T')[0];
-                            const tVal = typeEl.value as any;
-                            const titleVal = titleEl.value;
-                            const amtVal = cleanNumber(amountEl.value);
-                            const instVal = Number(instEl.value) || 1;
-
-                            if (!titleVal || amtVal <= 0) {
-                              alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
-                              return;
-                            }
-                            await handleAddEmployeeTransaction(editingEmployeeId, tVal, titleVal, amtVal, instVal, dVal);
-                            titleEl.value = '';
-                            amountEl.value = '';
-                            instEl.value = '1';
-                          }}
-                          className="w-full py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition shadow-sm"
-                        >
-                          Ekle
-                        </button>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const dateEl = document.getElementById('new_tx_date') as HTMLInputElement;
+                        const typeEl = document.getElementById('new_tx_type') as HTMLSelectElement;
+                        const titleEl = document.getElementById('new_tx_title') as HTMLInputElement;
+                        const amountEl = document.getElementById('new_tx_amount') as HTMLInputElement;
+                        const instEl = document.getElementById('new_tx_inst') as HTMLSelectElement;
+
+                        const dVal = dateEl?.value || new Date().toISOString().split('T')[0];
+                        const tVal = typeEl.value as any;
+                        const titleVal = titleEl.value;
+                        const amtVal = cleanNumber(amountEl.value);
+                        const instVal = Number(instEl.value) || 1;
+
+                        if (!titleVal || amtVal <= 0) {
+                          alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
+                          return;
+                        }
+                        await handleAddEmployeeTransaction(editingEmployeeId, tVal, titleVal, amtVal, instVal, dVal);
+                        titleEl.value = '';
+                        amountEl.value = '';
+                        instEl.value = '1';
+                      }}
+                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold transition"
+                    >
+                      Hareketi kaydet
+                    </button>
                   </div>
                   {/* 2. KAYITLI CARİ HAREKETLER LİSTESİ */}
                   {(() => {
@@ -4634,7 +5431,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     }
 
                     return (
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                         {/* Yeni Sistem Hareketleri */}
                         {empTxList.map((tx: any) => {
                           const isBonus = tx.type === 'bonus';
@@ -4643,9 +5440,9 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                           const mCut = cleanNumber(tx.monthly_cut || Math.round(totAmt / Math.max(1, tx.installment_count || 1)));
 
                           return (
-                            <div key={'tx-' + tx.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200 text-xs shadow-xs">
-                              <div className="flex items-center gap-2">
-                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${isBonus ? 'bg-amber-100 text-amber-800' : isInst ? 'bg-purple-100 text-purple-800' : 'bg-rose-100 text-rose-800'}`}>
+                            <div key={'tx-' + tx.id} className="flex items-center justify-between gap-3 p-3 bg-white rounded-lg border border-slate-200 text-sm shadow-xs">
+                              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                                <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${isBonus ? 'bg-amber-100 text-amber-800' : isInst ? 'bg-purple-100 text-purple-800' : 'bg-rose-100 text-rose-800'}`}>
                                   {isBonus ? 'PRİM' : isInst ? `TAKSİT (${tx.installment_count} Ay)` : 'MÜNFERİT AVANS'}
                                 </span>
                                 <span className="font-medium text-slate-700">{tx.title}</span>
@@ -5008,6 +5805,228 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
       )}
 
       {/* DİĞER MODALLAR: SATIŞ, TAHSİLAT, KASA, ARAÇ, KREDİ KARTI, HAKEDİŞ DÜZENLEME, TOPLU MAAŞ */}
+      {selectedCariCustomer && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:bg-white print:static print:p-0">
+          <div id="cari-dokum-print" className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-xl border border-slate-100 print:shadow-none print:border-0 print:max-h-none print:rounded-none">
+            <div className="flex justify-between items-start pb-4 border-b border-slate-100 print:border-black">
+              <div>
+                <p className="text-[10px] font-bold tracking-widest text-[#009fe3] uppercase">Tazeyol ERP · Cari ekstre</p>
+                <h3 className="font-bold text-slate-900 text-lg mt-1">{selectedCariCustomer.name}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {selectedCariCustomer.tax_id ? `VKN: ${selectedCariCustomer.tax_id}` : 'VKN yok'}
+                  {selectedCariCustomer.phone ? ` · ${selectedCariCustomer.phone}` : ''}
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">Döküm tarihi: {new Date().toLocaleDateString('tr-TR')} · Faturalar ve ödemeler işlenmiş kayıtlardır.</p>
+              </div>
+              <div className="flex gap-2 print:hidden">
+                <button
+                  type="button"
+                  onClick={() => exportCariExcel(selectedCariCustomer, selectedCariLedger)}
+                  className="px-3 py-2 rounded-lg bg-[#009fe3] text-white text-xs font-bold flex items-center gap-1.5"
+                >
+                  <FileSpreadsheet className="w-4 h-4" /> Excel'e aktar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 text-xs font-bold"
+                >
+                  Yazdır
+                </button>
+                <button type="button" onClick={() => setSelectedCariCustomer(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              </div>
+            </div>
+            <table className="w-full text-xs mt-4 border-collapse">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="py-2 pr-2">Tarih</th>
+                  <th className="py-2 pr-2">İşlem</th>
+                  <th className="py-2 pr-2">Açıklama</th>
+                  <th className="py-2 pr-2 text-right">Borç (fatura)</th>
+                  <th className="py-2 pr-2 text-right">Alacak (ödeme)</th>
+                  <th className="py-2 text-right">Bakiye</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedCariLedger.length === 0 ? (
+                  <tr><td colSpan={6} className="py-6 text-center text-slate-400">Bu müşteriye işlenmiş fatura veya ödeme yok.</td></tr>
+                ) : selectedCariLedger.map((line, idx) => (
+                  <tr key={idx} className="border-b border-slate-50">
+                    <td className="py-2 pr-2 whitespace-nowrap">{formatDateTR(line.date)}</td>
+                    <td className="py-2 pr-2 font-semibold">{line.type}</td>
+                    <td className="py-2 pr-2 text-slate-600">{line.title}</td>
+                    <td className="py-2 pr-2 text-right">{line.debit ? line.debit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className="py-2 pr-2 text-right text-emerald-700">{line.credit ? line.credit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className={`py-2 text-right font-bold ${line.balance >= 0 ? 'text-amber-800' : 'text-rose-700'}`}>
+                      {line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {selectedCariLedger.length > 0 && (
+              <div className="mt-4 flex justify-end">
+                <div className="text-right">
+                  <span className="text-[11px] text-slate-500 block">Kapanış bakiyesi</span>
+                  <span className="text-lg font-black text-slate-900">
+                    {selectedCariLedger[selectedCariLedger.length - 1].balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  </span>
+                  <span className="text-[11px] text-slate-400 block">Artı: müşteriden alacak · Eksi: fazla ödeme/avans</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedPayrollEmp && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:bg-white print:static print:p-0">
+          <div id="personel-hakedis-print" className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-xl border border-slate-100 print:shadow-none print:border-0 print:max-h-none print:rounded-none">
+            <div className="flex justify-between items-start pb-4 border-b border-slate-100 print:border-black gap-4">
+              <div>
+                <p className="text-[10px] font-bold tracking-widest text-[#009fe3] uppercase">Tazeyol ERP · Personel hakediş raporu</p>
+                <h3 className="font-bold text-slate-900 text-lg mt-1">{selectedPayrollEmp.full_name}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {selectedPayrollEmp.role_title || 'Görev yok'}
+                  {selectedPayrollEmp.hire_date
+                    ? ` · İşe giriş: ${formatDateTR(selectedPayrollEmp.hire_date)}`
+                    : ` · Başlangıç (${resolveEmployeeStart(selectedPayrollEmp).label}): ${formatDateTR(resolveEmployeeStart(selectedPayrollEmp).date)}`}
+                  {selectedPayrollEmp.iban ? ` · IBAN: ${selectedPayrollEmp.iban}` : ''}
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Maaş, işe giriş varsa ondan, yoksa personel kaydı / ilk veri girişinden itibaren yazılır. İlk ay gün oranına göre kesilir.
+                </p>
+              </div>
+              <div className="flex flex-col items-end gap-2 print:hidden">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                  <span>Dönem</span>
+                  <input type="month" value={payrollFrom} onChange={e => setPayrollFrom(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1" />
+                  <span>—</span>
+                  <input type="month" value={payrollTo} onChange={e => setPayrollTo(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1" />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => exportPayrollExcel(selectedPayrollEmp, selectedPayrollLedger)}
+                    className="px-3 py-2 rounded-lg bg-[#009fe3] text-white text-xs font-bold flex items-center gap-1.5"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" /> Excel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 text-xs font-bold"
+                  >
+                    PDF / Yazdır
+                  </button>
+                  <button type="button" onClick={() => setSelectedPayrollEmp(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                </div>
+              </div>
+            </div>
+            <table className="w-full text-xs mt-4 border-collapse">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="py-2 pr-2">Tarih</th>
+                  <th className="py-2 pr-2">İşlem</th>
+                  <th className="py-2 pr-2">Açıklama</th>
+                  <th className="py-2 pr-2 text-right">Hakediş</th>
+                  <th className="py-2 pr-2 text-right">Kesinti / ödeme</th>
+                  <th className="py-2 text-right">Bakiye</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedPayrollLedger.length === 0 ? (
+                  <tr><td colSpan={6} className="py-6 text-center text-slate-400">Bu dönemde hakediş kaydı yok.</td></tr>
+                ) : selectedPayrollLedger.map((line, idx) => (
+                  <tr key={idx} className="border-b border-slate-50">
+                    <td className="py-2 pr-2 whitespace-nowrap">{formatDateTR(line.date)}</td>
+                    <td className="py-2 pr-2 font-semibold">{line.type}</td>
+                    <td className="py-2 pr-2 text-slate-600">{line.title}</td>
+                    <td className="py-2 pr-2 text-right text-emerald-700">{line.earn ? line.earn.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className="py-2 pr-2 text-right text-rose-700">{line.cut ? line.cut.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className={`py-2 text-right font-bold ${line.balance >= 0 ? 'text-slate-800' : 'text-rose-700'}`}>
+                      {line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {selectedPayrollLedger.length > 0 && (
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-slate-50 rounded-xl p-3">
+                  <span className="text-[11px] text-slate-500 block">Toplam hakediş</span>
+                  <span className="font-black text-emerald-700">
+                    {selectedPayrollLedger.reduce((s, l) => s + l.earn, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  </span>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3">
+                  <span className="text-[11px] text-slate-500 block">Toplam kesinti / ödeme</span>
+                  <span className="font-black text-rose-700">
+                    {selectedPayrollLedger.reduce((s, l) => s + l.cut, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  </span>
+                </div>
+                <div className="bg-blue-50 rounded-xl p-3">
+                  <span className="text-[11px] text-blue-700 block">Kapanış bakiyesi</span>
+                  <span className="font-black text-slate-900">
+                    {selectedPayrollLedger[selectedPayrollLedger.length - 1].balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  </span>
+                  <span className="text-[11px] text-slate-400 block">Artı: personele kalan · Eksi: fazla avans</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isCustomerModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900 text-base">{editingCustomerId ? 'Müşteri Düzenle' : 'Yeni Müşteri'}</h3>
+              <button onClick={() => setIsCustomerModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSaveCustomer} className="mt-4 space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Unvan</label>
+                <input value={customerFormData.name} onChange={e => setCustomerFormData({ ...customerFormData, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required placeholder="Örn: MİGROS TİCARET A.Ş." />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">VKN</label>
+                  <input value={customerFormData.tax_id} onChange={e => setCustomerFormData({ ...customerFormData, tax_id: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Vergi Dairesi</label>
+                  <input value={customerFormData.tax_office} onChange={e => setCustomerFormData({ ...customerFormData, tax_office: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Adres</label>
+                <input value={customerFormData.address} onChange={e => setCustomerFormData({ ...customerFormData, address: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Telefon</label>
+                  <input value={customerFormData.phone} onChange={e => setCustomerFormData({ ...customerFormData, phone: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">E-posta</label>
+                  <input type="email" value={customerFormData.email} onChange={e => setCustomerFormData({ ...customerFormData, email: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Not</label>
+                <input value={customerFormData.notes} onChange={e => setCustomerFormData({ ...customerFormData, notes: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              </div>
+              <div className="pt-2 flex gap-3">
+                <button type="button" onClick={() => setIsCustomerModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-[#009fe3] text-white font-medium">Kaydet</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {isNewSaleModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
@@ -5037,8 +6056,22 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               } catch (err: any) { alert('Hata: ' + err.message); }
             }} className="mt-4 space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Müşteri / Firma Adı</label>
-                <input type="text" placeholder="Örn: MİGROS TİCARET A.Ş." value={newSaleFormData.customerName} onChange={e => setNewSaleFormData({ ...newSaleFormData, customerName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+                <label className="block font-semibold text-slate-700 mb-1">Müşteri</label>
+                {dbCustomers.length > 0 ? (
+                  <select
+                    value={newSaleFormData.customerName}
+                    onChange={e => setNewSaleFormData({ ...newSaleFormData, customerName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                    required
+                  >
+                    <option value="">Müşteri seçin</option>
+                    {dbCustomers.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type="text" placeholder="Önce Müşteri Kartları menüsünden ekleyin" value={newSaleFormData.customerName} onChange={e => setNewSaleFormData({ ...newSaleFormData, customerName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+                )}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -5214,6 +6247,45 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   <input type="text" placeholder="Örn: Ercan Çelik" value={vehicleFormData.driverName} onChange={e => setVehicleFormData({ ...vehicleFormData, driverName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
                 </div>
               </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Araç tipi</label>
+                  <select
+                    value={normalizeVehicleType(vehicleFormData.vehicleType)}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, vehicleType: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                  >
+                    <option value="Binek">Binek</option>
+                    <option value="Kamyonet">Kamyonet</option>
+                    <option value="Kamyon">Kamyon</option>
+                    <option value="TIR">TIR</option>
+                    <option value="Dorse">Dorse</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Sahiplik</label>
+                  <select
+                    value={vehicleFormData.ownershipType}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, ownershipType: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                  >
+                    <option value="Öz Mal">Öz Mal</option>
+                    <option value="Kiralık">Kiralık</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Durum</label>
+                  <select
+                    value={vehicleFormData.isActive ? 'aktif' : 'pasif'}
+                    onChange={e => setVehicleFormData({ ...vehicleFormData, isActive: e.target.value === 'aktif' })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                  >
+                    <option value="aktif">Aktif</option>
+                    <option value="pasif">Pasif</option>
+                  </select>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 -mt-2">Öz mal kârlılıkta yalnızca aktif kamyonet, kamyon ve TIR görünür. Binek ve dorse o menüde listelenmez.</p>
               <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-200 space-y-2">
                 <span className="font-bold text-blue-900 block text-xs">Trafik Sigortası Poliçesi</span>
                 <div className="grid grid-cols-3 gap-2">

@@ -51,11 +51,8 @@
 }
 
 #root {
-  width: 1126px;
+  width: 100%;
   max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
   display: flex;
   flex-direction: column;
@@ -64,6 +61,27 @@
 
 body {
   margin: 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #cari-dokum-print,
+  #cari-dokum-print *,
+  #personel-hakedis-print,
+  #personel-hakedis-print * {
+    visibility: visible;
+  }
+  #cari-dokum-print,
+  #personel-hakedis-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+    box-shadow: none;
+  }
 }
 
 h1,
