@@ -22,9 +22,14 @@ create table if not exists public.app_settings (
 
 insert into public.app_settings (key, value)
 values
-  ('cash_opening', '845200'),
+  ('cash_opening', '0'),
   ('sgk_driver_amount', '11148')
 on conflict (key) do nothing;
+
+-- Eski kodda gömülü 845200 tohumunu temizler; gerçek açılışı panelden yazın.
+update public.app_settings
+set value = '0', updated_at = now()
+where key = 'cash_opening' and value = '845200';
 
 alter table public.customers enable row level security;
 alter table public.app_settings enable row level security;

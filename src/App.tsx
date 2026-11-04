@@ -37,6 +37,7 @@ import {
   CreditCard,
   PhoneCall,
   Search,
+  MoreHorizontal,
   Download,
   ShieldCheck,
   Phone,
@@ -173,11 +174,15 @@ export default function App() {
   const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
   const [subSortField, setSubSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
   const [subSortOrder, setSubSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [bankSortField, setBankSortField] = useState<'contractorName' | 'iban' | 'activeAmount'>('activeAmount');
+  const [bankSortField, setBankSortField] = useState<'contractorName' | 'iban' | 'dueDate' | 'amount'>('dueDate');
   const [bankSortOrder, setBankSortOrder] = useState<'asc' | 'desc'>('desc');
   const [empSearchTerm, setEmpSearchTerm] = useState('');
   const [empSortField, setEmpSortField] = useState<'name' | 'salary' | 'netPayable'>('name');
   const [empSortOrder, setEmpSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
+  const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [cardDueFilter, setCardDueFilter] = useState<'all' | 'week' | 'overdue' | 'clear'>('all');
+  const [cardMenuId, setCardMenuId] = useState<string | number | null>(null);
   const getCurrentMonthRange = () => {
     const now = new Date();
     const year = now.getFullYear();
@@ -218,7 +223,8 @@ export default function App() {
   const [isExcelUploading, setIsExcelUploading] = useState(false);
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
   const [dbCustomers, setDbCustomers] = useState<Customer[]>([]);
-  const [cashOpening, setCashOpening] = useState(845200);
+  const [cashOpening, setCashOpening] = useState(1550000);
+  const [cashOpeningAsOf, setCashOpeningAsOf] = useState('2026-11-04');
   const [sgkDriverAmount, setSgkDriverAmount] = useState(11148);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
@@ -234,7 +240,7 @@ export default function App() {
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [selectedCariCustomer, setSelectedCariCustomer] = useState<Customer | null>(null);
   const [selectedPayrollEmp, setSelectedPayrollEmp] = useState<any | null>(null);
-  const [payrollFrom, setPayrollFrom] = useState(() => `${new Date().getFullYear()}-01`);
+  const [payrollFrom, setPayrollFrom] = useState('2026-10');
   const [payrollTo, setPayrollTo] = useState(() => {
     const d = new Date();
     const pad = (n: number) => (n < 10 ? '0' + n : String(n));
@@ -300,8 +306,16 @@ export default function App() {
       settingsData.forEach((row: any) => {
         if (row?.key) settings[row.key] = String(row.value ?? '');
       });
-      if (settings.cash_opening) setCashOpening(cleanNumber(settings.cash_opening));
-      if (settings.sgk_driver_amount) setSgkDriverAmount(cleanNumber(settings.sgk_driver_amount));
+      if (Object.prototype.hasOwnProperty.call(settings, 'cash_opening')) {
+        const n = cleanNumber(settings.cash_opening);
+        if (n > 0) setCashOpening(n);
+      }
+      if (Object.prototype.hasOwnProperty.call(settings, 'cash_opening_as_of') && settings.cash_opening_as_of) {
+        setCashOpeningAsOf(sanitizeDate(settings.cash_opening_as_of) || settings.cash_opening_as_of);
+      }
+      if (Object.prototype.hasOwnProperty.call(settings, 'sgk_driver_amount')) {
+        setSgkDriverAmount(cleanNumber(settings.sgk_driver_amount));
+      }
     } catch (err) {
       console.error('Yükleme hatası:', err);
       alert('Veriler yüklenirken hata oluştu. Sayfayı yenileyin veya bağlantıyı kontrol edin.');
@@ -408,6 +422,142 @@ export default function App() {
     return !!left && !!right && left === right;
   };
 
+  const monthsBetween = (fromYm: string, toYm: string) => {
+    const [fy, fm] = fromYm.split('-').map(Number);
+    const [ty, tm] = toYm.split('-').map(Number);
+    if (!fy || !fm || !ty || !tm) return 999;
+    return (ty - fy) * 12 + (tm - fm);
+  };
+
+  const currentPayYearMonth = () => {
+    const d = new Date();
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  };
+
+  const personnelClosedYearMonth = () => {
+    const d = new Date();
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    const prev = new Date(d.getFullYear(), d.getMonth(), 0);
+    return `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}`;
+  };
+
+  const personnelBooksStartYm = '2026-10';
+
+  const yearMonthsBetween = (fromYm: string, toYm: string) => {
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    let from = fromYm || toYm;
+    let to = toYm || from;
+    if (from > to) return [];
+    const months: string[] = [];
+    let [y, m] = from.split('-').map(Number);
+    const [ty, tm] = to.split('-').map(Number);
+    let guard = 0;
+    while ((y < ty || (y === ty && m <= tm)) && guard < 36) {
+      months.push(`${y}-${pad(m)}`);
+      m += 1;
+      if (m > 12) {
+        m = 1;
+        y += 1;
+      }
+      guard += 1;
+    }
+    return months;
+  };
+
+  const employeePayForMonth = (emp: any, yearMonth: string) => {
+    if (!yearMonth || yearMonth < personnelBooksStartYm) {
+      return { base: 0, bonus: 0, advanceCut: 0, gross: 0, net: 0, carried: 0 };
+    }
+    const empIdStr = String(emp?.id || '');
+    const empNorm = String(emp?.full_name || '').toLowerCase().trim();
+    const base = cleanNumber(emp?.base_salary);
+    let bonus = cleanNumber(emp?.monthly_bonus);
+    let advanceCut = 0;
+
+    (dbEmployeeTransactions || []).forEach((tx: any) => {
+      if (String(tx.employee_id) !== empIdStr) return;
+      const startYm = sanitizeDate(tx.transaction_date || tx.created_at).slice(0, 7);
+      if (!startYm || startYm < personnelBooksStartYm) return;
+      if (tx.type === 'bonus') {
+        if (startYm === yearMonth) bonus += cleanNumber(tx.total_amount);
+        return;
+      }
+      if (tx.type === 'advance') {
+        if (startYm === yearMonth) advanceCut += cleanNumber(tx.total_amount);
+        return;
+      }
+      if (tx.type === 'installment_advance') {
+        const inst = Math.max(1, Number(tx.installment_count) || 1);
+        const elapsed = monthsBetween(startYm, yearMonth);
+        if (elapsed >= 0 && elapsed < inst) {
+          advanceCut += cleanNumber(tx.monthly_cut || Math.round(cleanNumber(tx.total_amount) / inst));
+        }
+      }
+    });
+
+    (dbAdvances || []).forEach((a: any) => {
+      if (a.target_type !== 'employee') return;
+      const targetNorm = String(a.target_name || '').toLowerCase().trim();
+      const targetId = String(a.target_id || '');
+      const isMatch =
+        (targetId && targetId === empIdStr) ||
+        (targetNorm.length >= 3 && empNorm && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
+      if (!isMatch) return;
+      const startYm = sanitizeDate(a.issue_date || a.created_at).slice(0, 7);
+      if (!startYm || startYm < personnelBooksStartYm) return;
+      const amt = cleanNumber(a.remaining_amount !== undefined && a.remaining_amount !== null ? a.remaining_amount : a.total_amount);
+      if (a.payment_type === 'employee_bonus') {
+        if (startYm === yearMonth) bonus += amt;
+        return;
+      }
+      const inst = Math.max(1, Number(a.total_installments) || 1);
+      const isInst = String(a.payment_type || '').includes('installment') || inst > 1;
+      if (isInst) {
+        const elapsed = monthsBetween(startYm || yearMonth, yearMonth);
+        if (elapsed >= 0 && elapsed < inst) {
+          advanceCut += Math.min(amt, cleanNumber(a.total_amount) / inst);
+        }
+      } else if (startYm === yearMonth) {
+        advanceCut += amt;
+      }
+    });
+
+    const hireYm = sanitizeDate(emp?.hire_date || emp?.created_at).slice(0, 7);
+    if (hireYm && yearMonth < hireYm) {
+      return { base: 0, bonus: 0, advanceCut: 0, gross: 0, net: 0, carried: 0 };
+    }
+
+    const gross = base + bonus;
+    const net = Math.max(0, gross - advanceCut);
+    const carried = Math.max(0, advanceCut - gross);
+    return { base, bonus, advanceCut, gross, net, carried };
+  };
+
+  const employeeUnpaidFromBooks = (emp: any) => {
+    const hireYm = sanitizeDate(emp?.hire_date || resolveEmployeeStart(emp).date).slice(0, 7);
+    let from = personnelBooksStartYm;
+    if (hireYm && hireYm > from) from = hireYm;
+    const to = personnelClosedYearMonth();
+    if (to < from) return 0;
+    const months = yearMonthsBetween(from, to);
+    let net = 0;
+    months.forEach(ym => {
+      net += employeePayForMonth(emp, ym).net;
+    });
+    const empNorm = String(emp?.full_name || '').toLowerCase().trim();
+    const paid = (dbInvoices || [])
+      .filter((inv: any) => {
+        if (inv.category !== 'salary_payroll') return false;
+        const ym = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
+        if (ym < from || ym > to) return false;
+        const hay = String(inv.invoice_no || '').toLowerCase();
+        return !!empNorm && hay.includes(empNorm);
+      })
+      .reduce((s: number, inv: any) => s + cleanNumber(inv.total_amount), 0);
+    return Math.max(0, net - paid);
+  };
+
   const employmentShareForMonth = (startDateRaw: any, yearMonth: string) => {
     const start = sanitizeDate(startDateRaw);
     if (!start || !yearMonth) return { factor: 0, daysWorked: 0, daysInMonth: 0, hireYm: '', startedThisMonth: false };
@@ -489,7 +639,8 @@ export default function App() {
     lastFourDigits: '',
     statementAmount: '',
     minPaymentAmount: '',
-    dueDate: ''
+    dueDate: '',
+    cardKind: 'company'
   });
   const [editingCreditCardId, setEditingCreditCardId] = useState<number | null>(null);
 
@@ -502,7 +653,8 @@ export default function App() {
       lastFourDigits: card.last_four_digits || '',
       statementAmount: String(card.statement_amount || ''),
       minPaymentAmount: String(card.min_payment_amount || ''),
-      dueDate: sanitizeDate(card.due_date)
+      dueDate: sanitizeDate(card.due_date),
+      cardKind: card.card_kind === 'personal' || /şahsi|sahsi|kişisel|kisisel/i.test(String(card.card_name || '')) ? 'personal' : 'company'
     });
     setIsCreditCardModalOpen(true);
   };
@@ -520,14 +672,25 @@ export default function App() {
     }
 
     const typeLabel = type === 'full' ? 'Tamamını' : 'Asgari Tutarını';
-    const confirmMsg = `${card.card_name} (${card.bank_name})\nÖdenecek Tutar: ${payAmt.toLocaleString('tr-TR')} ₺ (${typeLabel})\nBu ödemeyi onaylıyor musunuz? (Kasadan fiilen düşülecektir)`;
+    const isPersonal = card.card_kind === 'personal' || /şahsi|sahsi|kişisel|kisisel/i.test(String(card.card_name || ''));
+    let cashAmt = payAmt;
+    if (isPersonal) {
+      const raw = window.prompt(
+        `${card.card_name} şahsi kart.\nEkstre ödemesi: ${payAmt.toLocaleString('tr-TR')} ₺\n\nŞirket kasasından düşülecek tutar (şahsi harcama 0 yazın):`,
+        '0'
+      );
+      if (raw === null) return;
+      cashAmt = Math.max(0, cleanNumber(raw));
+    }
+    const confirmMsg = isPersonal
+      ? `${card.card_name}\nEkstre: ${payAmt.toLocaleString('tr-TR')} ₺ kapanacak.\nKasadan düşecek: ${cashAmt.toLocaleString('tr-TR')} ₺`
+      : `${card.card_name} (${card.bank_name})\n${typeLabel}: ${payAmt.toLocaleString('tr-TR')} ₺ kasadan düşecek.`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
       const todayStr = new Date().toISOString().split('T')[0];
       const remainingAmt = Math.max(0, fullAmt - payAmt);
 
-      // 1. Kart borcunu güncelle
       const { error: cardErr } = await supabase
         .from('credit_cards')
         .update({
@@ -538,18 +701,19 @@ export default function App() {
 
       if (cardErr) throw cardErr;
 
-      // 2. Kasa/Banka nakit çıkışı kaydı oluştur
-      await supabase.from('invoices').insert([{
-        invoice_no: `KART ÖDEME - ${card.card_name} [${card.bank_name}] (${typeLabel})`,
-        direction: 'incoming',
-        category: 'credit_card_payment',
-        total_amount: payAmt,
-        issue_date: todayStr,
-        due_date: todayStr,
-        status: 'paid'
-      }]);
+      if (cashAmt > 0) {
+        await supabase.from('invoices').insert([{
+          invoice_no: `KART ÖDEME - ${card.card_name} [${card.bank_name}] (${typeLabel})`,
+          direction: 'incoming',
+          category: 'credit_card_payment',
+          total_amount: cashAmt,
+          issue_date: todayStr,
+          due_date: todayStr,
+          status: 'paid'
+        }]);
+      }
 
-      alert(`Kart ödemesi (${payAmt.toLocaleString('tr-TR')} ₺) başarıyla işlendi ve kasadan düşüldü!${remainingAmt > 0 ? `\nKalan Ekstre Borcu: ${remainingAmt.toLocaleString('tr-TR')} ₺` : ''}`);
+      alert(`Kart ekstresi güncellendi.${cashAmt > 0 ? ` Kasadan ${cashAmt.toLocaleString('tr-TR')} ₺ düşüldü.` : ' Kasaya dokunulmadı (şahsi).'}${remainingAmt > 0 ? `\nKalan ekstre: ${remainingAmt.toLocaleString('tr-TR')} ₺` : ''}`);
       loadPortalData();
     } catch (err: any) {
       alert('Kart ödeme hatası: ' + err.message);
@@ -597,9 +761,8 @@ export default function App() {
     phone: ''
   });
 
-  // BANKA TALİMATI İÇİN SATIR BAZLI SEÇİM STATE'LERİ
-  const [contractorTermChoices, setContractorTermChoices] = useState<{ [key: string]: 'term1' | 'term2' | 'both' }>({});
-  const [bankSelectedContractors, setBankSelectedContractors] = useState<{ [key: string]: boolean }>({});
+  // BANKA TALİMATI: fatura + vade satırı seçimi
+  const [bankSelectedLines, setBankSelectedLines] = useState<{ [key: string]: boolean }>({});
 
   // MANUEL TAŞERON FATURA EKLEME MODALI
   const [isManualSubInvoiceModalOpen, setIsManualSubInvoiceModalOpen] = useState(false);
@@ -787,7 +950,6 @@ export default function App() {
         .forEach(i => existingInvoicesMap.set(normalizeKey(String(i.invoice_no || '')), i));
 
       const newRowsToInsert: any[] = [];
-      let updatedCount = 0;
       let skippedCount = 0;
 
       // 0. satır başlıklar olduğu için i=1'den başlıyoruz
@@ -810,15 +972,8 @@ export default function App() {
         const t2 = totalAmt / 2;
 
         if (existingInvoicesMap.has(normKey)) {
-          // Sistemde zaten varsa: Tutarını ve vadelerini G sütununa göre güncelle
-          const exist = existingInvoicesMap.get(normKey);
-          await supabase.from('invoices').update({
-            total_amount: totalAmt,
-            term1_amount: t1,
-            term2_amount: t2
-          }).eq('id', exist.id);
-          updatedCount++;
           skippedCount++;
+          continue;
         } else {
           // Sistemde yoksa: Yeni kayıt olarak ekle
           newRowsToInsert.push({
@@ -836,6 +991,7 @@ export default function App() {
             term2_status: 'unpaid',
             status: 'unpaid'
           });
+          existingInvoicesMap.set(normKey, true);
         }
       }
 
@@ -844,7 +1000,7 @@ export default function App() {
         if (error) throw error;
       }
 
-      alert(`İşlem Başarılı!\n• ${newRowsToInsert.length} adet yeni fatura eklendi.\n• ${updatedCount} adet mevcut fatura güncellendi.`);
+      alert(`İşlem başarılı.\n• ${newRowsToInsert.length} yeni fatura eklendi.\n• ${skippedCount} fatura zaten kayıtlıydı, atlandı (yeniden yüklemeniz gerekmez).`);
       await loadPortalData();
     } catch (err: any) {
       console.error(err);
@@ -991,10 +1147,17 @@ export default function App() {
       });
 
     dbInvoices
-      .filter(i => i.status !== 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit'].includes(i.category) && i.due_date)
+      .filter(i => i.status !== 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'customer_advance', 'subcontractor_advance_paid', 'subcontractor_paid_outflow', 'salary_payroll'].includes(i.category) && i.due_date)
       .forEach(d => {
         const diff = Math.ceil((new Date(sanitizeDate(d.due_date)).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
-        if (diff <= 3) pendingDebts.push({ ...d, diffDays: diff });
+        if (diff > 3) return;
+        let alertAmount = cleanNumber(d.total_amount);
+        if (d.category === 'subcontractor_invoice') {
+          const t1 = cleanNumber(d.term1_amount || (d.total_amount / 2));
+          const t2 = cleanNumber(d.term2_amount || (d.total_amount / 2));
+          alertAmount = (d.term1_status !== 'paid' ? t1 : 0) + (d.term2_status !== 'paid' ? t2 : 0);
+        }
+        if (alertAmount > 0) pendingDebts.push({ ...d, diffDays: diff, alertAmount });
       });
 
    dbCreditCards.forEach(cc => {
@@ -1167,17 +1330,20 @@ export default function App() {
       const inspection_m = round2(cleanNumber(veh.inspection_cost) / 12);
       const fixed_monthly = round2(insurance_m + kasko_m + mtv_m + inspection_m);
 
-      const bakim = cleanPlate.length >= 5
+      const yearStart = `${yy}-01-01`;
+      const yearEnd = `${yy}-12-31`;
+      const bakimYear = cleanPlate.length >= 5
         ? dbInvoices
             .filter(inv => {
               const d = sanitizeDate(inv.issue_date || inv.created_at);
-              if (d < monthStart || d > monthEnd) return false;
+              if (d < yearStart || d > yearEnd) return false;
               if (!['maintenance', 'tires'].includes(String(inv.category || ''))) return false;
               const haystack = `${inv.invoice_no || ''} ${inv.description || ''}`.replace(/\s+/g, '').toUpperCase();
               return haystack.includes(cleanPlate);
             })
             .reduce((sum, inv) => sum + cleanNumber(inv.total_amount), 0)
         : 0;
+      const bakim = round2(bakimYear / 12);
 
       const payroll = driver_sal + bonus;
       const totalCost = payroll + sgk + fuel + hgs + fixed_monthly + bakim;
@@ -1202,6 +1368,7 @@ export default function App() {
         inspection_m,
         fixed_monthly,
         bakim,
+        bakimYear,
         totalCost,
         netProfit,
         included,
@@ -1215,22 +1382,18 @@ export default function App() {
     .filter(i => i.direction === 'outgoing' || i.category === 'freight_sales')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Fiilen kasaya giren tahsilatlar
-  const totalCollectedCash = dbInvoices
+  // Fiilen kasaya giren tahsilatlar (tarih filtresine bağlı)
+  const totalCollectedCash = filteredInvoices
     .filter(i => i.category === 'customer_collection')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-// Müşteriden Alınan Faturasız Toplam Cari Avans
   const customerUnallocatedAdvances = dbInvoices
     .filter(i => i.category === 'customer_advance')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Bekleyen müşteri alacakları (Açık Faturalar - Alınan Cari Avans)
-  const pendingReceivablesAllTime = Math.max(0, 
-    dbInvoices
-      .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
-      .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0) - customerUnallocatedAdvances
-  );
+  const totalOpenSalesAllTime = dbInvoices
+    .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // ÖDENMEMİŞ TAŞERON BORÇLARI (Vadeler ödendikçe buradan düşer)
   let unpaidSubcontractorDebt = 0;
@@ -1250,7 +1413,7 @@ export default function App() {
 
   // TEMEL DİĞER TEDARİK FATURALARI
   const totalGeneralCompanyExpensesDebt = dbInvoices
-    .filter(i => i.status !== 'paid' && !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'taxes_sgk', 'traffic_fines', 'salary_payroll', 'cash_deposit'].includes(i.category))
+    .filter(i => i.status !== 'paid' && !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'taxes_sgk', 'traffic_fines', 'salary_payroll', 'cash_deposit', 'customer_advance', 'subcontractor_advance_paid', 'subcontractor_paid_outflow', 'opening_balance'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
  // DÖNEM İÇİ FİİLİ MASRAFLAR (Taşeron hakedişleri hariç, sadece ödenen şirket giderleri)
@@ -1267,66 +1430,51 @@ export default function App() {
 
 // PERSONEL GELECEK ÖDEMESİ (Yeni cari defter ve net hakediş ile tam uyumlu)
   const totalEmployeeFutureDebt = useMemo(() => {
-    let sumNet = 0;
-    (dbEmployees || []).forEach(emp => {
-      const base = cleanNumber(emp.base_salary);
-      const empNorm = String(emp.full_name || '').toLowerCase().trim();
-      const empIdStr = String(emp.id || '');
+    return (dbEmployees || []).reduce((sum, emp) => sum + employeeUnpaidFromBooks(emp), 0);
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions, dbInvoices]);
 
-      let totalBonus = cleanNumber(emp.monthly_bonus);
-      let totalAdv = cleanNumber(emp.monthly_advance);
+  const contractorAdvanceRemaining = (dbAdvances || [])
+    .filter((a: any) => a.target_type === 'contractor')
+    .reduce((sum: number, a: any) => {
+      const remaining = a.remaining_amount !== undefined && a.remaining_amount !== null
+        ? a.remaining_amount
+        : a.total_amount;
+      return sum + cleanNumber(remaining);
+    }, 0);
 
-      (dbAdvances || []).forEach((a: any) => {
-        if (a.target_type !== 'employee') return;
-        const targetNorm = String(a.target_name || '').toLowerCase().trim();
-        const targetId = String(a.target_id || '');
-        if ((targetId && targetId === empIdStr) || (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)))) {
-          const amt = cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount);
-          if (a.payment_type === 'employee_bonus') totalBonus += amt;
-          else totalAdv += amt;
-        }
-      });
-
-      (dbEmployeeTransactions || []).forEach((tx: any) => {
-        if (String(tx.employee_id) === empIdStr) {
-          if (tx.type === 'bonus') totalBonus += cleanNumber(tx.total_amount);
-          else if (tx.type === 'installment_advance') totalAdv += cleanNumber(tx.monthly_cut || Math.round(cleanNumber(tx.total_amount) / Math.max(1, tx.installment_count || 1)));
-          else if (tx.type === 'advance') totalAdv += cleanNumber(tx.total_amount);
-        }
-      });
-
-      const net = Math.max(0, (base + totalBonus) - totalAdv);
-      sumNet += net;
-    });
-    return sumNet;
-  }, [dbEmployees, dbAdvances, dbEmployeeTransactions]);  
+  const unpaidSubcontractorNet = Math.max(0, unpaidSubcontractorDebt - contractorAdvanceRemaining);
 
   // TOPLAM ÖDENECEK TİCARİ BORÇLAR
-  const totalConsolidatedDebt = unpaidSubcontractorDebt + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
+  const totalConsolidatedDebt = unpaidSubcontractorNet + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
 
-  // GÜNCEL KASA / BANKA (Fiilen ödenen taşeron vadeleri ve harcamalar düşülür)
-  const baseCash = cashOpening;
-  const manualCashDeposits = dbInvoices
-    .filter(i => i.category === 'cash_deposit')
+  const cashInCategories = new Set(['customer_collection', 'customer_advance', 'cash_deposit']);
+  const cashAfterOpening = (inv: any) => sanitizeDate(inv.issue_date || inv.created_at) > cashOpeningAsOf;
+  const cashInflow = dbInvoices
+    .filter(i => cashInCategories.has(String(i.category || '')) && cashAfterOpening(i))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  // Bankadan/Kasadan ödenmiş taşeron çıkışları
-  let paidSubcontractorOutflows = 0;
-  dbInvoices
-    .filter(i => i.category === 'subcontractor_invoice')
-    .forEach(inv => {
-      const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
-      const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
-      if (inv.term1_status === 'paid') paidSubcontractorOutflows += t1;
-      if (inv.term2_status === 'paid') paidSubcontractorOutflows += t2;
-    });
+  const isExpensePaidByCard = (inv: any) =>
+    String(inv.paid_source || '') === 'card' || /\[KK\]/i.test(String(inv.invoice_no || ''));
 
-  // Diğer ödenen harcamalar (Maaş, genel giderler, kart ödemeleri)
-  const otherPaidOutflows = dbInvoices
-    .filter(i => i.status === 'paid' && !['customer_collection', 'freight_sales', 'cash_deposit', 'subcontractor_invoice'].includes(i.category))
+  const skipCashOut = new Set([
+    'customer_collection',
+    'customer_advance',
+    'cash_deposit',
+    'freight_sales',
+    'subcontractor_invoice',
+    'opening_balance'
+  ]);
+  const cashOutflow = dbInvoices
+    .filter(i =>
+      i.status === 'paid' &&
+      !skipCashOut.has(String(i.category || '')) &&
+      i.direction !== 'outgoing' &&
+      cashAfterOpening(i) &&
+      !isExpensePaidByCard(i)
+    )
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const currentRealCash = baseCash + dbInvoices.filter(i => i.category === 'customer_collection').reduce((sum, i) => sum + cleanNumber(i.total_amount), 0) + manualCashDeposits - (paidSubcontractorOutflows + otherPaidOutflows);
+  const currentRealCash = cashOpening + cashInflow - cashOutflow;
 
   // 9. MÜŞTERİ SATIŞLARI (MİGROS & GERÇEK CARİ EŞLEŞMESİ)
   const salesDetailedList = useMemo(() => {
@@ -1359,12 +1507,12 @@ export default function App() {
       !!matchCustomer(String(inv.invoice_no || ''), '', [customer]);
 
     const rows = dbCustomers.map(customer => {
-      const openSales = dbInvoices
-        .filter(i =>
-          (i.category === 'freight_sales' || i.direction === 'outgoing') &&
-          i.status !== 'paid' &&
-          belongsTo(i, customer)
-        )
+      const sales = dbInvoices.filter(i =>
+        (i.category === 'freight_sales' || i.direction === 'outgoing') && belongsTo(i, customer)
+      );
+      const billed = sales.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+      const openSales = sales
+        .filter(i => i.status !== 'paid')
         .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
       const collections = dbInvoices
@@ -1375,12 +1523,22 @@ export default function App() {
         .filter(i => i.category === 'customer_advance' && belongsTo(i, customer))
         .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-      const net = openSales - advances;
-      return { customer, openSales, collections, advances, net };
+      const payments = collections + advances;
+      const net = billed - payments;
+      return { customer, billed, openSales, collections, advances, payments, net };
     });
 
     return rows.sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
   }, [dbCustomers, dbInvoices]);
+
+  const pendingReceivablesAllTime = useMemo(() => {
+    const assignedNet = customerBalances.reduce((s, r) => s + r.net, 0);
+    const unmatchedOpen = dbInvoices
+      .filter(i => (i.category === 'freight_sales' || i.direction === 'outgoing') && i.status !== 'paid')
+      .filter(i => !(dbCustomers || []).some(c => matchCustomer(String(i.invoice_no || ''), '', [c])))
+      .reduce((s, i) => s + cleanNumber(i.total_amount), 0);
+    return assignedNet + unmatchedOpen;
+  }, [customerBalances, dbInvoices, dbCustomers]);
 
   const selectedCariLedger = useMemo(() => {
     if (!selectedCariCustomer) return [];
@@ -1529,6 +1687,7 @@ export default function App() {
     const inRange = (d: string) => {
       if (!d) return false;
       if (hire && d < hire) return false;
+      if (d < `${personnelBooksStartYm}-01`) return false;
       return d >= rangeStart && d <= rangeEnd;
     };
 
@@ -1537,6 +1696,7 @@ export default function App() {
     const cardBonus = cleanNumber(emp.monthly_bonus);
 
     months.forEach(ym => {
+      if (ym < personnelBooksStartYm) return;
       if (hireYm && ym < hireYm) return;
       const share = employmentShareForMonth(hire, ym);
       if (share.factor <= 0) return;
@@ -1581,6 +1741,7 @@ export default function App() {
         const cutAmt = cleanNumber(tx.monthly_cut || Math.round(tot / inst));
         const startYm = (d || rangeStart).slice(0, 7);
         months.forEach(ym => {
+          if (ym < personnelBooksStartYm) return;
           if (ym < startYm) return;
           const [sy, sm] = startYm.split('-').map(Number);
           const [cy, cm] = ym.split('-').map(Number);
@@ -1605,16 +1766,45 @@ export default function App() {
         (targetId && targetId === empIdStr) ||
         (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
       if (!isMatch) return;
-      const d = sanitizeDate(a.created_at || a.payment_date || a.issue_date);
+      const d = sanitizeDate(a.issue_date || a.payment_date || a.created_at);
+      const tot = cleanNumber(a.total_amount);
+      if (a.payment_type === 'employee_bonus') {
+        if (!inRange(d)) return;
+        lines.push({
+          date: d,
+          type: 'Kasa prim',
+          title: a.description || a.reason || 'Kasa primi',
+          earn: tot,
+          cut: 0
+        });
+        return;
+      }
+      const inst = Math.max(1, Number(a.total_installments) || 1);
+      const isInst = String(a.payment_type || '').includes('installment') || inst > 1;
+      if (isInst) {
+        const startYm = (d || rangeStart).slice(0, 7);
+        const cutAmt = tot / inst;
+        months.forEach(ym => {
+          if (ym < personnelBooksStartYm) return;
+          const elapsed = monthsBetween(startYm, ym);
+          if (elapsed < 0 || elapsed >= inst) return;
+          lines.push({
+            date: `${ym}-01`,
+            type: 'Kasa taksit kesintisi',
+            title: `${a.description || a.reason || 'Taksitli avans'} (${elapsed + 1}/${inst})`,
+            earn: 0,
+            cut: Math.round(cutAmt * 100) / 100
+          });
+        });
+        return;
+      }
       if (!inRange(d)) return;
-      const amt = cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount);
-      const isBonus = a.payment_type === 'employee_bonus';
       lines.push({
         date: d,
-        type: isBonus ? 'Kasa prim' : 'Kasa avans',
-        title: a.description || a.reason || 'Kasa hareketi',
-        earn: isBonus ? amt : 0,
-        cut: isBonus ? 0 : amt
+        type: 'Kasa avans',
+        title: a.description || a.reason || 'Kasa avansı',
+        earn: 0,
+        cut: tot
       });
     });
 
@@ -1677,9 +1867,8 @@ export default function App() {
     const d = new Date();
     const pad = (n: number) => (n < 10 ? '0' + n : String(n));
     const nowYm = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
-    const yearStart = `${d.getFullYear()}-01`;
     const hireYm = resolveEmployeeStart(emp).date.slice(0, 7);
-    let from = yearStart;
+    let from = personnelBooksStartYm;
     if (hireYm && hireYm > from) from = hireYm;
     if (from > nowYm) from = nowYm;
     setPayrollFrom(from);
@@ -1687,195 +1876,279 @@ export default function App() {
     setSelectedPayrollEmp(emp);
   };
 
-// 10. BANKA TALİMATI İÇİN SATIR BAZLI DİNAMİK TOPLAMA VE HESAPLAMA (TÜRKÇE KARAKTER & TOPLU AVANS GÜVENLİKLİ)
-  const bankPaymentGroupedList = useMemo(() => {
-    const normalizeKey = (str: string) => {
-      return (str || '')
-        .replace(/İ/g, 'i')
-        .replace(/I/g, 'ı')
-        .toLocaleLowerCase('tr-TR')
-        .replace(/[^a-z0-9]/g, '');
-    };
+  const normalizeContractorKey = (str: string) =>
+    (str || '')
+      .replace(/İ/g, 'i')
+      .replace(/I/g, 'ı')
+      .toLocaleLowerCase('tr-TR')
+      .replace(/[^a-z0-9]/g, '');
 
-    const map = new Map<string, { contractorName: string; term1Total: number; term2Total: number; invoiceNos: string[]; iban: string }>();
+  const findContractorIban = (contractorName: string, inv?: any) => {
+    const key = normalizeContractorKey(contractorName);
+    let foundIban = subIbanMap.get(key) || '';
+    if ((!foundIban || foundIban === 'IBAN Eksik') && inv) {
+      if (inv.iban && String(inv.iban).trim().length > 10) foundIban = String(inv.iban).trim();
+      else if (inv.contractor_iban && String(inv.contractor_iban).trim().length > 10) foundIban = String(inv.contractor_iban).trim();
+    }
+    if (!foundIban || foundIban === 'IBAN Eksik') {
+      const found = dbSubcontractors.find(sub => {
+        const pSub = normalizeContractorKey(sub.name);
+        if (!pSub || !key) return false;
+        if (pSub === key || (key.length >= 4 && pSub.includes(key)) || (pSub.length >= 4 && key.includes(pSub))) return true;
+        const subWords = pSub.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
+        const keyWords = key.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
+        return subWords.some(sw => key.includes(sw)) || keyWords.some(kw => pSub.includes(kw));
+      });
+      if (found?.iban) foundIban = found.iban;
+    }
+    return foundIban || 'IBAN Eksik';
+  };
+
+  const extractContractorName = (invoiceNo: string) => {
+    const full = String(invoiceNo || '');
+    const idx = full.indexOf(' - ');
+    return idx >= 0 ? full.slice(idx + 3).trim() : full;
+  };
+
+  const matchesContractor = (sub: any, ...texts: any[]) => {
+    const nameKey = normalizeContractorKey(sub?.company_name || sub?.name || '');
+    const id = String(sub?.id || '');
+    if (!nameKey && !id) return false;
+    return texts.some(t => {
+      if (t === undefined || t === null || t === '') return false;
+      const s = String(t);
+      if (id && s === id) return true;
+      const k = normalizeContractorKey(s);
+      if (!k || !nameKey) return false;
+      if (k === nameKey) return true;
+      if (nameKey.length >= 6 && k.includes(nameKey)) return true;
+      if (k.length >= 6 && nameKey.includes(k)) return true;
+      return false;
+    });
+  };
+
+  const buildSubcontractorLedger = (sub: any) => {
+    const lines: { id: string; date: string; type: string; desc: string; debit: number; credit: number; isManual?: boolean; rawId?: any }[] = [];
+    if (!sub) return [] as (typeof lines[number] & { balance: number })[];
+
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'subcontractor_invoice') return;
+      const no = String(inv.invoice_no || '');
+      if (!matchesContractor(sub, extractContractorName(no), inv.supplier_name, inv.description, no)) return;
+      const amt = cleanNumber(inv.total_amount);
+      lines.push({
+        id: 'inv_' + inv.id,
+        date: sanitizeDate(inv.issue_date || inv.created_at),
+        type: 'Hakediş faturası',
+        desc: no,
+        debit: amt,
+        credit: 0
+      });
+      const t1 = cleanNumber(inv.term1_amount || amt / 2);
+      const t2 = cleanNumber(inv.term2_amount || amt / 2);
+      if (inv.term1_status === 'paid' && t1 > 0) {
+        lines.push({
+          id: 't1_' + inv.id,
+          date: sanitizeDate(inv.term1_due_date || inv.issue_date || inv.created_at),
+          type: '1. vade ödemesi',
+          desc: no,
+          debit: 0,
+          credit: t1
+        });
+      }
+      if (inv.term2_status === 'paid' && t2 > 0) {
+        lines.push({
+          id: 't2_' + inv.id,
+          date: sanitizeDate(inv.term2_due_date || inv.issue_date || inv.created_at),
+          type: '2. vade ödemesi',
+          desc: no,
+          debit: 0,
+          credit: t2
+        });
+      }
+    });
+
+    (dbAdvances || []).forEach((adv: any, idx: number) => {
+      if (adv.target_type !== 'contractor') return;
+      if (!matchesContractor(sub, adv.target_name, adv.target_id)) return;
+      const amt = cleanNumber(adv.total_amount);
+      if (amt <= 0) return;
+      const inst = Math.max(1, Number(adv.total_installments) || 1);
+      const isInst = String(adv.payment_type || '').includes('installment') || inst > 1;
+      lines.push({
+        id: 'adv_' + (adv.id || idx),
+        date: sanitizeDate(adv.issue_date || adv.created_at),
+        type: isInst ? `Avans (${inst} taksit)` : 'Peşin avans',
+        desc: adv.notes || adv.description || 'Verilen avans',
+        debit: 0,
+        credit: amt
+      });
+    });
+
+    (dbSubcontractorsLedger || []).forEach((l: any) => {
+      if (String(l.subcontractor_id) !== String(sub.id)) return;
+      const amt = cleanNumber(l.amount);
+      const isDebit = l.transaction_type === 'invoice';
+      lines.push({
+        id: 'ledger_' + l.id,
+        date: sanitizeDate(l.created_at),
+        type: l.transaction_type === 'invoice' ? 'Manuel fatura' : (l.transaction_type === 'advance' ? 'Manuel avans' : 'Manuel ödeme'),
+        desc: l.description || 'Cari hareket',
+        debit: isDebit ? amt : 0,
+        credit: isDebit ? 0 : amt,
+        isManual: true,
+        rawId: l.id
+      });
+    });
+
+    lines.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.type.localeCompare(b.type, 'tr'));
+    let running = 0;
+    return lines.map(line => {
+      running += line.debit - line.credit;
+      return { ...line, balance: running };
+    });
+  };
+
+  const bankTermLines = useMemo(() => {
+    const lines: {
+      lineId: string;
+      invoiceId: any;
+      invoiceNo: string;
+      contractorName: string;
+      term: 'term1' | 'term2';
+      termLabel: string;
+      dueDate: string;
+      issueDate: string;
+      amount: number;
+      iban: string;
+    }[] = [];
 
     dbInvoices
       .filter(i => i.category === 'subcontractor_invoice')
       .forEach(inv => {
         const fullTitle = String(inv.invoice_no || '');
+        if (fullTitle.toUpperCase().includes('AVANS')) return;
         const contractorName = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
-        const key = normalizeKey(contractorName);
-        const rawT1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
-        const rawT2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
-
-     if (rawT1 > 0 || rawT2 > 0) {
-          if (!map.has(key)) {
-            // 1. subIbanMap kontrolü
-            let foundIban = subIbanMap?.[contractorName] || subIbanMap?.[key];
-
-          // 2. Fatura üzerindeki IBAN kontrolü
-            if (!foundIban || foundIban === 'IBAN Eksik') {
-              if (inv.iban && String(inv.iban).trim().length > 10) foundIban = String(inv.iban).trim();
-              else if ((inv as any).contractor_iban && String((inv as any).contractor_iban).trim().length > 10) foundIban = String((inv as any).contractor_iban).trim();
-            }
-
-            // 3. dbSubcontractors içinde esnek şirket/unvan araması
-           // 3. dbSubcontractors içinde esnek ve güvenli şirket araması
-            if (!foundIban || foundIban === 'IBAN Eksik') {
-              const found = dbSubcontractors.find(sub => {
-                const pSub = normalizeKey(sub.name);
-                if (!pSub || !key) return false;
-                
-                // Tam eşleşme veya iç içe geçme
-                if (pSub === key || (key.length >= 4 && pSub.includes(key)) || (pSub.length >= 4 && key.includes(pSub))) {
-                  return true;
-                }
-
-                // Şirket unvanını kelimelere bölüp en az 4 harfli ana kelimeyi arama (kelime ortasını bozmaz)
-                const subWords = pSub.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
-                const keyWords = key.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
-
-                return subWords.some(sw => key.includes(sw)) || keyWords.some(kw => pSub.includes(kw));
-              });
-
-              if (found?.iban) {
-                foundIban = found.iban;
-              }
-            }
-            map.set(key, {
-              contractorName,
-              term1Total: 0,
-              term2Total: 0,
-              invoiceNos: [],
-              iban: foundIban || 'IBAN Eksik'
-            });
-          }
-
-          // TUTARLARI VE VADELERİ TOPLAYAN KISIM
-          const cur = map.get(key)!;
-          cur.term1Total += rawT1;
-          cur.term2Total += rawT2;
-          cur.invoiceNos.push(inv.invoice_no);
+        const iban = findContractorIban(contractorName, inv);
+        const t1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
+        const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
+        if (t1 > 0) {
+          lines.push({
+            lineId: `${inv.id}-term1`,
+            invoiceId: inv.id,
+            invoiceNo: fullTitle,
+            contractorName,
+            term: 'term1',
+            termLabel: '1. Vade',
+            dueDate: sanitizeDate(inv.term1_due_date || inv.due_date || inv.issue_date),
+            issueDate: sanitizeDate(inv.issue_date),
+            amount: t1,
+            iban
+          });
+        }
+        if (t2 > 0) {
+          lines.push({
+            lineId: `${inv.id}-term2`,
+            invoiceId: inv.id,
+            invoiceNo: fullTitle,
+            contractorName,
+            term: 'term2',
+            termLabel: '2. Vade',
+            dueDate: sanitizeDate(inv.term2_due_date || inv.due_date || inv.issue_date),
+            issueDate: sanitizeDate(inv.issue_date),
+            amount: t2,
+            iban
+          });
         }
       });
 
-    return Array.from(map.values()).map(item => {
-      const normName = normalizeKey(item.contractorName);
-
-      const activeAdv = dbAdvances.find(a => {
-        if (a.target_type !== 'contractor') return false;
-        const advTarget = normalizeKey(String(a.target_name || a.target_id || ''));
-        return normName.length >= 4 && (advTarget === normName || advTarget.includes(normName) || normName.includes(advTarget));
-      });
-
-      const advInvoice = dbInvoices.find(i => {
-      const title = String(i.invoice_no || '');
-      if (!title.toUpperCase().includes('AVANS')) return false;
-      if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
-      return normName.length >= 4 && normalizeKey(title).includes(normName);
-    });
-      let advDeduction = 0;
-      if (activeAdv) {
-        const inst = Math.max(1, activeAdv.total_installments || 1);
-        advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-      } else if (advInvoice) {
-        const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
-        const inst = match ? parseInt(match[1]) : 1;
-        advDeduction = cleanNumber(advInvoice.total_amount) / inst;
-      }
-
-// Kademeli Avans Mahsubu: Önce 1. Vadeden, sonra 2. Vadeden düşer, taşan borç sonraki döneme devreder
-        const adjustedTerm1 = Math.max(0, item.term1Total - advDeduction);
-        const remainingAdvAfterTerm1 = Math.max(0, advDeduction - item.term1Total);
-        const adjustedTerm2 = Math.max(0, item.term2Total - remainingAdvAfterTerm1);
-        const carriedOverDebt = Math.max(0, remainingAdvAfterTerm1 - item.term2Total);
-
-        const defaultChoice = (adjustedTerm1 <= 0 && adjustedTerm2 > 0) ? 'term2' : 'term1';
-        const choice = contractorTermChoices[item.contractorName] || defaultChoice;
-        let activeAmount = 0;
-        if (choice === 'term1') activeAmount = adjustedTerm1;
-        else if (choice === 'term2') activeAmount = adjustedTerm2;
-        else if (choice === 'both') activeAmount = adjustedTerm1 + adjustedTerm2;
-
-        return {
-          ...item,
-          term1Total: adjustedTerm1,
-          term2Total: adjustedTerm2,
-          carriedOverDebt,
-          choice,
-          activeAmount
-        };
-      }).sort((a, b) => {
+    return lines.sort((a, b) => {
       let comparison = 0;
       if (bankSortField === 'contractorName') {
         comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
       } else if (bankSortField === 'iban') {
         comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
-      } else if (bankSortField === 'activeAmount') {
-        comparison = cleanNumber(a.activeAmount) - cleanNumber(b.activeAmount);
+      } else if (bankSortField === 'amount') {
+        comparison = a.amount - b.amount;
+      } else {
+        comparison = (a.dueDate || '').localeCompare(b.dueDate || '');
       }
+      if (comparison === 0) comparison = (a.invoiceNo || '').localeCompare(b.invoiceNo || '', 'tr-TR');
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
-  }, [dbInvoices, contractorTermChoices, subIbanMap, bankSortField, bankSortOrder, dbAdvances, dbEmployeeTransactions]);
+  }, [dbInvoices, dbSubcontractors, subIbanMap, bankSortField, bankSortOrder]);
+
+  const selectedBankTermLines = useMemo(
+    () => bankTermLines.filter(line => bankSelectedLines[line.lineId]),
+    [bankTermLines, bankSelectedLines]
+  );
+
+  const contractorAdvanceCuts = useMemo(() => {
+    const ym = currentPayYearMonth();
+    const byKey = new Map<string, { cut: number; applies: { id: any; remaining: number; apply: number }[] }>();
+    (dbAdvances || []).forEach((a: any) => {
+      if (a.target_type !== 'contractor') return;
+      if (String(a.last_applied_month || '') === ym) return;
+      const remaining = a.remaining_amount === null || a.remaining_amount === undefined
+        ? cleanNumber(a.total_amount)
+        : cleanNumber(a.remaining_amount);
+      if (remaining <= 0) return;
+      const key = normalizeContractorKey(String(a.target_name || a.target_id || ''));
+      if (key.length < 3) return;
+      const inst = Math.max(1, Number(a.total_installments) || 1);
+      const isInst = a.payment_type === 'contractor_installment_advance' || inst > 1;
+      const apply = Math.round((isInst ? Math.min(remaining, cleanNumber(a.total_amount) / inst) : remaining) * 100) / 100;
+      if (apply <= 0) return;
+      const cur = byKey.get(key) || { cut: 0, applies: [] };
+      cur.cut += apply;
+      cur.applies.push({ id: a.id, remaining, apply });
+      byKey.set(key, cur);
+    });
+    return byKey;
+  }, [dbAdvances]);
+
+  const decorateBankLinesWithAdvance = (lines: typeof bankTermLines) => {
+    const firstLineId = new Map<string, string>();
+    [...lines]
+      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '') || a.lineId.localeCompare(b.lineId))
+      .forEach(l => {
+        const k = normalizeContractorKey(l.contractorName);
+        if (k && !firstLineId.has(k)) firstLineId.set(k, l.lineId);
+      });
+    return lines.map(l => {
+      const k = normalizeContractorKey(l.contractorName);
+      const cut = firstLineId.get(k) === l.lineId ? (contractorAdvanceCuts.get(k)?.cut || 0) : 0;
+      const netAmount = Math.round(Math.max(0, l.amount - cut) * 100) / 100;
+      return { ...l, advanceCut: cut, netAmount };
+    });
+  };
+
+  const displayBankTermLines = useMemo(() => {
+    const selectedKeys = new Set(selectedBankTermLines.map(l => normalizeContractorKey(l.contractorName)));
+    const previewSource = selectedBankTermLines.length
+      ? bankTermLines.map(l => {
+          const k = normalizeContractorKey(l.contractorName);
+          if (selectedKeys.has(k) && !bankSelectedLines[l.lineId]) return null;
+          return l;
+        }).filter(Boolean) as typeof bankTermLines
+      : bankTermLines;
+    const decoratedPreview = decorateBankLinesWithAdvance(previewSource);
+    const cutById = new Map(decoratedPreview.map(l => [l.lineId, l]));
+    return bankTermLines.map(l => cutById.get(l.lineId) || { ...l, advanceCut: 0, netAmount: l.amount });
+  }, [bankTermLines, selectedBankTermLines, bankSelectedLines, contractorAdvanceCuts]);
   // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
   const processedEmployees = useMemo(() => {
+    const ym = currentPayYearMonth();
     return (dbEmployees || [])
       .map(emp => {
-        const base = cleanNumber(emp.base_salary);
-        // Personelin kayıtlı avans ve primlerini doğru tipe göre ayır ve topla
-        const empNorm = String(emp.full_name || '').toLowerCase().trim();
-        const empIdStr = String(emp.id || '');
-        
-        // Taksitli avans aylık kesintisi veya sabit avans kesintisi
-      const instCount = Math.max(1, Number(emp.advance_installments) || 1);
-      const installmentMonthlyCut = (emp.advance_total !== undefined && emp.advance_total !== null && Number(emp.advance_total) > 0)
-        ? Math.round(cleanNumber(emp.advance_total) / instCount)
-        : cleanNumber(emp.monthly_advance);
-
-      let totalAdv = installmentMonthlyCut;
-        let totalBonusFromAdv = cleanNumber(emp.monthly_bonus);
-
-        (dbAdvances || []).forEach(a => {
-          if (a.target_type !== 'employee') return;
-          const targetNorm = String(a.target_name || '').toLowerCase().trim();
-          const targetId = String(a.target_id || '');
-
-          const isMatch = (targetId && targetId === empIdStr) || 
-                          (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
-
-          if (isMatch) {
-            const amt = cleanNumber(a.remaining_amount !== undefined ? a.remaining_amount : a.total_amount);
-            if (a.payment_type === 'employee_bonus') {
-              totalBonusFromAdv += amt;
-            } else {
-              totalAdv += amt;
-            }
-          }
-        });
-        // Personel cari hareketleri tablosundaki (çoklu prim, tekil avans ve taksitler) hesaplama
-      (dbEmployeeTransactions || []).forEach(tx => {
-        if (String(tx.employee_id) === empIdStr) {
-          if (tx.type === 'bonus') {
-            totalBonusFromAdv += cleanNumber(tx.total_amount);
-          } else if (tx.type === 'installment_advance') {
-            totalAdv += cleanNumber(tx.monthly_cut || Math.round(cleanNumber(tx.total_amount) / Math.max(1, tx.installment_count || 1)));
-          } else if (tx.type === 'advance') {
-            totalAdv += cleanNumber(tx.total_amount);
-          }
-        }
-      });
-
-        const bonus = totalBonusFromAdv;        const grossTotal = base + bonus;
-        const netPayable = Math.max(0, grossTotal - totalAdv);
-        const carriedOverDebt = Math.max(0, totalAdv - grossTotal);
-
+        const pay = employeePayForMonth(emp, ym);
         return {
           ...emp,
-          baseSalaryNum: base,
-          bonusNum: bonus,
-          advanceDeduction: totalAdv,
-          netPayable,
-          carriedOverDebt
+          baseSalaryNum: pay.base,
+          bonusNum: pay.bonus,
+          advanceDeduction: pay.advanceCut,
+          netPayable: employeeUnpaidFromBooks(emp),
+          carriedOverDebt: pay.carried
         };
       })
       .filter(emp => {
@@ -1898,7 +2171,7 @@ export default function App() {
         }
         return empSortOrder === 'asc' ? comp : -comp;
       });
-  }, [dbEmployees, dbAdvances, empSearchTerm, empSortField, empSortOrder]);
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions, dbInvoices, empSearchTerm, empSortField, empSortOrder]);
 
   // PERSONEL SAYFASI FİNANSAL ÖZET SAYAÇLARI
   const empSummary = useMemo(() => {
@@ -1919,61 +2192,42 @@ export default function App() {
     return { totalBase, totalBonus, totalAdv, totalNet, totalDebt, count: processedEmployees.length };
   }, [processedEmployees]);
     
-  // CANLI SEÇİLEN BANKA TOPLAMI
   const bankLiveSelectionSummary = useMemo(() => {
-    let total = 0;
-    let count = 0;
-    bankPaymentGroupedList.forEach(item => {
-      const isSelected = bankSelectedContractors[item.contractorName] !== false;
-      if (isSelected && item.activeAmount > 0) {
-        total += item.activeAmount;
-        count++;
-      }
-    });
-    return { total, count };
-  }, [bankPaymentGroupedList, bankSelectedContractors]);
+    const decorated = decorateBankLinesWithAdvance(selectedBankTermLines);
+    const names = new Set(decorated.map(l => l.contractorName));
+    const total = decorated.reduce((sum, l) => sum + l.netAmount, 0);
+    return { total, count: names.size, lineCount: decorated.length };
+  }, [selectedBankTermLines, contractorAdvanceCuts]);
 
-  // TÜMÜNÜ SEÇ / KALDIR FONKSİYONU
   const handleToggleSelectAllBank = () => {
-    const allSelected = bankPaymentGroupedList.every(i => bankSelectedContractors[i.contractorName] !== false);
-    const newSelection: { [key: string]: boolean } = {};
-    bankPaymentGroupedList.forEach(i => {
-      newSelection[i.contractorName] = !allSelected;
+    const allSelected = bankTermLines.length > 0 && bankTermLines.every(l => bankSelectedLines[l.lineId]);
+    const next: { [key: string]: boolean } = {};
+    bankTermLines.forEach(l => {
+      next[l.lineId] = !allSelected;
     });
-    setBankSelectedContractors(newSelection);
+    setBankSelectedLines(next);
   };
 
-  // BANKA EXCEL ÇIKTISI
- // BANKA EXCEL ÇIKTISI & OTOMATİK MUTABAKAT DENETİMİ (SANITY CHECK)
   const handleDownloadBankExcel = () => {
-    const selectedRows = bankPaymentGroupedList.filter(item => bankSelectedContractors[item.contractorName] !== false && item.activeAmount > 0);
-    if (selectedRows.length === 0) {
-      alert('Lütfen listeden en az bir alt yüklenici seçiniz!');
+    if (selectedBankTermLines.length === 0) {
+      alert('Lütfen ödemek istediğiniz fatura vadelerini tek tek işaretleyin. Üst üste biriken faturaların hepsi otomatik seçilmez.');
       return;
     }
 
-    // GÜVENLİK KONTROLÜ (SANITY CHECK): Kuruş sapması denetimi
-    let auditRawTotal = 0;
-    let auditActiveTotal = 0;
-
-    selectedRows.forEach(row => {
-      let rawAmt = 0;
-      if (row.choice === 'term1') rawAmt = row.term1Total;
-      else if (row.choice === 'term2') rawAmt = row.term2Total;
-      else if (row.choice === 'both') rawAmt = row.term1Total + row.term2Total;
-
-      auditRawTotal += rawAmt;
-      auditActiveTotal += cleanNumber(row.activeAmount);
+    const decoratedSelected = decorateBankLinesWithAdvance(selectedBankTermLines);
+    const grouped = new Map<string, { contractorName: string; iban: string; amount: number; notes: string[] }>();
+    decoratedSelected.forEach(line => {
+      const key = normalizeContractorKey(line.contractorName) || line.contractorName;
+      if (!grouped.has(key)) {
+        grouped.set(key, { contractorName: line.contractorName, iban: line.iban, amount: 0, notes: [] });
+      }
+      const cur = grouped.get(key)!;
+      cur.amount += line.netAmount;
+      cur.notes.push(`${line.invoiceNo} ${line.termLabel}${line.advanceCut ? ' −avans' : ''}`);
+      if (cur.iban === 'IBAN Eksik' && line.iban !== 'IBAN Eksik') cur.iban = line.iban;
     });
+    const selectedRows = Array.from(grouped.values());
 
-    const diff = Math.abs(auditRawTotal - auditActiveTotal);
-    // 1 Kuruştan büyük herhangi bir mantık/matematik sapması varsa indirmeyi durdur
-    if (diff > 0.05) {
-      alert(`GÜVENLİK UYARISI: Banka talimat toplamı ile hakediş toplamı arasında ${diff.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ tutarsızlık tespit edildi!\nMali kayıp yaşanmaması için Excel indirme işlemi durduruldu. Lütfen seçili kayıtları kontrol ediniz.`);
-      return;
-    }
-
-    // IBAN Eksik Olan Taşeron Kontrolü
     const missingIbans = selectedRows.filter(r => !r.iban || r.iban === 'IBAN Eksik' || r.iban.trim().length < 15);
     if (missingIbans.length > 0) {
       const names = missingIbans.map(m => m.contractorName).join(', ');
@@ -1985,46 +2239,56 @@ export default function App() {
     const excelData = selectedRows.map(item => ({
       'Alıcı Unvanı': item.contractorName,
       'IBAN': item.iban,
-      'Ödeme Tutarı (TL)': item.activeAmount,
-      'Açıklama': `Tazeyol Lojistik Hakediş Ödemesi (${item.choice === 'both' ? '1 ve 2. Vade' : item.choice === 'term1' ? '1. Vade' : '2. Vade'})`
+      'Ödeme Tutarı (TL)': item.amount,
+      'Açıklama': `Tazeyol Lojistik Hakediş (${item.notes.slice(0, 3).join('; ')}${item.notes.length > 3 ? '…' : ''})`
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Toplu Odeme');
     XLSX.writeFile(workbook, `Tazeyol_Banka_Odeme_Talimati_${new Date().toISOString().split('T')[0]}.xlsx`);
-    // Otomatik Durum Kapatma & Mükerrer Ödeme Kilidi
+
     setTimeout(async () => {
-      if (window.confirm('Banka Exceli başarıyla oluşturuldu!\n\nSeçilen bu alt yüklenicilerin ilgili vadeleri sistemde "Ödendi" olarak işaretlenip kapatılsın mı? (Böylece mükerrer ödeme riski önlenir)')) {
+      if (window.confirm(`Banka Exceli oluşturuldu.\n\nYalnızca işaretlediğiniz ${selectedBankTermLines.length} vade satırı "Ödendi" kapansın mı? İşaretlemediğiniz birikmiş faturalar açık kalır.`)) {
         try {
-          for (const item of selectedRows) {
-            const contractorInvoices = dbInvoices.filter(i => {
-              if (i.category !== 'subcontractor_invoice') return false;
-              const fTitle = String(i.invoice_no || '');
-              const cName = fTitle.includes(' - ') ? fTitle.split(' - ')[1].trim() : fTitle;
-              return cName === item.contractorName;
-            });
-
-            for (const inv of contractorInvoices) {
-              const updates: any = {};
-              if (item.choice === 'term1' || item.choice === 'both') {
-                updates.term1_status = 'paid';
-              }
-              if (item.choice === 'term2' || item.choice === 'both') {
-                updates.term2_status = 'paid';
-              }
-              const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
-              const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
-              if (isT1Paid && isT2Paid) {
-                updates.status = 'paid';
-              }
-
-              if (Object.keys(updates).length > 0) {
-                await supabase.from('invoices').update(updates).eq('id', inv.id);
+          const byInvoice = new Map<any, { term1?: boolean; term2?: boolean }>();
+          selectedBankTermLines.forEach(line => {
+            const cur = byInvoice.get(line.invoiceId) || {};
+            if (line.term === 'term1') cur.term1 = true;
+            if (line.term === 'term2') cur.term2 = true;
+            byInvoice.set(line.invoiceId, cur);
+          });
+          for (const [invoiceId, terms] of byInvoice) {
+            const inv = dbInvoices.find(i => i.id === invoiceId);
+            if (!inv) continue;
+            const updates: any = {};
+            if (terms.term1) updates.term1_status = 'paid';
+            if (terms.term2) updates.term2_status = 'paid';
+            const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
+            const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
+            if (isT1Paid && isT2Paid) updates.status = 'paid';
+            await supabase.from('invoices').update(updates).eq('id', invoiceId);
+          }
+          const ym = currentPayYearMonth();
+          const touched = new Set<string>();
+          for (const line of decoratedSelected) {
+            if (!line.advanceCut) continue;
+            const key = normalizeContractorKey(line.contractorName);
+            if (touched.has(key)) continue;
+            touched.add(key);
+            const info = contractorAdvanceCuts.get(key);
+            if (!info) continue;
+            for (const ap of info.applies) {
+              const nextRemaining = Math.round(Math.max(0, ap.remaining - ap.apply) * 100) / 100;
+              const payload: any = { remaining_amount: nextRemaining, last_applied_month: ym };
+              const { error } = await supabase.from('advance_payments').update(payload).eq('id', ap.id);
+              if (error && /last_applied_month/i.test(error.message)) {
+                await supabase.from('advance_payments').update({ remaining_amount: nextRemaining }).eq('id', ap.id);
               }
             }
           }
-          alert('Seçilen ödemeler başarıyla kapatıldı ve kayıtlara işlendi!');
+          setBankSelectedLines({});
+          alert('Yalnızca seçilen vadeler kapatıldı. Bu ayın avans taksiti ilk ödemeden düşüldü. Diğer birikmiş faturalar açık duruyor.');
           loadPortalData();
         } catch (err: any) {
           alert('Durum güncelleme hatası: ' + err.message);
@@ -2113,8 +2377,9 @@ export default function App() {
         target_name: subPaymentFormData.subcontractorName,
         payment_type: isInstallment ? 'contractor_installment_advance' : 'contractor_advance',
         total_amount: amt,
-        total_installments: instCount,
-        remaining_amount: isInstallment ? (amt - singleDeduction) : 0,
+        total_installments: isInstallment ? instCount : 1,
+        remaining_amount: amt,
+        last_applied_month: null,
         issue_date: todayStr,
         notes: isInstallment 
           ? `Taksit başı düşüm: ${singleDeduction.toLocaleString('tr-TR')} TL (Kalan: ${instCount - 1} Taksit / ${(amt - singleDeduction).toLocaleString('tr-TR')} TL)`
@@ -2256,15 +2521,31 @@ export default function App() {
 
   // 15. TAHSİLAT AÇMA VE KAYDETME
   const handleOpenReceiptFromSale = (saleInvoice: any) => {
+    const customerName = saleInvoice.customerName || '';
+    const row = customerBalances.find(r => r.customer.name === customerName);
+    const remaining = row ? Math.max(0, row.net) : cleanNumber(saleInvoice.total_amount);
     setNewReceiptFormData({
-      customerName: saleInvoice.customerName || 'MİGROS TİCARET A.Ş.',
-      receiptNo: `THS-${saleInvoice.cleanInvoiceNo || saleInvoice.invoice_no}`,
-      amount: String(saleInvoice.total_amount || ''),
+      customerName,
+      receiptNo: `CARI-${new Date().toISOString().split('T')[0]}`,
+      amount: remaining > 0 ? String(remaining) : '',
       targetAccount: 'bank',
       date: new Date().toISOString().split('T')[0],
-      relatedInvoiceId: saleInvoice.id
+      relatedInvoiceId: null
     });
     setIsNewReceiptModalOpen(true);
+  };
+
+  const handleSetSalePaidStatus = async (sale: any, nextStatus: 'paid' | 'unpaid') => {
+    if (!isAdmin) return;
+    const label = nextStatus === 'paid' ? 'mutabakatta ödendi' : 'tekrar açık';
+    if (!window.confirm(`${sale.invoice_no || sale.cleanInvoiceNo}\nBu faturayı ${label} işaretlemek istiyor musunuz?\nKasa hareketi oluşmaz; cari bakiye alınan paralara göre kalır.`)) return;
+    try {
+      const { error } = await supabase.from('invoices').update({ status: nextStatus }).eq('id', sale.id);
+      if (error) throw error;
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Durum güncellenemedi: ' + err.message);
+    }
   };
 
   const handleSaveNewReceipt = async (e: React.FormEvent) => {
@@ -2274,14 +2555,17 @@ export default function App() {
       alert('Lütfen tutar giriniz.');
       return;
     }
+    if (!String(newReceiptFormData.customerName || '').trim()) {
+      alert('Müşteri seçiniz.');
+      return;
+    }
 
     try {
-      const recTitle = `THS - ${newReceiptFormData.receiptNo || 'Dekont'} - ${newReceiptFormData.customerName || 'Müşteri'} - ${Date.now()}`;
-      const isAdvance = !newReceiptFormData.relatedInvoiceId;
+      const recTitle = `THS - ${newReceiptFormData.receiptNo || 'Dekont'} - ${newReceiptFormData.customerName} - ${Date.now()}`;
       const { error: insErr } = await supabase.from('invoices').insert([{
         invoice_no: recTitle,
         direction: 'incoming',
-        category: isAdvance ? 'customer_advance' : 'customer_collection',
+        category: 'customer_advance',
         total_amount: amt,
         issue_date: newReceiptFormData.date,
         due_date: newReceiptFormData.date,
@@ -2290,11 +2574,7 @@ export default function App() {
 
       if (insErr) throw insErr;
 
-      if (newReceiptFormData.relatedInvoiceId) {
-        await supabase.from('invoices').update({ status: 'paid' }).eq('id', newReceiptFormData.relatedInvoiceId);
-      }
-
-      alert('Tahsilat başarıyla kaydedildi ve nakit havuzuna aktarıldı!');
+      alert('Tutar müşteri carisine fatura bağımsız işlendi. Faturalar açık kalır; dönemi kapatınca ayrıca ödendi işaretleyin.');
       setIsNewReceiptModalOpen(false);
       loadPortalData();
     } catch (err: any) {
@@ -2444,26 +2724,35 @@ export default function App() {
 
     try {
       const desc = expenseFormData.companyName || 'Genel Şirket Masrafı';
-      const fullTitle = `${expenseFormData.invoiceNo ? expenseFormData.invoiceNo + ' - ' : ''}${desc}${expenseFormData.plateNumber ? ' [' + expenseFormData.plateNumber.toUpperCase() + ']' : ''}`;
-      const payload = {
+      let fullTitle = `${expenseFormData.invoiceNo ? expenseFormData.invoiceNo + ' - ' : ''}${desc}${expenseFormData.plateNumber ? ' [' + expenseFormData.plateNumber.toUpperCase() + ']' : ''}`;
+      fullTitle = fullTitle.replace(/^\[KK\]\s*/i, '');
+      const paidByCard = expenseFormData.status === 'paid' && expenseFormData.paidSource === 'card';
+      if (paidByCard) fullTitle = `[KK] ${fullTitle}`;
+      const payload: any = {
         invoice_no: fullTitle,
         direction: 'incoming',
         category: expenseFormData.category || 'other',
         total_amount: amt,
         issue_date: expenseFormData.issueDate,
         due_date: expenseFormData.dueDate || expenseFormData.issueDate,
-        status: expenseFormData.status
+        status: expenseFormData.status,
+        paid_source: expenseFormData.status === 'paid' ? (paidByCard ? 'card' : 'cash') : null
       };
 
-      if (editingExpenseId) {
-        const { error } = await supabase.from('invoices').update(payload).eq('id', editingExpenseId);
-        if (error) throw error;
-        alert('Gider kaydı başarıyla güncellendi!');
-      } else {
-        const { error } = await supabase.from('invoices').insert([payload]);
-        if (error) throw error;
-        alert('Gider kaydı başarıyla eklendi!');
+      const saveExpense = async (data: any) => {
+        if (editingExpenseId) return supabase.from('invoices').update(data).eq('id', editingExpenseId);
+        return supabase.from('invoices').insert([data]);
+      };
+
+      let { error } = await saveExpense(payload);
+      if (error && /paid_source/i.test(error.message)) {
+        const { paid_source, ...fallback } = payload;
+        ({ error } = await saveExpense(fallback));
       }
+      if (error) throw error;
+      alert(paidByCard
+        ? 'Gider kartla kapatıldı. Kasa şimdi düşmez; kart ekstresi ödenince düşer.'
+        : (editingExpenseId ? 'Gider kaydı başarıyla güncellendi!' : 'Gider kaydı başarıyla eklendi!'));
 
       setIsGeneralExpenseModalOpen(false);
       setEditingExpenseId(null);
@@ -2899,6 +3188,12 @@ export default function App() {
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
   ];
+  const sidebarItems = [
+    ...menuItems.filter((item) => item.id === 'overview'),
+    ...menuItems
+      .filter((item) => item.id !== 'overview')
+      .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
+  ];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
@@ -2912,9 +3207,23 @@ export default function App() {
               <Menu className="w-5 h-5 text-[#009fe3]" />
               <span>MENÜ</span>
             </button>
-            <div className="border-l border-slate-200 pl-3">
+            <button
+              type="button"
+              onClick={() => setActiveTab('overview')}
+              className="border-l border-slate-200 pl-3 text-left hover:opacity-80 transition"
+              title="Ana ekran"
+            >
               <TazeyolBrand />
-            </div>
+            </button>
+            {activeTab !== 'overview' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('overview')}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#009fe3]/10 hover:bg-[#009fe3]/20 text-[#009fe3] font-bold text-xs transition"
+              >
+                <LayoutDashboard className="w-4 h-4" /> Ana ekran
+              </button>
+            )}
           </div>
           
           <div className="flex items-center gap-3">
@@ -2937,7 +3246,9 @@ export default function App() {
           <div onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" />
           <div className="relative w-80 bg-white h-full shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-200">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <TazeyolBrand />
+              <button type="button" onClick={() => { setActiveTab('overview'); setIsSidebarOpen(false); }} className="text-left" title="Ana ekran">
+                <TazeyolBrand />
+              </button>
               <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700">
                 <X className="w-5 h-5" />
               </button>
@@ -2945,7 +3256,7 @@ export default function App() {
 
             <nav className="p-3 space-y-1 flex-1 overflow-y-auto text-xs">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block px-3 py-1">Tüm Modüller</span>
-              {menuItems.map(item => {
+              {sidebarItems.map(item => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
                 return (
@@ -3025,7 +3336,7 @@ export default function App() {
                   <div className="mt-2 flex justify-between items-baseline">
                     <span className="text-[11px] text-slate-500">3 gün içinde ödenecek</span>
                     <span className="text-base font-bold text-rose-700">
-                      {alertAnalysis.pendingDebts.reduce((s, i) => s + cleanNumber(i.total_amount), 0).toLocaleString('tr-TR')} ₺
+                      {alertAnalysis.pendingDebts.reduce((s, i) => s + cleanNumber(i.alertAmount ?? i.total_amount), 0).toLocaleString('tr-TR')} ₺
                     </span>
                   </div>
                 </div>
@@ -3067,7 +3378,7 @@ export default function App() {
     <Calendar className="w-5 h-5 text-[#009fe3]" />
     <div>
       <h3 className="font-bold text-slate-900 text-sm">Finansal Veri Filtresi</h3>
-      <span className="text-[11px] text-slate-400">Seçilen döneme ait tüm ciro, tahsilat ve masraflar filtrelenir.</span>
+      <span className="text-[11px] text-slate-400">Ciro, tahsilat ve dönem masrafı bu aralığa göre; kasa, alacak ve borçlar güncel bakiyedir.</span>
     </div>
   </div>
 
@@ -3174,17 +3485,17 @@ export default function App() {
   </div>
 </div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <button type="button" onClick={() => setActiveTab('collections')} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-emerald-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <Coins className="w-3.5 h-3.5" /> Alınan Tahsilatlar
                 </span>
                 <div className="text-2xl font-bold text-emerald-600 mt-2">
                   +{totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-xs text-slate-400 mt-1 block">Kasaya Fiilen Giren Müşteri Parası</span>
-              </div>
+                <span className="text-xs text-slate-400 mt-1 block">Müşteri tahsilatlarına git</span>
+              </button>
 
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <button type="button" onClick={() => setActiveTab('customers')} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-blue-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs text-blue-600 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <TrendingUp className="w-3.5 h-3.5" /> Bekleyen Müşteri Alacakları
                 </span>
@@ -3192,11 +3503,11 @@ export default function App() {
                   {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-xs text-slate-400 mt-1 block">
-                  Seçilen Dönem Cirosu: {totalPeriodSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  Ciro {totalPeriodSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ · müşteri kartları
                 </span>
-              </div>
+              </button>
 
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <button type="button" onClick={() => setActiveTab('subcontractors')} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs text-rose-600 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" /> Ödenecek Toplam Borçlar
                 </span>
@@ -3204,9 +3515,9 @@ export default function App() {
                   {totalConsolidatedDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-xs text-slate-400 mt-1 block">
-                  Açık Taşeron + Devlet + Temel Tedarikçi Borçları
+                  Taşeron hakedişlerine git
                 </span>
-              </div>
+              </button>
 
               <div className="bg-[#009fe3] text-white p-5 rounded-2xl shadow-sm relative overflow-hidden">
                 <div className="flex justify-between items-start">
@@ -3217,14 +3528,17 @@ export default function App() {
                     <div className="flex gap-1">
                     <button 
                       onClick={async () => {
-                        const raw = window.prompt('Kasa açılış bakiyesi (₺)', String(cashOpening));
+                        const raw = window.prompt('Güncel kasa / banka — fiili tutar (₺)', String(cashOpening || 1550000));
                         if (raw === null) return;
                         const next = cleanNumber(raw);
+                        const asOf = new Date().toISOString().split('T')[0];
                         try {
                           await saveAppSetting('cash_opening', String(next));
+                          await saveAppSetting('cash_opening_as_of', asOf);
                           setCashOpening(next);
+                          setCashOpeningAsOf(asOf);
                         } catch (err: any) {
-                          alert('Açılış bakiyesi kaydedilemedi. setup_customers.sql dosyasını SQL Editor’da çalıştırın.\n' + (err.message || ''));
+                          alert('Kasa kaydedilemedi. setup_cash.sql dosyasını SQL Editor’da bir kez Run deyin.\n' + (err.message || ''));
                         }
                       }}
                       className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded text-[10px] font-bold transition">
@@ -3241,50 +3555,50 @@ export default function App() {
                 <div className="text-2xl font-bold mt-2">
                   {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-xs text-blue-100 mt-1 block">Açılış {cashOpening.toLocaleString('tr-TR')} ₺ + tahsilat − ödemeler</span>
+                <span className="text-xs text-blue-100 mt-1 block">Fiili {cashOpening.toLocaleString('tr-TR')} ₺ ({formatDateTR(cashOpeningAsOf)}). Sonrası tahsilat − ödeme.</span>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              <button type="button" onClick={() => setActiveTab('general_expenses')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
                   <Building2 className="w-3.5 h-3.5" /> Devlet Ödemeleri
                 </span>
                 <div className="text-xl font-bold text-slate-900 mt-1.5">
                   {totalGovernmentPaymentsDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Vergi Borçları, SGK Primleri, Trafik Cezaları</span>
-              </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Giderler menüsüne git</span>
+              </button>
 
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              <button type="button" onClick={() => setActiveTab('general_expenses')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs font-semibold text-amber-700 tracking-wider uppercase flex items-center gap-1">
                   <Receipt className="w-3.5 h-3.5" /> Temel Diğer Faturalar
                 </span>
                 <div className="text-xl font-bold text-slate-900 mt-1.5">
                   {totalGeneralCompanyExpensesDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Açık Lastik, Bakım, Servis ve Tedarik Borçları</span>
-              </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Açık tedarik borçları</span>
+              </button>
 
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              <button type="button" onClick={() => setActiveTab('employees')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-indigo-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs font-semibold text-indigo-700 tracking-wider uppercase flex items-center gap-1">
                   <UserCheck className="w-3.5 h-3.5" /> Personel Gelecek Ödemesi
                 </span>
                 <div className="text-xl font-bold text-slate-900 mt-1.5">
                   {totalEmployeeFutureDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">İşleyen Gün Maaş Yükü (Ticari borca dahil edilmez)</span>
-              </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Personel & bordroya git</span>
+              </button>
 
-              <div className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm bg-emerald-50/20">
+              <button type="button" onClick={() => setActiveTab('general_expenses')} className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm bg-emerald-50/20 text-left hover:border-emerald-400 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs font-semibold text-emerald-800 tracking-wider flex items-center gap-1">
                   <Coins className="w-3.5 h-3.5" /> DÖNEM İÇİ FİİLİ MASRAF
                 </span>
                 <div className="text-xl font-bold text-emerald-800 mt-1.5">
                   {totalPeriodPaidExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-emerald-600 mt-1 block">Peşin Ödenen Avukat, Hamaliye ve Giderler</span>
-              </div>
+                <span className="text-[11px] text-emerald-600 mt-1 block">Gider dökümüne git</span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
@@ -3422,7 +3736,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Müşteri Kartları</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Her müşterinin açık faturası, tahsilatı ve net bakiyesi. Artı = müşteriden alacak, eksi = fazla avans (borç).</p>
+                <p className="text-xs text-slate-500 mt-0.5">Artı = müşteriden alacak. Eksi = fazla ödeme / avans. Gelen para faturaya bağlanmaz; net = tüm faturalar − tüm alınan paralar.</p>
               </div>
               {isAdmin && (
                 <button
@@ -3455,7 +3769,7 @@ export default function App() {
                   <span className="text-lg font-bold text-emerald-800">{customerBalances.reduce((s, r) => s + r.advances, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <span className="text-[11px] text-slate-600 font-semibold block">Net bakiye (alacak − avans)</span>
+                  <span className="text-[11px] text-slate-600 font-semibold block">Net bakiye (faturalar − alınan paralar)</span>
                   <span className={`text-lg font-bold ${customerBalances.reduce((s, r) => s + r.net, 0) >= 0 ? 'text-amber-800' : 'text-rose-700'}`}>
                     {customerBalances.reduce((s, r) => s + r.net, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                   </span>
@@ -3563,7 +3877,7 @@ export default function App() {
                     setIsNewReceiptModalOpen(true);
                   }}
                   className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-md transition">
-                  <Plus className="w-4 h-4" /> Toplu Cari Avans Ekle (Faturasız)
+                  <Plus className="w-4 h-4" /> Cari ödeme / avans (faturasız)
                 </button>
               )}
             </div>
@@ -3571,7 +3885,7 @@ export default function App() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10">
                 <span className="text-blue-200 text-[11px] block">Toplam Açık Fatura</span>
-                <span className="text-lg font-bold block mt-0.5">{pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-lg font-bold block mt-0.5">{totalOpenSalesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-emerald-500/20 backdrop-blur-xs p-3 rounded-xl border border-emerald-400/20">
                 <span className="text-emerald-200 text-[11px] block">Alınan Faturasız Cari Avans</span>
@@ -3639,10 +3953,13 @@ export default function App() {
                 </div>
                 <div>
                   <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
-                    Toplam Bekleyen Müşteri Tahsilatı (Açık Faturalar)
+                    Açık fatura tutarı (mutabakat bayrağı)
                   </span>
                   <span className="text-2xl font-black text-slate-900 tracking-tight">
                     {totalUncollectedAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  </span>
+                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                    Cari net alacak: {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                   </span>
                 </div>
               </div>
@@ -3693,16 +4010,38 @@ export default function App() {
                       </td>
                       <td className="py-3 px-3 text-center">
                         {sale.status === 'paid' ? (
-                          <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-1 rounded-full">
-                            Tahsil Edildi
-                          </span>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-1 rounded-full">
+                              Mutabakat kapalı
+                            </span>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleSetSalePaidStatus(sale, 'unpaid')}
+                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 underline"
+                              >
+                                Açığa al
+                              </button>
+                            )}
+                          </div>
                         ) : (
                           isAdmin && (
-                            <button 
-                              onClick={() => handleOpenReceiptFromSale(sale)}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1 mx-auto shadow-sm transition">
-                              <Coins className="w-3.5 h-3.5" /> Tahsil Et
-                            </button>
+                            <div className="flex flex-col items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReceiptFromSale(sale)}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm transition"
+                              >
+                                <Coins className="w-3.5 h-3.5" /> Cari ödeme
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSetSalePaidStatus(sale, 'paid')}
+                                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 underline"
+                              >
+                                Ödendi işaretle
+                              </button>
+                            </div>
                           )
                         )}
                       </td>
@@ -4076,74 +4415,11 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 <tbody className="divide-y divide-slate-100">
                   {dbSubcontractors
                     .map((sub: any) => {
-                      const subNameLower = (sub.company_name || sub.name || '').toLocaleLowerCase('tr-TR').trim();
-                      const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
-
-                      let totalInvoice = 0;
-                      let totalOut = 0;
-                      let foundTaxNumber = sub.tax_number || '';
-
-                      // 1. Fatura ve Çıkışlar
-                      dbInvoices.forEach(inv => {
-                        if (inv.category === 'subcontractor_invoice') {
-                          const invTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
-                          if (invTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
-                            totalInvoice += cleanNumber(inv.total_amount);
-                            if (!foundTaxNumber && inv.tax_number) foundTaxNumber = inv.tax_number;
-                          }
-                        } else if (inv.category === 'subcontractor_advance_paid' || inv.category === 'subcontractor_paid_outflow') {
-                          const outTitle = String(inv.invoice_no || '').toLocaleLowerCase('tr-TR');
-                          if (outTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && outTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
-                            totalOut += cleanNumber(inv.total_amount);
-                          }
-                        }
-                      });
-
-                      // 2. Standart Avanslar
-                      dbAdvances.forEach(adv => {
-                        if (adv.target_type === 'contractor') {
-                          const advTitle = String(adv.target_name || adv.target_id || '').toLocaleLowerCase('tr-TR');
-                          if (advTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && advTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey))) {
-                            totalOut += cleanNumber(adv.total_amount);
-                          }
-                        }
-                      });
-
-                      // 3. Banka Ödeme Talimatları (Payment Batches)
-                      (dbPaymentBatches || []).forEach(batch => {
-                        const batchStr = JSON.stringify(batch).toLocaleLowerCase('tr-TR');
-                        const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
-                        const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
-                        const firstNamePart = subNameLower.split(' ')[0];
-
-                        const isMatch = 
-                          batchStr.includes(subNameLower) || 
-                          (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) ||
-                          (firstNamePart.length >= 3 && batchStr.includes(firstNamePart)) ||
-                          (batch.subcontractor_id && String(batch.subcontractor_id) === String(sub.id));
-
-                        if (isMatch) {
-                          totalOut += cleanNumber(batch.amount || batch.total_amount || batch.paid_amount || 0);
-                        }
-                      });
-
-                      // 4. Taksitli Avanslar (Advance Installments)
-                      (dbAdvanceInstallments || []).forEach(inst => {
-                        if (inst.subcontractor_id === sub.id || String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR').includes(subNameLower)) {
-                          totalOut += cleanNumber(inst.amount || 0);
-                        }
-                      });
-
-                      // 5. Manuel Ledger Hareketleri
-                      const subLedgers = (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === sub.id);
-                      subLedgers.forEach((l: any) => {
-                        if (l.transaction_type === 'invoice') totalInvoice += cleanNumber(l.amount);
-                        if (l.transaction_type === 'advance' || l.transaction_type === 'payment') totalOut += cleanNumber(l.amount);
-                      });
-
-                      const balance = totalInvoice - totalOut;
-
-                      return { ...sub, computedTax: foundTaxNumber, totalInvoice, totalOut, balance };
+                      const ledger = buildSubcontractorLedger(sub);
+                      const totalInvoice = ledger.reduce((s, l) => s + l.debit, 0);
+                      const totalOut = ledger.reduce((s, l) => s + l.credit, 0);
+                      const balance = ledger.length ? ledger[ledger.length - 1].balance : 0;
+                      return { ...sub, computedTax: sub.tax_no || sub.tax_number || '', totalInvoice, totalOut, balance };
                     })
                     .filter((item: any) => {
                       if (!ledgerSearchTerm) return true;
@@ -4255,7 +4531,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Banka Toplu Ödeme Talimatı (Excel)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Kişi bazında 1. Vade / 2. Vade / Tümü seçin, canlı toplamı görün ve banka Exceli indirin.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Biriken faturalardan ödemek istediğiniz vade satırlarını işaretleyin. Excel yalnızca seçilenleri toplar; diğerleri açık kalır.</p>
               </div>
 
               {isAdmin ? (
@@ -4277,7 +4553,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </span>
               </div>
               <span className="bg-blue-200 text-blue-900 font-bold px-3 py-1 rounded-full text-xs">
-                {bankLiveSelectionSummary.count} Alt Yüklenici Seçildi
+                {bankLiveSelectionSummary.lineCount} vade / {bankLiveSelectionSummary.count} alt yüklenici
               </span>
             </div>
 
@@ -4289,104 +4565,88 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       <button 
                         onClick={handleToggleSelectAllBank}
                         className="font-bold text-blue-600 hover:underline">
-                        {bankPaymentGroupedList.every(i => bankSelectedContractors[i.contractorName] !== false) ? 'Bırak' : 'Tümü'}
+                        {bankTermLines.length > 0 && bankTermLines.every(l => bankSelectedLines[l.lineId]) ? 'Bırak' : 'Tümü'}
                       </button>
                     </th>
-                    <th 
+                    <th
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
-                        if (bankSortField === 'contractorName') {
-                          setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
-                        } else {
-                          setBankSortField('contractorName');
-                          setBankSortOrder('asc');
-                        }
+                        if (bankSortField === 'contractorName') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setBankSortField('contractorName'); setBankSortOrder('asc'); }
                       }}
                     >
-                      Alt Yüklenici Adı {bankSortField === 'contractorName' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                      Alt yüklenici {bankSortField === 'contractorName' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
-
-                    <th 
+                    <th className="py-3 px-3">Fatura</th>
+                    <th className="py-3 px-3">Vade</th>
+                    <th
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
-                        if (bankSortField === 'iban') {
-                          setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
-                        } else {
-                          setBankSortField('iban');
-                          setBankSortOrder('asc');
-                        }
+                        if (bankSortField === 'dueDate') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setBankSortField('dueDate'); setBankSortOrder('asc'); }
                       }}
                     >
-                      Kayıtlı IBAN {bankSortField === 'iban' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                      Vade tarihi {bankSortField === 'dueDate' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
-
-                    <th className="py-3 px-3 text-center">Ödenecek Vade Seçeneği</th>
-
-                    <th 
+                    <th
+                      className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
+                      onClick={() => {
+                        if (bankSortField === 'iban') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setBankSortField('iban'); setBankSortOrder('asc'); }
+                      }}
+                    >
+                      IBAN {bankSortField === 'iban' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                    </th>
+                    <th
                       className="py-3 px-3 text-right cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
-                        if (bankSortField === 'activeAmount') {
-                          setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
-                        } else {
-                          setBankSortField('activeAmount');
-                          setBankSortOrder('desc');
-                        }
+                        if (bankSortField === 'amount') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
+                        else { setBankSortField('amount'); setBankSortOrder('desc'); }
                       }}
                     >
-                      Net Ödenecek Tutar {bankSortField === 'activeAmount' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                      Tutar {bankSortField === 'amount' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {bankPaymentGroupedList.map((item, idx) => {
-                    const isChecked = bankSelectedContractors[item.contractorName] !== false;
+                  {bankTermLines.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-400">Açık vade yok.</td>
+                    </tr>
+                  )}
+                  {displayBankTermLines.map(line => {
+                    const isChecked = !!bankSelectedLines[line.lineId];
+                    const overdue = line.dueDate && new Date(line.dueDate) < new Date(new Date().toISOString().split('T')[0]);
                     return (
-                      <tr key={idx} className="hover:bg-slate-50 transition">
+                      <tr key={line.lineId} className={`hover:bg-slate-50 transition ${isChecked ? 'bg-blue-50/60' : ''}`}>
                         <td className="py-3 px-3 text-center">
-                          <input 
+                          <input
                             type="checkbox"
                             checked={isChecked}
-                            onChange={e => setBankSelectedContractors({ ...bankSelectedContractors, [item.contractorName]: e.target.checked })}
+                            onChange={e => setBankSelectedLines({ ...bankSelectedLines, [line.lineId]: e.target.checked })}
                             className="w-4 h-4 rounded text-blue-600"
                           />
                         </td>
-                       <td className="py-3 px-3 font-bold text-slate-900 text-sm">
-                  <div className="flex flex-col">
-                    <span>{item.contractorName}</span>
-                    {item.carriedOverDebt > 0 && (
-                      <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md w-fit">
-                        Devreden Avans Borcu: -{item.carriedOverDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                      </span>
-                    )}
-                  </div>
-                </td>
-                        <td className={`py-3 px-3 font-mono ${item.iban === 'IBAN Eksik' ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
-                          {item.iban}
+                        <td className="py-3 px-3 font-bold text-slate-900">{line.contractorName}</td>
+                        <td className="py-3 px-3 text-slate-600">{line.invoiceNo}</td>
+                        <td className="py-3 px-3">
+                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${line.term === 'term1' ? 'bg-amber-50 text-amber-800' : 'bg-purple-50 text-purple-800'}`}>
+                            {line.termLabel}
+                          </span>
                         </td>
-                        <td className="py-3 px-3 text-center">
-                          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-                            <button
-                              type="button"
-                              onClick={() => setContractorTermChoices({ ...contractorTermChoices, [item.contractorName]: 'term1' })}
-                              className={`px-2 py-1 text-[11px] font-semibold rounded ${item.choice === 'term1' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}>
-                              1. Vade ({item.term1Total.toLocaleString('tr-TR')} ₺)
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setContractorTermChoices({ ...contractorTermChoices, [item.contractorName]: 'term2' })}
-                              className={`px-2 py-1 text-[11px] font-semibold rounded ${item.choice === 'term2' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}>
-                              2. Vade ({item.term2Total.toLocaleString('tr-TR')} ₺)
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setContractorTermChoices({ ...contractorTermChoices, [item.contractorName]: 'both' })}
-                              className={`px-2 py-1 text-[11px] font-semibold rounded ${item.choice === 'both' ? 'bg-blue-600 text-white' : 'text-slate-600'}`}>
-                              Tümü ({(item.term1Total + item.term2Total).toLocaleString('tr-TR')} ₺)
-                            </button>
-                          </div>
+                        <td className={`py-3 px-3 whitespace-nowrap ${overdue ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
+                          {formatDateTR(line.dueDate)}
                         </td>
-                        <td className="py-3 px-3 text-right font-bold text-emerald-600 text-sm">
-                          {item.activeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        <td className={`py-3 px-3 font-mono ${line.iban === 'IBAN Eksik' ? 'text-rose-600 font-bold' : 'text-slate-600'}`}>
+                          {line.iban}
+                        </td>
+                        <td className="py-3 px-3 text-right font-bold text-emerald-700">
+                          {line.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                          {line.advanceCut > 0 && (
+                            <span className="block text-[10px] font-semibold text-amber-700">
+                              Avans −{line.advanceCut.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ (bu ay 1 taksit)
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -4407,7 +4667,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               Personel & Maaş Yönetimi ({empSummary.count} Personel)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Net hakedişler, sefer/performans primleri, avans mahsupları ve toplu ödeme takibi.
+              Personel borcu yalnızca kapanmış aylardır. Kasım içinde genel görünümde Ekim (ödenmemişse) durur; Kasım maaşı 1 Aralık’ta eklenir. Ekim’i ödemek şart değildir — aylar birbirini kilitlemez.
             </p>
           </div>
           {isAdmin && (
@@ -4550,7 +4810,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </th>
                 <th className="py-3 px-3 text-right">SGK işveren</th>
                 <th className="py-3 px-3 text-right">Prim / Ek</th>
-                <th className="py-3 px-3 text-right">Kesilen Avans</th>
+                <th className="py-3 px-3 text-right">Bu Ay Avans Kesintisi</th>
                 <th 
                   className="py-3 px-3 text-right cursor-pointer hover:bg-slate-100 transition group"
                   onClick={() => {
@@ -4689,103 +4949,200 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Kredi Kartları Takip Ajandası</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Son ödeme günleri, asgari ve ekstre tutarları.</p>
+                <h3 className="font-bold text-lg text-slate-900">Kredi Kartları</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Gider kartla kapanırsa kasa düşmez. Kasa, kart ekstresi ödenince çıkar. Şahsi kartta şirket payını siz yazarsınız.</p>
               </div>
               {isAdmin && (
                 <button 
-                  onClick={() => setIsCreditCardModalOpen(true)}
+                  onClick={() => {
+                    setEditingCreditCardId(null);
+                    setCreditCardFormData({ cardName: '', bankName: '', lastFourDigits: '', statementAmount: '', minPaymentAmount: '', dueDate: '', cardKind: 'company' });
+                    setIsCreditCardModalOpen(true);
+                  }}
                   className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
                   <Plus className="w-4 h-4" /> Yeni Kredi Kartı Ekle
                 </button>
               )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {dbCreditCards.map((cc, idx) => {
-                const stmtAmt = cleanNumber(cc.statement_amount);
-                const minAmt = cleanNumber(cc.min_payment_amount);
-                const hasDebt = stmtAmt > 0;
-
-                return (
-                  <div key={cc.id || idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 flex flex-col justify-between shadow-xs">
-                    <div>
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-slate-900 text-sm">{cc.card_name}</span>
-                        <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">
-                          {cc.bank_name} {cc.last_four_digits ? `(•${cc.last_four_digits})` : ''}
-                        </span>
-                      </div>
-
-                      <div className="pt-2 mt-2 border-t border-slate-200 space-y-1 text-xs">
-                        <div className="flex justify-between text-slate-600">
-                          <span>Ekstre Borcu:</span>
-                          <span className={`font-bold ${hasDebt ? 'text-rose-600' : 'text-emerald-600'}`}>
-                            {hasDebt ? `${stmtAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : 'Borç Yok (0,00 ₺)'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-slate-600">
-                          <span>Asgari Tutar:</span>
-                          <span className="font-semibold text-amber-700">
-                            {minAmt > 0 ? `${minAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '-'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-slate-600 pt-1">
-                          <span>Son Ödeme Tarihi:</span>
-                          <span className="font-bold text-slate-800">{formatDateTR(cc.due_date)}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* İŞLEM VE ÖDEME BUTONLARI */}
-                    {isAdmin && (
-                      <div className="pt-2 border-t border-slate-200/80 flex flex-col gap-1.5">
-                        <div className="flex gap-1.5">
-                          {hasDebt && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handlePayCreditCard(cc, 'full')}
-                                className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[10px] transition shadow-xs text-center">
-                                Tamamını Öde
-                              </button>
-                              {minAmt > 0 && minAmt < stmtAmt && (
-                                <button
-                                  type="button"
-                                  onClick={() => handlePayCreditCard(cc, 'min')}
-                                  className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg text-[10px] transition shadow-xs text-center">
-                                  Asgariyi Öde
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-
-                        <div className="flex gap-2 justify-end pt-1">
-                          <button
-                            type="button"
-                            onClick={() => openEditCreditCardModal(cc)}
-                            className="text-blue-600 hover:underline font-semibold text-xs flex items-center gap-1">
-                            <Edit2 className="w-3 h-3" /> Düzenle
-                          </button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (window.confirm(`${cc.card_name} kartını silmek istediğinize emin misiniz?`)) {
-                                await supabase.from('credit_cards').delete().eq('id', cc.id);
-                                loadPortalData();
-                              }
-                            }}
-                            className="text-rose-600 hover:underline font-semibold text-xs flex items-center gap-1">
-                            <Trash2 className="w-3 h-3" /> Sil
-                          </button>
-                        </div>
-                      </div>
-                    )}
+            {(() => {
+              const today = new Date().toISOString().split('T')[0];
+              const dueDiff = (c: any) => {
+                const due = sanitizeDate(c.due_date);
+                if (!due) return 999;
+                return Math.ceil((new Date(due).getTime() - new Date(today).getTime()) / 86400000);
+              };
+              const totalStmt = dbCreditCards.reduce((s, c) => s + cleanNumber(c.statement_amount), 0);
+              const overdue = dbCreditCards.filter(c => dueDiff(c) < 0 && cleanNumber(c.statement_amount) > 0);
+              const week = dbCreditCards.filter(c => {
+                const d = dueDiff(c);
+                return cleanNumber(c.statement_amount) > 0 && d >= 0 && d <= 7;
+              });
+              const bankAccent = (name: string) => {
+                const n = (name || '').toLocaleLowerCase('tr-TR');
+                if (n.includes('garanti')) return { bar: 'bg-[#00a651]', chip: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+                if (n.includes('iş bank') || n.includes('isbank') || n.includes('işbank')) return { bar: 'bg-[#003d82]', chip: 'bg-blue-50 text-blue-800 border-blue-200' };
+                if (n.includes('yapı') || n.includes('yapi kredi') || n.includes('yapikredi')) return { bar: 'bg-[#7b1fa2]', chip: 'bg-purple-50 text-purple-800 border-purple-200' };
+                if (n.includes('akbank')) return { bar: 'bg-[#e31e24]', chip: 'bg-red-50 text-red-700 border-red-200' };
+                if (n.includes('ziraat')) return { bar: 'bg-[#e30613]', chip: 'bg-rose-50 text-rose-800 border-rose-200' };
+                if (n.includes('halk')) return { bar: 'bg-[#1b4f9c]', chip: 'bg-indigo-50 text-indigo-800 border-indigo-200' };
+                if (n.includes('vakıf') || n.includes('vakif')) return { bar: 'bg-[#f9b000]', chip: 'bg-amber-50 text-amber-900 border-amber-200' };
+                if (n.includes('qnb') || n.includes('finans')) return { bar: 'bg-[#6c1d5f]', chip: 'bg-fuchsia-50 text-fuchsia-800 border-fuchsia-200' };
+                if (n.includes('deniz')) return { bar: 'bg-[#00a0df]', chip: 'bg-sky-50 text-sky-800 border-sky-200' };
+                if (n.includes('ing') || n.includes('enpara')) return { bar: 'bg-[#ff6200]', chip: 'bg-orange-50 text-orange-800 border-orange-200' };
+                if (n.includes('teb')) return { bar: 'bg-[#6d2c91]', chip: 'bg-violet-50 text-violet-800 border-violet-200' };
+                return { bar: 'bg-slate-400', chip: 'bg-slate-100 text-slate-700 border-slate-200' };
+              };
+              const toggleSort = (field: typeof cardSortField) => {
+                if (cardSortField === field) setCardSortOrder(cardSortOrder === 'asc' ? 'desc' : 'asc');
+                else { setCardSortField(field); setCardSortOrder(field === 'amount' ? 'desc' : 'asc'); }
+              };
+              const rows = [...dbCreditCards]
+                .filter(c => {
+                  const amt = cleanNumber(c.statement_amount);
+                  const d = dueDiff(c);
+                  if (cardDueFilter === 'overdue') return amt > 0 && d < 0;
+                  if (cardDueFilter === 'week') return amt > 0 && d >= 0 && d <= 7;
+                  if (cardDueFilter === 'clear') return amt <= 0;
+                  return true;
+                })
+                .sort((a, b) => {
+                  let cmp = 0;
+                  if (cardSortField === 'amount') cmp = cleanNumber(a.statement_amount) - cleanNumber(b.statement_amount);
+                  else if (cardSortField === 'bank') cmp = String(a.bank_name || '').localeCompare(String(b.bank_name || ''), 'tr');
+                  else if (cardSortField === 'name') cmp = String(a.card_name || '').localeCompare(String(b.card_name || ''), 'tr');
+                  else cmp = dueDiff(a) - dueDiff(b);
+                  return cardSortOrder === 'asc' ? cmp : -cmp;
+                });
+              const sortMark = (field: typeof cardSortField) => cardSortField === field ? (cardSortOrder === 'asc' ? ' ↑' : ' ↓') : '';
+              return (
+                <>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-rose-50 border border-rose-100 rounded-xl p-3">
+                    <span className="text-[11px] text-rose-800 font-semibold block">Toplam ekstre borcu</span>
+                    <span className="text-lg font-black text-slate-900">{totalStmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
                   </div>
-                );
-              })}
-            </div>
+                  <button type="button" onClick={() => setCardDueFilter(cardDueFilter === 'week' ? 'all' : 'week')} className={`text-left rounded-xl p-3 border ${cardDueFilter === 'week' ? 'bg-amber-100 border-amber-300' : 'bg-amber-50 border-amber-100'}`}>
+                    <span className="text-[11px] text-amber-800 font-semibold block">Bu hafta son ödeme</span>
+                    <span className="text-lg font-black text-slate-900">{week.length} kart</span>
+                  </button>
+                  <button type="button" onClick={() => setCardDueFilter(cardDueFilter === 'overdue' ? 'all' : 'overdue')} className={`text-left rounded-xl p-3 border ${cardDueFilter === 'overdue' ? 'bg-rose-100 border-rose-300' : 'bg-slate-50 border-slate-200'}`}>
+                    <span className="text-[11px] text-slate-600 font-semibold block">Geciken</span>
+                    <span className="text-lg font-black text-rose-700">{overdue.length} kart</span>
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    ['all', 'Tümü'],
+                    ['week', 'Bu hafta'],
+                    ['overdue', 'Geciken'],
+                    ['clear', 'Borcu yok']
+                  ] as const).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setCardDueFilter(id)}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border ${cardDueFilter === id ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-3 cursor-pointer select-none" onClick={() => toggleSort('name')}>Kart{sortMark('name')}</th>
+                        <th className="py-3 px-3 cursor-pointer select-none" onClick={() => toggleSort('bank')}>Banka{sortMark('bank')}</th>
+                        <th className="py-3 px-3">Tür</th>
+                        <th className="py-3 px-3 text-right cursor-pointer select-none" onClick={() => toggleSort('amount')}>Kalan ekstre{sortMark('amount')}</th>
+                        <th className="py-3 px-3 text-right">Asgari</th>
+                        <th className="py-3 px-3 cursor-pointer select-none" onClick={() => toggleSort('due')}>Son ödeme{sortMark('due')}</th>
+                        <th className="py-3 px-3 text-right">İşlem</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {rows.length === 0 ? (
+                        <tr><td colSpan={7} className="py-8 text-center text-slate-400">Bu filtrede kart yok.</td></tr>
+                      ) : rows.map((cc, idx) => {
+                        const stmtAmt = cleanNumber(cc.statement_amount);
+                        const minAmt = cleanNumber(cc.min_payment_amount);
+                        const hasDebt = stmtAmt > 0;
+                        const diff = dueDiff(cc);
+                        const isPersonal = cc.card_kind === 'personal' || /şahsi|sahsi|kişisel|kisisel/i.test(String(cc.card_name || ''));
+                        const accent = bankAccent(cc.bank_name);
+                        const open = cardMenuId === (cc.id ?? idx);
+                        return (
+                          <tr key={cc.id || idx} className={`hover:bg-slate-50 ${hasDebt && diff < 0 ? 'bg-rose-50/40' : hasDebt && diff <= 3 ? 'bg-amber-50/30' : ''}`}>
+                            <td className="py-3 px-3">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-1.5 h-8 rounded-full shrink-0 ${accent.bar}`} />
+                                <div>
+                                  <div className="font-bold text-slate-900 text-sm">{cc.card_name}</div>
+                                  {cc.last_four_digits ? <div className="text-[10px] text-slate-400 font-mono">•••• {cc.last_four_digits}</div> : null}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`inline-flex px-2 py-0.5 rounded-md text-[11px] font-bold border ${accent.chip}`}>{cc.bank_name || '-'}</span>
+                            </td>
+                            <td className="py-3 px-3 text-slate-600">{isPersonal ? 'Şahsi' : 'Şirket'}</td>
+                            <td className={`py-3 px-3 text-right font-black ${hasDebt ? 'text-rose-700' : 'text-emerald-700'}`}>
+                              {stmtAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                            </td>
+                            <td className="py-3 px-3 text-right text-amber-800 font-semibold">
+                              {minAmt > 0 ? `${minAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '—'}
+                            </td>
+                            <td className="py-3 px-3">
+                              <div className={`font-bold ${hasDebt && diff < 0 ? 'text-rose-700' : hasDebt && diff <= 3 ? 'text-amber-800' : 'text-slate-800'}`}>{formatDateTR(cc.due_date)}</div>
+                              {hasDebt ? (
+                                <div className="text-[10px] text-slate-500">
+                                  {diff < 0 ? `${Math.abs(diff)} gün gecikti` : diff === 0 ? 'Bugün' : `${diff} gün kaldı`}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="py-3 px-3 text-right relative">
+                              {isAdmin && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCardMenuId(open ? null : (cc.id ?? idx))}
+                                    className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600"
+                                    title="İşlemler"
+                                  >
+                                    <MoreHorizontal className="w-4 h-4" />
+                                  </button>
+                                  {open && (
+                                    <div className="absolute right-3 top-12 z-20 w-44 bg-white border border-slate-200 rounded-xl shadow-lg py-1 text-left">
+                                      {hasDebt && (
+                                        <>
+                                          <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50" onClick={() => { setCardMenuId(null); handlePayCreditCard(cc, 'full'); }}>Tamamını öde</button>
+                                          {minAmt > 0 && minAmt < stmtAmt && (
+                                            <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50" onClick={() => { setCardMenuId(null); handlePayCreditCard(cc, 'min'); }}>Asgariyi öde</button>
+                                          )}
+                                        </>
+                                      )}
+                                      <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => { setCardMenuId(null); openEditCreditCardModal(cc); }}>Düzenle / ekstre</button>
+                                      <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50" onClick={async () => {
+                                        setCardMenuId(null);
+                                        if (!window.confirm(`${cc.card_name} kartını silmek istiyor musunuz?`)) return;
+                                        await supabase.from('credit_cards').delete().eq('id', cc.id);
+                                        loadPortalData();
+                                      }}>Sil</button>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
@@ -4988,7 +5345,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 <div>
                   <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Ayın ilk haftasında bir önceki ay kapanır. Ciro, yakıt ve HGS diğer portaldan elle girilir; maaş+prim, SGK ve sigorta/kasko/MTV/muayene (yıllık÷12) sistemden gelir.
+                    Ayın ilk haftasında bir önceki ay kapanır. Ciro, yakıt ve HGS diğer portaldan elle girilir; maaş+prim, SGK, sigorta/kasko/MTV/muayene ve bakım-lastik (yıllık÷12) sistemden gelir.
                   </p>
                 </div>
                 <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700">
@@ -5038,7 +5395,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       <th className="py-3 px-3 text-right">Maaş + prim</th>
                       <th className="py-3 px-3 text-right">SGK</th>
                       <th className="py-3 px-3 text-right">Sabit / ay</th>
-                      <th className="py-3 px-3 text-right">Bakım</th>
+                      <th className="py-3 px-3 text-right">Bakım / ay</th>
                       <th className="py-3 px-3 text-right">Net kâr</th>
                     </tr>
                   </thead>
@@ -5104,7 +5461,12 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                           <td className="py-3 px-3 text-right text-slate-700" title={`Sigorta ${item.insurance_m.toFixed(0)} + kasko ${item.kasko_m.toFixed(0)} + MTV ${item.mtv_m.toFixed(0)} + muayene ${item.inspection_m.toFixed(0)}`}>
                             {item.fixed_monthly.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           </td>
-                          <td className="py-3 px-3 text-right text-slate-700">{item.bakim.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                          <td
+                            className="py-3 px-3 text-right text-slate-700"
+                            title={`Bu yılın bakım+lastik toplamı ${item.bakimYear.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ ÷ 12`}
+                          >
+                            {item.bakim.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                          </td>
                           <td className={`py-3 px-3 text-right font-black ${item.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {item.netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                           </td>
@@ -5114,7 +5476,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </tbody>
                 </table>
               </div>
-              <p className="text-[11px] text-slate-400">Listede yalnızca filoda Aktif işaretli öz mal kamyonet, kamyon ve TIR görünür. Binek ve dorse burada yer almaz. “Bu ay” kutusu kamyonet gibi araçları bazı aylar toplamdan çıkarır.</p>
+              <p className="text-[11px] text-slate-400">Listede yalnızca filoda Aktif işaretli öz mal kamyonet, kamyon ve TIR görünür. Binek ve dorse burada yer almaz. “Bu ay” kutusu kamyonet gibi araçları bazı aylar toplamdan çıkarır. Bakım ve lastik, o yılın toplamının 12’ye bölümüdür; faturanın kesildiği aya tam yazılmaz.</p>
               {dbProfitability.length === 0 && (
                 <p className="text-sm text-slate-500">Gösterilecek araç yok. Filoda tipi Kamyonet/Kamyon/TIR, sahiplik Öz Mal ve durum Aktif olsun.</p>
               )}
@@ -5221,13 +5583,13 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbInvoices.filter(i => !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'cash_deposit'].includes(i.category)).map((item, idx) => (
+                  {dbInvoices.filter(i => !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'cash_deposit', 'customer_advance', 'credit_card_payment', 'salary_payroll'].includes(i.category)).map((item, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 transition">
                       <td className="py-3 px-4 font-medium text-slate-800">{item.invoice_no}</td>
                       <td className="py-3 px-4 text-slate-600">{sanitizeDate(item.issue_date)}</td>
                       <td className="py-3 px-4">
-                        <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-semibold ${item.status === 'paid' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                          {item.status === 'paid' ? 'Ödendi' : 'Ödenecek'}
+                        <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-semibold ${item.status === 'paid' ? (isExpensePaidByCard(item) ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800') : 'bg-rose-100 text-rose-800'}`}>
+                          {item.status === 'paid' ? (isExpensePaidByCard(item) ? 'Kartla ödendi' : 'Kasa / banka') : 'Ödenecek'}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-slate-900 text-sm">
@@ -5247,7 +5609,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                                 issueDate: sanitizeDate(item.issue_date),
                                 dueDate: sanitizeDate(item.due_date),
                                 status: item.status || 'unpaid',
-                                paidSource: 'bank'
+                                paidSource: isExpensePaidByCard(item) ? 'card' : 'bank'
                               });
                               setIsGeneralExpenseModalOpen(true);
                             }}
@@ -5335,7 +5697,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                     <div>
                       <span className="font-bold text-slate-800 text-xs block">Personel Cari & Hakediş Defteri</span>
-                      <span className="text-[10px] text-slate-500">Çoklu prim, tekil avans ve taksitli borçları buradan yönetin</span>
+                      <span className="text-[10px] text-slate-500">Ekim 2026 öncesi hareketler cariye girmez. Bundan sonra prim ve avans buradan işlenir.</span>
                     </div>
                   </div>
 
@@ -5414,13 +5776,19 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </div>
                   {/* 2. KAYITLI CARİ HAREKETLER LİSTESİ */}
                   {(() => {
-                    const empTxList = (dbEmployeeTransactions || []).filter(tx => String(tx.employee_id) === String(editingEmployeeId));
+                    const empTxList = (dbEmployeeTransactions || []).filter(tx => {
+                      if (String(tx.employee_id) !== String(editingEmployeeId)) return false;
+                      const ym = sanitizeDate(tx.transaction_date || tx.created_at).slice(0, 7);
+                      return !ym || ym >= personnelBooksStartYm;
+                    });
                     
                     const empObj = (dbEmployees || []).find((e: any) => String(e.id) === String(editingEmployeeId));
                     const empName = empObj ? (empObj.full_name || '').toLowerCase().trim() : '';
                     const empIdStr = String(editingEmployeeId || '');
                     const legacyAdvances = (dbAdvances || []).filter((a: any) => {
                       if (a.target_type !== 'employee') return false;
+                      const ym = sanitizeDate(a.issue_date || a.created_at).slice(0, 7);
+                      if (ym && ym < personnelBooksStartYm) return false;
                       const tName = String(a.target_name || '').toLowerCase().trim();
                       const tId = String(a.target_id || '');
                       return (tId && tId === empIdStr) || (tName.length >= 3 && (tName.includes(empName) || empName.includes(tName)));
@@ -5446,6 +5814,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                                   {isBonus ? 'PRİM' : isInst ? `TAKSİT (${tx.installment_count} Ay)` : 'MÜNFERİT AVANS'}
                                 </span>
                                 <span className="font-medium text-slate-700">{tx.title}</span>
+                                <span className="text-[10px] text-slate-400">{formatDateTR(tx.transaction_date || tx.created_at)}</span>
                                 {isInst && (
                                   <span className="text-[10px] text-purple-600 font-semibold">(Aylık Kesinti: {mCut.toLocaleString('tr-TR')} ₺)</span>
                                 )}
@@ -5795,6 +6164,20 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   <button type="button" onClick={() => setExpenseFormData({ ...expenseFormData, status: 'paid' })} className={`p-2 rounded-lg border text-center transition ${expenseFormData.status === 'paid' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 font-bold' : 'bg-white border-slate-200'}`}>Ödendi (Kapandı)</button>
                 </div>
               </div>
+              {expenseFormData.status === 'paid' && (
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Nasıl ödendi?</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => setExpenseFormData({ ...expenseFormData, paidSource: 'bank' })} className={`p-2 rounded-lg border text-center transition ${expenseFormData.paidSource !== 'card' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>Kasa / Banka</button>
+                    <button type="button" onClick={() => setExpenseFormData({ ...expenseFormData, paidSource: 'card' })} className={`p-2 rounded-lg border text-center transition ${expenseFormData.paidSource === 'card' ? 'bg-purple-50 border-purple-500 text-purple-700 font-bold' : 'bg-white border-slate-200'}`}>Kredi kartı</button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {expenseFormData.paidSource === 'card'
+                      ? 'Tedarikçi kapanır, kasa şimdi düşmez. Kartı ödeyince kasa düşer.'
+                      : 'Tutar şimdi kasadan / bankadan çıkar.'}
+                  </p>
+                </div>
+              )}
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsGeneralExpenseModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
                 <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">Kaydet</button>
@@ -5894,7 +6277,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   {selectedPayrollEmp.iban ? ` · IBAN: ${selectedPayrollEmp.iban}` : ''}
                 </p>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Maaş, işe giriş varsa ondan, yoksa personel kaydı / ilk veri girişinden itibaren yazılır. İlk ay gün oranına göre kesilir.
+                  Personel cari Ekim 2026’dan başlar. Ekim öncesi maaş ve avans bu rapora yazılmaz.
                 </p>
               </div>
               <div className="flex flex-col items-end gap-2 print:hidden">
@@ -6106,13 +6489,30 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Tahsilat Girişi Yap</h3>
+              <h3 className="font-bold text-slate-900 text-base">Cari ödeme / avans</h3>
               <button onClick={() => setIsNewReceiptModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSaveNewReceipt} className="mt-4 space-y-3 text-xs">
+              <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-2">
+                Gelen para faturaya bağlanmaz. Kasaya girer, müşteri carisinde avans olarak durur. Faturalar açık kalır; Ekim mutabakatı bitince satırdan “Ödendi işaretle” deyin.
+              </p>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Müşteri / Cari Adı</label>
-                <input type="text" value={newReceiptFormData.customerName} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, customerName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+                {dbCustomers.length > 0 ? (
+                  <select
+                    value={newReceiptFormData.customerName}
+                    onChange={e => setNewReceiptFormData({ ...newReceiptFormData, customerName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                    required
+                  >
+                    <option value="">Müşteri seçin</option>
+                    {dbCustomers.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type="text" value={newReceiptFormData.customerName} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, customerName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+                )}
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Tahsilat Hesabı</label>
@@ -6120,6 +6520,10 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   <button type="button" onClick={() => setNewReceiptFormData({ ...newReceiptFormData, targetAccount: 'bank' })} className={`p-2 rounded-lg border text-center transition ${newReceiptFormData.targetAccount === 'bank' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>🏦 Banka Hesabı</button>
                   <button type="button" onClick={() => setNewReceiptFormData({ ...newReceiptFormData, targetAccount: 'cash' })} className={`p-2 rounded-lg border text-center transition ${newReceiptFormData.targetAccount === 'cash' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>💵 Kasa (Elden Nakit)</button>
                 </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Dekont / açıklama</label>
+                <input type="text" placeholder="Örn: Migros Kasım 1. hafta avans" value={newReceiptFormData.receiptNo} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, receiptNo: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -6133,7 +6537,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               </div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsNewReceiptModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-medium">Tahsilatı Kaydet</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-medium">Cariye İşle</button>
               </div>
             </form>
           </div>
@@ -6366,24 +6770,28 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               e.preventDefault();
               if (!creditCardFormData.cardName || !creditCardFormData.dueDate) return;
               try {
-                const payload = {
+                const payload: any = {
                   card_name: creditCardFormData.cardName.trim(),
                   bank_name: creditCardFormData.bankName.trim(),
                   last_four_digits: creditCardFormData.lastFourDigits.trim(),
                   statement_amount: cleanNumber(creditCardFormData.statementAmount),
                   min_payment_amount: cleanNumber(creditCardFormData.minPaymentAmount),
-                  due_date: creditCardFormData.dueDate
+                  due_date: creditCardFormData.dueDate,
+                  card_kind: creditCardFormData.cardKind
                 };
 
-                if (editingCreditCardId) {
-                  const { error } = await supabase.from('credit_cards').update(payload).eq('id', editingCreditCardId);
-                  if (error) throw error;
-                  alert('Kredi kartı bilgileri ve güncel ekstre başarıyla kaydedildi!');
-                } else {
-                  const { error } = await supabase.from('credit_cards').insert([payload]);
-                  if (error) throw error;
-                  alert('Yeni kredi kartı eklendi!');
+                const saveCard = async (data: any) => {
+                  if (editingCreditCardId) return supabase.from('credit_cards').update(data).eq('id', editingCreditCardId);
+                  return supabase.from('credit_cards').insert([data]);
+                };
+
+                let { error } = await saveCard(payload);
+                if (error && /card_kind/i.test(error.message)) {
+                  const { card_kind, ...fallback } = payload;
+                  ({ error } = await saveCard(fallback));
                 }
+                if (error) throw error;
+                alert(editingCreditCardId ? 'Kredi kartı ve ekstre kaydedildi.' : 'Yeni kredi kartı eklendi.');
 
                 setIsCreditCardModalOpen(false);
                 setEditingCreditCardId(null);
@@ -6393,13 +6801,22 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   lastFourDigits: '',
                   statementAmount: '',
                   minPaymentAmount: '',
-                  dueDate: ''
+                  dueDate: '',
+                  cardKind: 'company'
                 });
                 loadPortalData();
               } catch (err: any) { 
                 alert('Kart kaydetme hatası: ' + err.message); 
               }
             }} className="mt-4 space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Kart türü</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setCreditCardFormData({ ...creditCardFormData, cardKind: 'company' })} className={`p-2 rounded-lg border text-center ${creditCardFormData.cardKind !== 'personal' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'bg-white border-slate-200'}`}>Şirket kartı</button>
+                  <button type="button" onClick={() => setCreditCardFormData({ ...creditCardFormData, cardKind: 'personal' })} className={`p-2 rounded-lg border text-center ${creditCardFormData.cardKind === 'personal' ? 'bg-slate-100 border-slate-500 text-slate-800 font-bold' : 'bg-white border-slate-200'}`}>Şahsi kart</button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">{creditCardFormData.cardKind === 'personal' ? 'Öderken şirket kasasından düşülecek tutarı siz yazarsınız. Şahsi harcama kasayı bozmaz.' : 'Ekstre ödemesi tamamı kasadan düşer.'}</p>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Kart Adı / Sahibi</label>
@@ -6643,85 +7060,14 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               type="button"
               onClick={() => {
                 const subName = selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '';
-                const subNameLower = subName.toLocaleLowerCase('tr-TR').trim();
-                const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
                 const taxNo = selectedSubcontractorForDetail.tax_no || selectedSubcontractorForDetail.computedTax || 'Belirtilmedi';
                 const ibanVal = selectedSubcontractorForDetail.iban || 'Belirtilmedi';
-
+                const ledger = buildSubcontractorLedger(selectedSubcontractorForDetail);
                 let csvContent = "\uFEFF";
-                csvContent += "Firma Adı;Vergi Numarası;IBAN;Tarih;İşlem Türü;Açıklama;Tutar (TL);Güncel Bakiye (TL)\n";
-                
-                let combinedTx: any[] = [];
-
-                // 1. Manuel Ledger Kayıtları
-                (dbSubcontractorsLedger || []).forEach((l: any) => {
-                  if (String(l.subcontractor_id) === String(selectedSubcontractorForDetail.id)) {
-                    combinedTx.push({
-                      date: l.created_at || '-',
-                      type: l.transaction_type === 'invoice' ? 'Fatura (Borç)' : (l.transaction_type === 'advance' ? 'Avans (Borç)' : 'Ödeme (Alacak)'),
-                      desc: l.description || 'Manuel İşlem',
-                      amount: cleanNumber(l.amount),
-                      isPositive: l.transaction_type === 'invoice' || l.transaction_type === 'advance'
-                    });
-                  }
+                csvContent += "Firma Adı;Vergi Numarası;IBAN;Tarih;İşlem Türü;Açıklama;Borç (Fatura);Alacak (Ödeme/Avans);Bakiye\n";
+                ledger.forEach(tx => {
+                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${tx.date ? formatDateTR(tx.date) : '-'}";"${tx.type}";"${tx.desc}";"${tx.debit}";"${tx.credit}";"${tx.balance}"\n`;
                 });
-
-                // 2. Faturalar ve Ödemeler
-                (dbInvoices || []).forEach(inv => {
-                  const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
-                  const isMatch = invTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey));
-
-                  if (isMatch) {
-                    if (inv.category === 'subcontractor_invoice') {
-                      combinedTx.push({
-                        date: inv.issue_date || inv.created_at || '-',
-                        type: 'Fatura',
-                        desc: 'Fatura No: ' + (inv.invoice_no || '-'),
-                        amount: cleanNumber(inv.total_amount),
-                        isPositive: true
-                      });
-                    } else if (inv.category === 'subcontractor_advance_paid' || inv.category === 'subcontractor_paid_outflow') {
-                      combinedTx.push({
-                        date: inv.issue_date || inv.created_at || '-',
-                        type: 'Ödeme / Çıkış',
-                        desc: inv.description || 'Alt Yüklenici Ödeme Çıkışı',
-                        amount: cleanNumber(inv.total_amount),
-                        isPositive: false
-                      });
-                    }
-                  }
-                });
-
-                // 3. Banka Ödeme Talimatları
-                (dbPaymentBatches || []).forEach((batch) => {
-                  const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
-                  const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
-                  const isBatchMatch = batchTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) || (batch.subcontractor_id && String(batch.subcontractor_id) === String(selectedSubcontractorForDetail.id));
-
-                  if (isBatchMatch) {
-                    combinedTx.push({
-                      date: batch.created_at || batch.date || batch.payment_date || '-',
-                      type: 'Banka Ödemesi',
-                      desc: batch.description || batch.note || 'Banka Toplu Ödeme Talimatı',
-                      amount: cleanNumber(batch.amount || batch.total_amount || 0),
-                      isPositive: false
-                    });
-                  }
-                });
-
-                // Tarihe göre sıralama
-                combinedTx.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-                let runningBalance = 0;
-                combinedTx.forEach((tx: any) => {
-                  if (tx.isPositive) {
-                    runningBalance += tx.amount;
-                  } else {
-                    runningBalance -= tx.amount;
-                  }
-                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${tx.date !== '-' ? new Date(tx.date).toLocaleDateString('tr-TR') : '-'}";"${tx.type}";"${tx.desc}";"${tx.amount.toLocaleString('tr-TR')}";"${runningBalance.toLocaleString('tr-TR')}"\n`;
-                });
-
                 const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
                 const link = document.createElement("a");
                 link.setAttribute("href", encodedUri);
@@ -6741,10 +7087,10 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
           <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-4 flex justify-between items-center">
             <div>
               <span className="text-blue-900 font-semibold block text-base">Cari Hesap Özeti</span>
-              <span className="text-xs text-blue-700">Tüm fatura, avans ve banka ödemeleri mahsuplanmıştır</span>
+              <span className="text-xs text-blue-700">Artı bakiye: taşerona borcunuz. Eksi: avans / fazla ödeme.</span>
             </div>
             <div className="text-right">
-              <span className="text-xl font-black text-blue-900">{selectedSubcontractorForDetail.balance?.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) || '0,00'} ₺</span>
+              <span className="text-xl font-black text-blue-900">{(() => { const L = buildSubcontractorLedger(selectedSubcontractorForDetail); return (L.length ? L[L.length - 1].balance : 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 }); })()} ₺</span>
               <span className="text-xs text-blue-700 block mt-0.5">Güncel Bakiye</span>
             </div>
           </div>
@@ -6753,9 +7099,9 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle</span>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <select id="sub_tx_type" className="px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-sm">
-                <option value="advance">Avans Verildi (Borç)</option>
-                <option value="payment">Ödeme Yapıldı (Alacak)</option>
-                <option value="invoice">Fatura Eklendi (Borç)</option>
+                <option value="advance">Avans verildi (alacak)</option>
+                <option value="payment">Ödeme yapıldı (alacak)</option>
+                <option value="invoice">Fatura eklendi (borç)</option>
               </select>
               <input id="sub_tx_amount" type="number" placeholder="Tutar (TL)" className="px-3 py-2 border border-slate-200 rounded-lg bg-white font-bold text-slate-800 text-sm" />
               <input id="sub_tx_desc" type="text" placeholder="Açıklama / Belge No" className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm" />
@@ -6778,8 +7124,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   if (error) throw error;
                   alert('Hareket başarıyla kaydedildi!');
                   amountEl.value = ''; descEl.value = '';
-                  loadPortalData();
-                  setSelectedSubcontractorForDetail(null);
+                  await loadPortalData();
                 } catch (err: any) { alert('Hata: ' + err.message); }
               }}
               className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition shadow-sm">
@@ -6796,137 +7141,30 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     <th className="py-2.5 px-3">Tarih</th>
                     <th className="py-2.5 px-3">İşlem Türü</th>
                     <th className="py-2.5 px-3">Açıklama</th>
-                    <th className="py-2.5 px-3 text-right">Tutar</th>
+                    <th className="py-2.5 px-3 text-right">Borç</th>
+                    <th className="py-2.5 px-3 text-right">Alacak</th>
+                    <th className="py-2.5 px-3 text-right">Bakiye</th>
                     <th className="py-2.5 px-3 text-center">İşlem</th>
                   </tr>
                 </thead>
                <tbody className="divide-y divide-slate-100 bg-white">
                   {(() => {
-                  const subNameLower = (selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '').toLocaleLowerCase('tr-TR').trim();
-                    const cleanSubKey = subNameLower.replace(/[^a-z0-9]/g, '');
-                    let combinedTx: any[] = [];
-
-                    // 1. Manuel Ledger Kayıtları
-                    (dbSubcontractorsLedger || []).filter((l: any) => l.subcontractor_id === selectedSubcontractorForDetail.id).forEach(l => {
-                      combinedTx.push({
-                        id: 'ledger_' + l.id,
-                        date: l.created_at || '-',
-                        type: l.transaction_type === 'invoice' ? 'Fatura (Borç)' : (l.transaction_type === 'advance' ? 'Avans (Borç)' : 'Ödeme (Alacak)'),
-                        desc: l.description || 'Manuel İşlem',
-                        amount: cleanNumber(l.amount),
-                        isManual: true,
-                        rawId: l.id
-                      });
-                    });
-
-                    // 2. Faturalar ve Fatura Altındaki Çıkışlar
-                    (dbInvoices || []).forEach(inv => {
-                      const invTitle = String(inv.invoice_no || inv.description || inv.supplier_name || '').toLocaleLowerCase('tr-TR');
-                      const isMatch = invTitle.includes(subNameLower) || 
-                                    (cleanSubKey.length >= 4 && invTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey));
-
-                      if (isMatch) {
-                        if (inv.category === 'subcontractor_invoice') {
-                          combinedTx.push({
-                            id: 'inv_' + inv.id,
-                            date: inv.issue_date || inv.created_at || '-',
-                            type: 'Fatura',
-                            desc: 'Fatura No: ' + (inv.invoice_no || '-'),
-                            amount: cleanNumber(inv.total_amount),
-                            isManual: false
-                          });
-                        } else if (inv.category === 'subcontractor_advance_paid' || inv.category === 'subcontractor_paid_outflow') {
-                          combinedTx.push({
-                            id: 'out_' + inv.id,
-                            date: inv.issue_date || inv.created_at || '-',
-                            type: 'Ödeme / Çıkış',
-                            desc: inv.description || 'Alt Yüklenici Ödeme Çıkışı',
-                            amount: cleanNumber(inv.total_amount),
-                            isManual: false
-                          });
-                        }
-                      }
-                    });
-
-                    // 3. Standart Avanslar (dbAdvances)
-                    (dbAdvances || []).forEach((adv, idx) => {
-                      if (adv.target_type === 'contractor') {
-                        const advTitle = String(adv.target_name || adv.target_id || '').toLocaleLowerCase('tr-TR');
-                        const cleanAdvKey = advTitle.replace(/[^a-z0-9]/g, '');
-                        const advFirstPart = subNameLower.split(' ')[0];
-                        if (
-                          advTitle.includes(subNameLower) || 
-                          (cleanSubKey.length >= 4 && cleanAdvKey.includes(cleanSubKey)) ||
-                          (advFirstPart.length >= 3 && advTitle.includes(advFirstPart)) ||
-                          (String(adv.target_id) === String(selectedSubcontractorForDetail.id))
-                        ) {
-                          combinedTx.push({
-                            id: 'adv_' + (adv.id || idx),
-                            date: adv.created_at || adv.date || '-',
-                            type: 'Avans',
-                            desc: adv.description || 'Verilen Avans',
-                            amount: cleanNumber(adv.total_amount || adv.amount || 0),
-                            isManual: false
-                          });
-                        }
-                      }
-                    });
-
-                    // 4. Banka Ödeme Talimatları (Payment Batches)
-                    (dbPaymentBatches || []).forEach((batch, idx) => {
-                      const batchTitle = String(batch.subcontractor_name || batch.name || batch.title || '').toLocaleLowerCase('tr-TR');
-                      const cleanBatchKey = batchTitle.replace(/[^a-z0-9]/g, '');
-                      
-                      const isBatchMatch = 
-                        batchTitle.includes(subNameLower) || 
-                        (cleanSubKey.length >= 4 && cleanBatchKey.includes(cleanSubKey)) || 
-                        (batch.subcontractor_id && String(batch.subcontractor_id) === String(selectedSubcontractorForDetail.id));
-
-                      if (isBatchMatch) {
-                        combinedTx.push({
-                          id: 'batch_' + (batch.id || idx),
-                          date: batch.created_at || batch.date || batch.payment_date || '-',
-                          type: 'Banka Ödemesi',
-                          desc: batch.description || batch.note || batch.subcontractor_name || 'Banka Toplu Ödeme Talimatı',
-                          amount: cleanNumber(batch.amount || batch.total_amount || batch.paid_amount || 0),
-                          isManual: false
-                        });
-                      }
-                    });
-
-                    // 5. Taksitli Avanslar (Advance Installments)
-                    (dbAdvanceInstallments || []).forEach((inst, idx) => {
-                      const instTitle = String(inst.subcontractor_name || '').toLocaleLowerCase('tr-TR');
-                      const instFirstPart = subNameLower.split(' ')[0];
-                      if (
-                        inst.subcontractor_id === selectedSubcontractorForDetail.id || 
-                        (instTitle && (instTitle.includes(subNameLower) || (cleanSubKey.length >= 4 && instTitle.replace(/[^a-z0-9]/g, '').includes(cleanSubKey)) || (instFirstPart.length >= 3 && instTitle.includes(instFirstPart))))
-                      ) {
-                        combinedTx.push({
-                          id: 'inst_' + idx,
-                          date: inst.created_at || '-',
-                          type: 'Taksitli Avans',
-                          desc: inst.description || 'Avans Taksidi Ödemesi',
-                          amount: cleanNumber(inst.amount || 0),
-                          isManual: false
-                        });
-                      }
-                    });
-                    
-                    if (combinedTx.length === 0) {
+                    const ledger = buildSubcontractorLedger(selectedSubcontractorForDetail);
+                    if (ledger.length === 0) {
                       return (
                         <tr>
-                          <td colSpan={5} className="py-6 text-center text-slate-400 italic">Bu taşerona ait kayıt bulunamadı.</td>
+                          <td colSpan={7} className="py-6 text-center text-slate-400 italic">Bu taşerona ait kayıt bulunamadı.</td>
                         </tr>
                       );
                     }
-
-                    return combinedTx.map((tx: any) => (
+                    return ledger.map((tx) => (
                       <tr key={tx.id} className="hover:bg-slate-50 transition">
-                        <td className="py-2.5 px-3 text-slate-500">{tx.date !== '-' ? new Date(tx.date).toLocaleDateString('tr-TR') : '-'}</td>
+                        <td className="py-2.5 px-3 text-slate-500">{tx.date ? formatDateTR(tx.date) : '-'}</td>
                         <td className="py-2.5 px-3 font-semibold text-slate-700">{tx.type}</td>
                         <td className="py-2.5 px-3 text-slate-600">{tx.desc}</td>
-                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{tx.amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{tx.debit ? tx.debit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-amber-700">{tx.credit ? tx.credit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                        <td className={`py-2.5 px-3 text-right font-black ${tx.balance >= 0 ? 'text-blue-900' : 'text-rose-700'}`}>{tx.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                         <td className="py-2.5 px-3 text-center">
                           {tx.isManual ? (
                             <button
@@ -6937,8 +7175,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                                   const { error } = await supabase.from('subcontractor_ledger').delete().eq('id', tx.rawId);
                                   if (error) throw error;
                                   alert('Hareket silindi.');
-                                  loadPortalData();
-                                  setSelectedSubcontractorForDetail(null);
+                                  await loadPortalData();
                                 } catch (err: any) { alert('Silme hatası: ' + err.message); }
                               }}
                               className="text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded bg-red-50 hover:bg-red-100 transition">
