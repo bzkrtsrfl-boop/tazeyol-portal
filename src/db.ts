@@ -139,6 +139,20 @@ export function findCrcCustomer(customers: Customer[]) {
   return hits[0] || null;
 }
 
+export function findMigrosCustomer(customers: Customer[]) {
+  const hits = (customers || []).filter(c => {
+    const n = normalizeName(c.name);
+    return n.includes('MIGROS') || n.includes('MİGROS');
+  });
+  hits.sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+  return hits[0] || null;
+}
+
+export function isCustomerMoneyInvoice(inv: any) {
+  const cat = String(inv?.category || '');
+  return cat === 'freight_sales' || cat === 'customer_collection' || cat === 'customer_advance' || inv?.direction === 'outgoing';
+}
+
 export function resolveInvoiceCustomer(
   inv: any,
   customers: Customer[],

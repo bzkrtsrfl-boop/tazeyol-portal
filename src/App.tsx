@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Plus, 
   X, 
@@ -46,7 +46,7 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabase';
 import { fetchUserRole } from './auth';
-import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, type Customer } from './db';
+import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, type Customer } from './db';
 import * as XLSX from 'xlsx';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
@@ -501,8 +501,10 @@ export default function App() {
   const [plateRentalSearch, setPlateRentalSearch] = useState('');
   const [plateRentalSort, setPlateRentalSort] = useState<'renewal' | 'plate' | 'owner' | 'type' | 'amount'>('renewal');
   const [plateRentalTypeFilter, setPlateRentalTypeFilter] = useState<'all' | 'Çekici' | 'Dorse' | 'Kamyon' | 'Kamyonet'>('all');
-  const [cashOpening, setCashOpening] = useState(1550000);
-  const [cashOpeningAsOf, setCashOpeningAsOf] = useState('2026-11-04');
+  const [cashOpening, setCashOpening] = useState(1784169);
+  const [cashOpeningAsOf, setCashOpeningAsOf] = useState('2026-11-06');
+  const [cashOpeningBase, setCashOpeningBase] = useState<number | null>(null);
+  const cashTrueSnapRef = useRef(false);
   const [sgkDriverAmount, setSgkDriverAmount] = useState(11148);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
@@ -599,11 +601,35 @@ export default function App() {
         if (moved.length) setDbInvoices([...invData]);
       }
 
+      const migrosCard = findMigrosCustomer(customerData as Customer[]);
+      if (migrosCard) {
+        const movedMigros = [];
+        for (const inv of invData || []) {
+          if (!isCustomerMoneyInvoice(inv)) continue;
+          if (isLegacyCrcInvoice(inv)) continue;
+          if (resolveInvoiceCustomer(inv, customerData as Customer[], invData)) continue;
+          const nextNo = retitleInvoiceCustomer(inv.invoice_no, migrosCard.name);
+          if (!nextNo || nextNo === inv.invoice_no) continue;
+          const { error } = await supabase.from('invoices').update({ invoice_no: nextNo }).eq('id', inv.id);
+          if (!error) {
+            inv.invoice_no = nextNo;
+            movedMigros.push(inv.id);
+          }
+        }
+        if (movedMigros.length) setDbInvoices([...invData]);
+      }
+
       const settings: Record<string, string> = {};
       settingsData.forEach((row: any) => {
         if (row?.key) settings[row.key] = String(row.value ?? '');
       });
-      if (Object.prototype.hasOwnProperty.call(settings, 'cash_opening')) {
+      if (Object.prototype.hasOwnProperty.call(settings, 'cash_opening_base')) {
+        setCashOpeningBase(cleanNumber(settings.cash_opening_base));
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'cash_opening') &&
+        Object.prototype.hasOwnProperty.call(settings, 'cash_opening_base')
+      ) {
         const n = cleanNumber(settings.cash_opening);
         if (n > 0) setCashOpening(n);
       }
@@ -1067,6 +1093,9 @@ export default function App() {
   const [isBulkSalaryModalOpen, setIsBulkSalaryModalOpen] = useState(false);
   const [bulkSalaryItems, setBulkSalaryItems] = useState<{ [empId: number]: { selected: boolean; amount: string; name: string; role: string; iban: string } }>({});
   const [bulkSalarySource, setBulkSalarySource] = useState<'bank' | 'cash'>('bank');
+  const [salaryPayDate, setSalaryPayDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [isSingleSalaryPayOpen, setIsSingleSalaryPayOpen] = useState(false);
+  const [singleSalaryPay, setSingleSalaryPay] = useState({ empId: 0, name: '', amount: '', net: 0, base: 0 });
 
   // TAŞERON IBAN MODALI (EKLE VE DÜZENLE)
   const [isSubIbanModalOpen, setIsSubIbanModalOpen] = useState(false);
@@ -1834,7 +1863,34 @@ export default function App() {
   ];
   const cashInflow = cashInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const cashOutflow = cashOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-  const currentRealCash = cashInflow - cashOutflow;
+  const operationalCash = cashInflow - cashOutflow;
+  const cashAdjust = cashOpeningBase === null ? 0 : (cashOpening - cashOpeningBase);
+  const currentRealCash = operationalCash + cashAdjust;
+
+  useEffect(() => {
+    if (loading || !isAuthenticated || cashTrueSnapRef.current) return;
+    if (cashOpeningBase !== null && Math.abs(cashOpening - 1784169) < 0.05) {
+      cashTrueSnapRef.current = true;
+      return;
+    }
+    cashTrueSnapRef.current = true;
+    const declared = 1784169;
+    const asOf = '2026-11-06';
+    const ops = operationalCash;
+    (async () => {
+      try {
+        await saveAppSetting('cash_opening', String(declared));
+        await saveAppSetting('cash_opening_as_of', asOf);
+        await saveAppSetting('cash_opening_base', String(ops));
+        setCashOpening(declared);
+        setCashOpeningAsOf(asOf);
+        setCashOpeningBase(ops);
+      } catch (err) {
+        console.error('Kasa fiili bakiye kaydı', err);
+        cashTrueSnapRef.current = false;
+      }
+    })();
+  }, [loading, isAuthenticated, operationalCash, cashOpening, cashOpeningBase]);
 
   const cashLedgerView = useMemo(() => {
     const from = cashLedgerFrom || '2026-10-01';
@@ -1882,7 +1938,7 @@ export default function App() {
     cashOutRows.forEach((inv: any) => pushInv(inv, 0, cleanNumber(inv.total_amount)));
 
     const live = txs.filter(t => t.kind === 'live');
-    let startBal = 0;
+    let startBal = cashAdjust;
     live.forEach(t => {
       if (t.date < from) startBal += t.inflow - t.outflow;
     });
@@ -1924,7 +1980,7 @@ export default function App() {
       contractorOut,
       lines
     };
-  }, [dbInvoices, dbCreditCards, cashLedgerFrom, cashLedgerTo, cashInRows, cashOutRows]);
+  }, [dbInvoices, dbCreditCards, cashLedgerFrom, cashLedgerTo, cashInRows, cashOutRows, cashAdjust]);
 
   // 9. MÜŞTERİ SATIŞLARI (MİGROS & GERÇEK CARİ EŞLEŞMESİ)
   const salesDetailedList = useMemo(() => {
@@ -3678,20 +3734,54 @@ export default function App() {
     }
   };
 
-  // 16. TOPLU PERSONEL MAAŞ ÖDEMESİ
+  // 16. PERSONEL MAAŞ ÖDEMESİ (tek kişi veya toplu)
   const handleOpenBulkSalaryModal = () => {
     const items: any = {};
     dbEmployees.forEach(emp => {
+      const net = employeeUnpaidFromBooks(emp);
+      const amount = net > 0 ? net : cleanNumber(emp.base_salary);
       items[emp.id] = {
-        selected: true,
-        amount: String(emp.base_salary || 0),
+        selected: amount > 0,
+        amount: amount ? String(amount) : '',
         name: emp.full_name,
         role: emp.role_title,
         iban: emp.iban || 'Belirtilmedi'
       };
     });
     setBulkSalaryItems(items);
+    setSalaryPayDate(new Date().toISOString().split('T')[0]);
     setIsBulkSalaryModalOpen(true);
+  };
+
+  const handleOpenSingleSalaryPay = (emp: any) => {
+    const net = employeeUnpaidFromBooks(emp);
+    const base = cleanNumber(emp.base_salary);
+    setSingleSalaryPay({
+      empId: emp.id,
+      name: emp.full_name || '',
+      amount: String(net > 0 ? net : base || ''),
+      net,
+      base
+    });
+    setSalaryPayDate(new Date().toISOString().split('T')[0]);
+    setIsSingleSalaryPayOpen(true);
+  };
+
+  const insertSalaryPays = async (payRows: { id: any; amount: number; name: string }[]) => {
+    const payDate = sanitizeDate(salaryPayDate) || new Date().toISOString().split('T')[0];
+    const sourceLabel = bulkSalarySource === 'bank' ? 'Banka' : 'Kasa';
+    const invInserts = payRows.map(row => ({
+      invoice_no: `MAAŞ - ${row.name} (#${row.id}) (${sourceLabel})`,
+      direction: 'incoming',
+      category: 'salary_payroll',
+      total_amount: row.amount,
+      issue_date: payDate,
+      due_date: payDate,
+      status: 'paid'
+    }));
+    const { error } = await supabase.from('invoices').insert(invInserts);
+    if (error) throw error;
+    return { payDate, sourceLabel, total: payRows.reduce((s, r) => s + r.amount, 0) };
   };
 
   const handleExecuteBulkSalaryPay = async () => {
@@ -3714,23 +3804,28 @@ export default function App() {
     if (!confirm) return;
 
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const sourceLabel = bulkSalarySource === 'bank' ? 'Banka' : 'Kasa';
-      const invInserts = payRows.map(row => ({
-        invoice_no: `MAAŞ - ${row.name} (#${row.id}) (${sourceLabel})`,
-        direction: 'incoming',
-        category: 'salary_payroll',
-        total_amount: row.amount,
-        issue_date: today,
-        due_date: today,
-        status: 'paid'
-      }));
-
-      const { error } = await supabase.from('invoices').insert(invInserts);
-      if (error) throw error;
-
-      alert(`Toplu ödeme işlendi. Kasadan ${totalBulkAmount.toLocaleString('tr-TR')} ₺ düşüldü. Resmi tutarı ödenenlerde kalan (prim vb.) caride durur.`);
+      const done = await insertSalaryPays(payRows);
+      alert(`Ödeme işlendi (${formatDateTR(done.payDate)}). Kasadan ${done.total.toLocaleString('tr-TR')} ₺ düşüldü.`);
       setIsBulkSalaryModalOpen(false);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Maaş ödeme hatası: ' + err.message);
+    }
+  };
+
+  const handleExecuteSingleSalaryPay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    const amount = cleanNumber(singleSalaryPay.amount);
+    if (amount <= 0) {
+      alert('Ödenecek tutarı yazın.');
+      return;
+    }
+    if (!window.confirm(`${singleSalaryPay.name} için ${amount.toLocaleString('tr-TR')} ₺ ödenecek ve kasadan düşecek.`)) return;
+    try {
+      await insertSalaryPays([{ id: singleSalaryPay.empId, amount, name: singleSalaryPay.name }]);
+      alert('Ödeme kaydedildi. Net alacak düştü, kasa güncellendi.');
+      setIsSingleSalaryPayOpen(false);
       loadPortalData();
     } catch (err: any) {
       alert('Maaş ödeme hatası: ' + err.message);
@@ -4159,6 +4254,22 @@ export default function App() {
       });
   }, [dbPlateRentals, plateRentalSearch, plateRentalSort, plateRentalTypeFilter]);
 
+  const plateRenewalAlerts = useMemo(() => {
+    return (dbPlateRentals || [])
+      .map((r: any) => {
+        const days = daysUntilDate(r.renewal_date);
+        let alert: 'overdue' | 'd15' | 'd30' | null = null;
+        if (days !== null) {
+          if (days <= 0) alert = 'overdue';
+          else if (days <= 15) alert = 'd15';
+          else if (days <= 30) alert = 'd30';
+        }
+        return { plate: r.plate, days, alert };
+      })
+      .filter((r: any) => r.alert)
+      .sort((a: any, b: any) => (a.days ?? 999) - (b.days ?? 999));
+  }, [dbPlateRentals]);
+
   // GİRİŞ EKRANI (AUTH)
   if (!authReady) {
     return (
@@ -4427,6 +4538,28 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {plateRenewalAlerts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('plate_rentals')}
+                  className="w-full flex items-center gap-3 px-3.5 py-2 bg-white rounded-xl border border-rose-200 text-left hover:bg-rose-50/60 transition"
+                >
+                  <Tag className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className="text-xs font-bold text-rose-950 shrink-0">Plaka yenileme</span>
+                  <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0">
+                    {plateRenewalAlerts.length} araç
+                  </span>
+                  <span className="text-[11px] text-rose-800 truncate flex-1">
+                    {plateRenewalAlerts.slice(0, 3).map((r: any) => {
+                      const when = r.days === 0 ? 'bugün' : (r.days < 0 ? `${Math.abs(r.days)}g geçti` : `${r.days}g`);
+                      return `${r.plate} (${when})`;
+                    }).join(' · ')}
+                    {plateRenewalAlerts.length > 3 ? ` · +${plateRenewalAlerts.length - 3}` : ''}
+                  </span>
+                  <span className="text-[11px] font-semibold text-rose-600 shrink-0 hidden sm:inline">Belge plakalarına git →</span>
+                </button>
+              )}
             </div>
 
 {/* FİNANSAL VERİ FİLTRESİ VE AÇILIR POP-UP TAKVİM */}
@@ -4601,15 +4734,18 @@ export default function App() {
                     <button 
                       onClick={async (e) => {
                         e.stopPropagation();
-                        const raw = window.prompt('Güncel kasa / banka — fiili tutar (₺)', String(cashOpening || 1550000));
+                        const raw = window.prompt('Güncel kasa / banka — fiili tutar (₺)', String(currentRealCash || cashOpening || 1784169));
                         if (raw === null) return;
                         const next = cleanNumber(raw);
                         const asOf = new Date().toISOString().split('T')[0];
+                        const ops = operationalCash;
                         try {
                           await saveAppSetting('cash_opening', String(next));
                           await saveAppSetting('cash_opening_as_of', asOf);
+                          await saveAppSetting('cash_opening_base', String(ops));
                           setCashOpening(next);
                           setCashOpeningAsOf(asOf);
+                          setCashOpeningBase(ops);
                         } catch (err: any) {
                           alert('Kasa kaydedilemedi. setup_cash.sql dosyasını SQL Editor’da bir kez Run deyin.\n' + (err.message || ''));
                         }
@@ -5948,6 +6084,14 @@ export default function App() {
                       </button>
                       {isAdmin && (
                         <>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenSingleSalaryPay(emp)}
+                        className="px-2 py-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition"
+                        title="Bu kişiye maaş / prim öde"
+                      >
+                        Öde
+                      </button>
                       <button
                         onClick={() => {
                           setEditingEmployeeId(emp.id);
@@ -7740,6 +7884,39 @@ export default function App() {
         </div>
       )}
 
+      {isSingleSalaryPayOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={handleExecuteSingleSalaryPay} className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900">Maaş / prim öde</h3>
+              <button type="button" onClick={() => setIsSingleSalaryPayOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-xs text-slate-600">
+              <span className="font-bold text-slate-900 block">{singleSalaryPay.name}</span>
+              Net alacak: {singleSalaryPay.net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+              {singleSalaryPay.base > 0 ? ` · Sözleşmeli maaş: ${singleSalaryPay.base.toLocaleString('tr-TR')} ₺` : ''}
+            </p>
+            <p className="text-[11px] text-slate-500">Kasım maaşı 1 Aralık’ta carıye girer. Şimdi bu ayın maaşını ödüyorsanız tutarı kendiniz yazın.</p>
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs">Ödenen tutar</label>
+              <input type="text" value={singleSalaryPay.amount} onChange={e => setSingleSalaryPay({ ...singleSalaryPay, amount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-right" required />
+            </div>
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs">Tarih</label>
+              <input type="date" value={salaryPayDate} onChange={e => setSalaryPayDate(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setBulkSalarySource('bank')} className={`flex-1 py-2 rounded-lg border text-xs font-bold ${bulkSalarySource === 'bank' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'}`}>Banka</button>
+              <button type="button" onClick={() => setBulkSalarySource('cash')} className={`flex-1 py-2 rounded-lg border text-xs font-bold ${bulkSalarySource === 'cash' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'}`}>Kasa</button>
+            </div>
+            <div className="flex gap-3 pt-1">
+              <button type="button" onClick={() => setIsSingleSalaryPayOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200 text-xs">İptal</button>
+              <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-bold text-xs">Öde</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {isBulkSalaryModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
@@ -7747,11 +7924,16 @@ export default function App() {
               <h3 className="font-bold text-slate-900 text-base">Toplu Personel Maaş Ödemesi</h3>
               <button onClick={() => setIsBulkSalaryModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <div className="py-3 flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-700">Ödeme Kaynağı:</span>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setBulkSalarySource('bank')} className={`px-3 py-1.5 rounded-lg border font-bold transition ${bulkSalarySource === 'bank' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'}`}>🏦 Banka Hesabı</button>
-                <button type="button" onClick={() => setBulkSalarySource('cash')} className={`px-3 py-1.5 rounded-lg border font-bold transition ${bulkSalarySource === 'cash' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'}`}>💵 Elden Nakit (Kasa)</button>
+            <p className="text-[11px] text-slate-500 mt-2">Tutarlar net alacağa göre doldurulur. Bu ayın maaşı henüz caride yoksa kutuya ödediğiniz tutarı yazın. Tek kişi için listeden “Öde” daha hızlıdır.</p>
+            <div className="py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <label className="font-semibold text-slate-700 flex items-center gap-2">
+                Ödeme tarihi
+                <input type="date" value={salaryPayDate} onChange={e => setSalaryPayDate(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 font-medium" />
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-700">Kaynak:</span>
+                <button type="button" onClick={() => setBulkSalarySource('bank')} className={`px-3 py-1.5 rounded-lg border font-bold transition ${bulkSalarySource === 'bank' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'}`}>Banka</button>
+                <button type="button" onClick={() => setBulkSalarySource('cash')} className={`px-3 py-1.5 rounded-lg border font-bold transition ${bulkSalarySource === 'cash' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-slate-200'}`}>Kasa</button>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto space-y-2 py-2">
