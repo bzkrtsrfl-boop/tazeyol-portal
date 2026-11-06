@@ -41,11 +41,12 @@ import {
   Download,
   ShieldCheck,
   Phone,
-  Contact
+  Contact,
+  Tag
 } from 'lucide-react';
 import { supabase } from './supabase';
 import { fetchUserRole } from './auth';
-import { fetchAllRows, matchCustomer, type Customer } from './db';
+import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, type Customer } from './db';
 import * as XLSX from 'xlsx';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
@@ -62,6 +63,155 @@ function TazeyolBrand() {
       </span>
     </div>
   );
+}
+
+function normalizeContractorKey(str: string) {
+  return (str || '')
+    .replace(/İ/g, 'i')
+    .replace(/I/g, 'i')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ö/g, 'o')
+    .replace(/ç/g, 'c')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function extractContractorName(invoiceNo: string) {
+  const full = String(invoiceNo || '').trim();
+  const parts = full.split(' - ').map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 2) return parts[parts.length - 1].replace(/\([^)]*\)/g, '').trim();
+  return full;
+}
+
+function extractAdvanceContractorName(invoiceNo: string) {
+  return extractContractorName(String(invoiceNo || '').replace(/^AVANS\s*-?\s*/i, ''))
+    .replace(/\([^)]*\)/g, '')
+    .trim();
+}
+
+function contractorKeysLooselyMatch(a: string, b: string) {
+  const ka = normalizeContractorKey(a);
+  const kb = normalizeContractorKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  if (ka.length >= 4 && kb.includes(ka)) return true;
+  if (kb.length >= 4 && ka.includes(kb)) return true;
+  return false;
+}
+
+function amountsClose(a: number, b: number, tol = 0.05) {
+  return Math.abs(Number(a) - Number(b)) <= tol;
+}
+
+function termPayLabel(term: 'term1' | 'term2' | string) {
+  return term === 'term2' || term === '2' ? '2 nci ödeme' : '1 nci ödeme';
+}
+
+function turkishMonthName(dateStr: string) {
+  const m = Number(String(dateStr || '').slice(5, 7));
+  return ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'][m - 1] || '';
+}
+
+function pad2(n: number) {
+  return n < 10 ? '0' + n : String(n);
+}
+
+function shiftYearMonth(year: number, month: number, add: number) {
+  const d = new Date(year, month - 1 + add, 1);
+  return { y: d.getFullYear(), m: d.getMonth() + 1 };
+}
+
+const PLATE_VEHICLE_TYPES = ['Çekici', 'Dorse', 'Kamyon', 'Kamyonet'] as const;
+
+function normalizePlateVehicleType(raw: any) {
+  const s = String(raw || '').trim().toLocaleLowerCase('tr-TR');
+  if (s.includes('dorse')) return 'Dorse';
+  if (s.includes('kamyonet')) return 'Kamyonet';
+  if (s.includes('kamyon')) return 'Kamyon';
+  if (s.includes('cekici') || s.includes('çekici')) return 'Çekici';
+  return '';
+}
+
+function stripPlateTypeTag(notes: any) {
+  return String(notes || '').replace(/^\[(Çekici|Dorse|Kamyon|Kamyonet)\]\s*/i, '').trim();
+}
+
+function plateVehicleTypeOf(row: any) {
+  return normalizePlateVehicleType(row?.vehicle_type)
+    || normalizePlateVehicleType((String(row?.notes || '').match(/^\[([^\]]+)\]/) || [])[1])
+    || '';
+}
+
+function daysUntilDate(dateStr: string) {
+  let d = String(dateStr || '').trim();
+  if (!d) return null;
+  if (d.includes('T')) d = d.split('T')[0];
+  if (d.includes('.')) {
+    const parts = d.split('.');
+    if (parts.length === 3 && parts[2].length === 4) {
+      d = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    }
+  }
+  d = d.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const [y, m, day] = d.split('-').map(Number);
+  const now = new Date();
+  const utcToday = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const utcThen = Date.UTC(y, m - 1, day);
+  return Math.round((utcThen - utcToday) / 86400000);
+}
+
+function lastDateOfMonth(year: number, month: number) {
+  const day = new Date(year, month, 0).getDate();
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+function defaultContractorTermDates(issueDate: string) {
+  const d = String(issueDate || '').slice(0, 10);
+  const y = Number(d.slice(0, 4));
+  const m = Number(d.slice(5, 7));
+  if (!y || !m) return { term1: '', term2: '' };
+  if (d.startsWith('2026-09')) return { term1: '2026-10-23', term2: '2026-11-05' };
+  const n1 = shiftYearMonth(y, m, 1);
+  const n2 = shiftYearMonth(y, m, 2);
+  return { term1: lastDateOfMonth(n1.y, n1.m), term2: `${n2.y}-${pad2(n2.m)}-05` };
+}
+
+function contractorTermPayDate(issueDate: string, term: 'term1' | 'term2', fallback: string) {
+  const d = String(issueDate || '').slice(0, 10);
+  if (d.startsWith('2026-09')) return term === 'term1' ? '2026-10-23' : '2026-11-05';
+  const dates = defaultContractorTermDates(d);
+  return (term === 'term1' ? dates.term1 : dates.term2) || fallback;
+}
+
+function isBulkHakedisPaymentDesc(desc: string) {
+  return /hakedi[sş]\s*ödem|1\.\s*vade|2\.\s*vade|1 nci ödeme|2 nci ödeme/i.test(String(desc || ''));
+}
+
+function foldPersonName(s: string) {
+  return String(s || '')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ö/g, 'o')
+    .replace(/ç/g, 'c')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function salaryPayrollMatchesEmployee(inv: any, emp: any) {
+  if (String(inv?.category || '') !== 'salary_payroll') return false;
+  const no = String(inv?.invoice_no || '');
+  const id = String(emp?.id || '');
+  if (id && new RegExp(`(?:#|\\(#)${id}\\b`).test(no)) return true;
+  const empNorm = foldPersonName(emp?.full_name);
+  const hay = foldPersonName(no);
+  return !!empNorm && empNorm.length >= 3 && hay.includes(empNorm);
 }
 
 export default function App() {
@@ -152,6 +302,113 @@ export default function App() {
     setCurrentUserRole(null);
   };
 
+  const handleSavePlateRental = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    if (!plateRentalForm.plate.trim() || !plateRentalForm.owner_name.trim()) {
+      alert('Plaka ve plaka sahibi zorunludur.');
+      return;
+    }
+    const row: any = {
+      plate: plateRentalForm.plate.trim().toUpperCase(),
+      owner_name: plateRentalForm.owner_name.trim(),
+      phone: plateRentalForm.phone.trim() || null,
+      start_date: sanitizeDate(plateRentalForm.start_date) || null,
+      renewal_date: sanitizeDate(plateRentalForm.renewal_date) || null,
+      rent_amount: cleanNumber(plateRentalForm.rent_amount),
+      government_fee: cleanNumber(plateRentalForm.government_fee),
+      collection_kind: plateRentalForm.collection_kind,
+      payment_note: plateRentalForm.payment_note.trim() || null,
+      next_amount: plateRentalForm.next_amount === '' ? null : cleanNumber(plateRentalForm.next_amount),
+      notes: plateRentalForm.vehicle_type
+        ? `[${plateRentalForm.vehicle_type}] ${stripPlateTypeTag(plateRentalForm.notes)}`.trim()
+        : (stripPlateTypeTag(plateRentalForm.notes) || null),
+      vehicle_type: plateRentalForm.vehicle_type || null
+    };
+    try {
+      const save = (payload: any) =>
+        editingPlateRentalId
+          ? supabase.from('plate_rentals').update(payload).eq('id', editingPlateRentalId)
+          : supabase.from('plate_rentals').insert([payload]);
+      let { error } = await save(row);
+      if (error && /vehicle_type/i.test(error.message || '')) {
+        const { vehicle_type: _drop, ...withoutType } = row;
+        const retry = await save(withoutType);
+        error = retry.error;
+      }
+      if (error) throw error;
+      setIsPlateRentalModalOpen(false);
+      setEditingPlateRentalId(null);
+      setPlateRentalForm(emptyPlateRentalForm);
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Plaka kaydı hatası: ' + (err.message || 'setup_plate_rentals.sql dosyasını SQL Editor’da çalıştırın.'));
+    }
+  };
+
+  const handleDeletePlateRental = async (id: string) => {
+    if (!isAdmin) return;
+    if (!window.confirm('Bu plaka kaydını silmek istiyor musunuz? Kasa ve cariye bağlı değildir.')) return;
+    const { error } = await supabase.from('plate_rentals').delete().eq('id', id);
+    if (error) {
+      alert('Silinemedi: ' + error.message);
+      return;
+    }
+    loadPortalData();
+  };
+
+  const handleImportPlateRentals = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isAdmin) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const toInsert: any[] = [];
+      rows.forEach((row: any) => {
+        const plate = String(row['Plaka'] || row['plaka'] || '').trim().toUpperCase();
+        const owner = String(row['Yüklenici'] || row['Sahip'] || row['Ad'] || '').trim();
+        if (!plate || !owner) return;
+        const payNote = String(row['Ödeme'] || '').trim();
+        const notes = String(row['Açıklama'] || '').trim();
+        const isDevlet = /5k|devlet/i.test(`${payNote} ${notes}`);
+        const govFromNote = (payNote.match(/(\d+)\s*k/i) ? Number(RegExp.$1) * 1000 : 0);
+        toInsert.push({
+          plate,
+          owner_name: owner,
+          phone: String(row['Telefon'] || '').trim() || null,
+          start_date: sanitizeDate(row['Tarih']) || null,
+          renewal_date: sanitizeDate(row['Yenileme Tarih'] || row['Yenileme Tarihi']) || null,
+          rent_amount: isDevlet ? 0 : cleanNumber(row['Tutar']),
+          government_fee: isDevlet ? (govFromNote || cleanNumber(row['Tutar'])) : cleanNumber(row['Devlet'] || 0),
+          collection_kind: isDevlet ? 'devlet' : 'kira',
+          payment_note: payNote || null,
+          next_amount: row['Yenileme Tutar'] !== undefined && row['Yenileme Tutar'] !== '' ? cleanNumber(row['Yenileme Tutar']) : (cleanNumber(row.__EMPTY) || null),
+          notes: notes || null,
+          vehicle_type: normalizePlateVehicleType(row['Araç Tipi'] || row['Tip'] || row['Araç'] || '') || null
+        });
+      });
+      if (!toInsert.length) {
+        alert('Excel’de Plaka ve Yüklenici sütunu olan satır bulunamadı.');
+        return;
+      }
+      let { error } = await supabase.from('plate_rentals').insert(toInsert);
+      if (error && /vehicle_type/i.test(error.message)) {
+        const retry = await supabase.from('plate_rentals').insert(toInsert.map(({ vehicle_type: _t, ...rest }) => rest));
+        error = retry.error;
+      }
+      if (error) throw error;
+      alert(`${toInsert.length} plaka kaydı yüklendi. Kasa ve cariye yazılmadı.`);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Plaka Excel hatası: ' + (err.message || 'Önce setup_plate_rentals.sql çalıştırın.'));
+    } finally {
+      e.target.value = '';
+    }
+  };
+
   const saveAppSetting = async (key: string, value: string) => {
     const { error } = await supabase.from('app_settings').upsert(
       { key, value, updated_at: new Date().toISOString() },
@@ -165,7 +422,7 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'plate_rentals'
   >('overview');
   const [subSearchTerm, setSubSearchTerm] = useState('');
   const [ledgerSearchTerm, setLedgerSearchTerm] = useState('');
@@ -223,6 +480,27 @@ export default function App() {
   const [isExcelUploading, setIsExcelUploading] = useState(false);
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
   const [dbCustomers, setDbCustomers] = useState<Customer[]>([]);
+  const [dbPlateRentals, setDbPlateRentals] = useState<any[]>([]);
+  const emptyPlateRentalForm = {
+    plate: '',
+    owner_name: '',
+    phone: '',
+    start_date: '',
+    renewal_date: '',
+    rent_amount: '',
+    government_fee: '',
+    collection_kind: 'kira' as 'kira' | 'devlet',
+    payment_note: '',
+    next_amount: '',
+    notes: '',
+    vehicle_type: '' as '' | 'Çekici' | 'Dorse' | 'Kamyon' | 'Kamyonet'
+  };
+  const [plateRentalForm, setPlateRentalForm] = useState(emptyPlateRentalForm);
+  const [editingPlateRentalId, setEditingPlateRentalId] = useState<string | null>(null);
+  const [isPlateRentalModalOpen, setIsPlateRentalModalOpen] = useState(false);
+  const [plateRentalSearch, setPlateRentalSearch] = useState('');
+  const [plateRentalSort, setPlateRentalSort] = useState<'renewal' | 'plate' | 'owner' | 'type' | 'amount'>('renewal');
+  const [plateRentalTypeFilter, setPlateRentalTypeFilter] = useState<'all' | 'Çekici' | 'Dorse' | 'Kamyon' | 'Kamyonet'>('all');
   const [cashOpening, setCashOpening] = useState(1550000);
   const [cashOpeningAsOf, setCashOpeningAsOf] = useState('2026-11-04');
   const [sgkDriverAmount, setSgkDriverAmount] = useState(11148);
@@ -272,7 +550,8 @@ export default function App() {
         empTxData,
         customerData,
         settingsData,
-        monthlyInputData
+        monthlyInputData,
+        plateRentalData
       ] = await Promise.all([
         load('payment_batches'),
         load('advance_installments'),
@@ -286,7 +565,8 @@ export default function App() {
         load('employee_transactions', { column: 'created_at', ascending: false }),
         load('customers', { column: 'name', ascending: true }),
         load('app_settings'),
-        load('vehicle_monthly_inputs')
+        load('vehicle_monthly_inputs'),
+        load('plate_rentals', { column: 'renewal_date', ascending: true })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -301,6 +581,23 @@ export default function App() {
       setDbEmployeeTransactions(empTxData);
       setDbCustomers(customerData as Customer[]);
       setMonthlyInputRows(monthlyInputData);
+      setDbPlateRentals(plateRentalData);
+
+      const crcCard = findCrcCustomer(customerData as Customer[]);
+      if (crcCard) {
+        const moved = [];
+        for (const inv of invData || []) {
+          if (!isLegacyCrcInvoice(inv)) continue;
+          const nextNo = retitleInvoiceCustomer(inv.invoice_no, crcCard.name);
+          if (!nextNo || nextNo === inv.invoice_no) continue;
+          const { error } = await supabase.from('invoices').update({ invoice_no: nextNo }).eq('id', inv.id);
+          if (!error) {
+            inv.invoice_no = nextNo;
+            moved.push(inv.id);
+          }
+        }
+        if (moved.length) setDbInvoices([...invData]);
+      }
 
       const settings: Record<string, string> = {};
       settingsData.forEach((row: any) => {
@@ -391,8 +688,7 @@ export default function App() {
       if (d) dates.push(d);
     });
     (dbInvoices || []).forEach((inv: any) => {
-      if (inv.category !== 'salary_payroll') return;
-      if (!empNorm || !String(inv.invoice_no || '').toLowerCase().includes(empNorm)) return;
+      if (!salaryPayrollMatchesEmployee(inv, emp)) return;
       const d = sanitizeDate(inv.issue_date || inv.created_at);
       if (d) dates.push(d);
     });
@@ -465,15 +761,23 @@ export default function App() {
     return months;
   };
 
-  const employeePayForMonth = (emp: any, yearMonth: string) => {
-    if (!yearMonth || yearMonth < personnelBooksStartYm) {
-      return { base: 0, bonus: 0, advanceCut: 0, gross: 0, net: 0, carried: 0 };
-    }
+  const employeeMatchesAdvance = (emp: any, a: any) => {
+    if (a?.target_type !== 'employee') return false;
     const empIdStr = String(emp?.id || '');
-    const empNorm = String(emp?.full_name || '').toLowerCase().trim();
-    const base = cleanNumber(emp?.base_salary);
-    let bonus = cleanNumber(emp?.monthly_bonus);
+    const targetId = String(a.target_id || '');
+    if (empIdStr && targetId && targetId === empIdStr) return true;
+    const empNorm = foldPersonName(emp?.full_name);
+    const targetNorm = foldPersonName(a.target_name);
+    return !!empNorm && empNorm.length >= 3 && !!targetNorm && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm));
+  };
+
+  const employeeManualMovementsForMonth = (emp: any, yearMonth: string) => {
+    let bonus = 0;
     let advanceCut = 0;
+    if (!yearMonth || yearMonth < personnelBooksStartYm) return { bonus, advanceCut };
+    const hireYm = sanitizeDate(emp?.hire_date).slice(0, 7);
+    if (hireYm && yearMonth < hireYm) return { bonus, advanceCut };
+    const empIdStr = String(emp?.id || '');
 
     (dbEmployeeTransactions || []).forEach((tx: any) => {
       if (String(tx.employee_id) !== empIdStr) return;
@@ -497,37 +801,42 @@ export default function App() {
     });
 
     (dbAdvances || []).forEach((a: any) => {
-      if (a.target_type !== 'employee') return;
-      const targetNorm = String(a.target_name || '').toLowerCase().trim();
-      const targetId = String(a.target_id || '');
-      const isMatch =
-        (targetId && targetId === empIdStr) ||
-        (targetNorm.length >= 3 && empNorm && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
-      if (!isMatch) return;
-      const startYm = sanitizeDate(a.issue_date || a.created_at).slice(0, 7);
+      if (!employeeMatchesAdvance(emp, a)) return;
+      const startYm = sanitizeDate(a.issue_date || a.payment_date || a.created_at).slice(0, 7);
       if (!startYm || startYm < personnelBooksStartYm) return;
-      const amt = cleanNumber(a.remaining_amount !== undefined && a.remaining_amount !== null ? a.remaining_amount : a.total_amount);
+      const tot = cleanNumber(a.total_amount);
       if (a.payment_type === 'employee_bonus') {
-        if (startYm === yearMonth) bonus += amt;
+        if (startYm === yearMonth) bonus += tot;
         return;
       }
+      const remaining = a.remaining_amount === null || a.remaining_amount === undefined ? tot : cleanNumber(a.remaining_amount);
       const inst = Math.max(1, Number(a.total_installments) || 1);
-      const isInst = String(a.payment_type || '').includes('installment') || inst > 1;
+      const isInst = inst > 1;
       if (isInst) {
         const elapsed = monthsBetween(startYm || yearMonth, yearMonth);
         if (elapsed >= 0 && elapsed < inst) {
-          advanceCut += Math.min(amt, cleanNumber(a.total_amount) / inst);
+          advanceCut += Math.min(remaining, tot / inst);
         }
       } else if (startYm === yearMonth) {
-        advanceCut += amt;
+        advanceCut += remaining > 0 ? remaining : tot;
       }
     });
 
-    const hireYm = sanitizeDate(emp?.hire_date || emp?.created_at).slice(0, 7);
+    return { bonus, advanceCut };
+  };
+
+  const employeePayForMonth = (emp: any, yearMonth: string) => {
+    if (!yearMonth || yearMonth < personnelBooksStartYm) {
+      return { base: 0, bonus: 0, advanceCut: 0, gross: 0, net: 0, carried: 0 };
+    }
+    const hireYm = sanitizeDate(emp?.hire_date).slice(0, 7);
     if (hireYm && yearMonth < hireYm) {
       return { base: 0, bonus: 0, advanceCut: 0, gross: 0, net: 0, carried: 0 };
     }
-
+    const extra = employeeManualMovementsForMonth(emp, yearMonth);
+    const base = cleanNumber(emp?.base_salary);
+    const bonus = cleanNumber(emp?.monthly_bonus) + extra.bonus;
+    const advanceCut = extra.advanceCut;
     const gross = base + bonus;
     const net = Math.max(0, gross - advanceCut);
     const carried = Math.max(0, advanceCut - gross);
@@ -535,27 +844,31 @@ export default function App() {
   };
 
   const employeeUnpaidFromBooks = (emp: any) => {
-    const hireYm = sanitizeDate(emp?.hire_date || resolveEmployeeStart(emp).date).slice(0, 7);
+    const hireYm = sanitizeDate(emp?.hire_date).slice(0, 7);
     let from = personnelBooksStartYm;
     if (hireYm && hireYm > from) from = hireYm;
-    const to = personnelClosedYearMonth();
-    if (to < from) return 0;
-    const months = yearMonthsBetween(from, to);
+    const closed = personnelClosedYearMonth();
+    const current = currentPayYearMonth();
     let net = 0;
-    months.forEach(ym => {
-      net += employeePayForMonth(emp, ym).net;
-    });
-    const empNorm = String(emp?.full_name || '').toLowerCase().trim();
+    if (closed >= from) {
+      yearMonthsBetween(from, closed).forEach(ym => {
+        net += employeePayForMonth(emp, ym).net;
+      });
+    }
+    if (current > closed && current >= from) {
+      const extra = employeeManualMovementsForMonth(emp, current);
+      net += extra.bonus - extra.advanceCut;
+    }
+    const paidFrom = hireYm && hireYm > personnelBooksStartYm ? hireYm : personnelBooksStartYm;
     const paid = (dbInvoices || [])
       .filter((inv: any) => {
-        if (inv.category !== 'salary_payroll') return false;
-        const ym = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
-        if (ym < from || ym > to) return false;
-        const hay = String(inv.invoice_no || '').toLowerCase();
-        return !!empNorm && hay.includes(empNorm);
+        if (!salaryPayrollMatchesEmployee(inv, emp)) return false;
+        const d = sanitizeDate(inv.issue_date || inv.created_at);
+        if (!d || d < `${paidFrom}-01`) return false;
+        return true;
       })
       .reduce((s: number, inv: any) => s + cleanNumber(inv.total_amount), 0);
-    return Math.max(0, net - paid);
+    return Math.round(Math.max(0, net - paid) * 100) / 100;
   };
 
   const employmentShareForMonth = (startDateRaw: any, yearMonth: string) => {
@@ -703,7 +1016,7 @@ export default function App() {
 
       if (cashAmt > 0) {
         await supabase.from('invoices').insert([{
-          invoice_no: `KART ÖDEME - ${card.card_name} [${card.bank_name}] (${typeLabel})`,
+          invoice_no: `KART ÖDEME - ${card.card_name} ****${String(card.last_four_digits || '').replace(/\D/g, '').slice(-4)} [${card.bank_name}] nakit ödeme yapıldı (${typeLabel})`,
           direction: 'incoming',
           category: 'credit_card_payment',
           total_amount: cashAmt,
@@ -740,6 +1053,9 @@ export default function App() {
   });
 
   const [isCashDepositModalOpen, setIsCashDepositModalOpen] = useState(false);
+  const [isCashLedgerOpen, setIsCashLedgerOpen] = useState(false);
+  const [cashLedgerFrom, setCashLedgerFrom] = useState('');
+  const [cashLedgerTo, setCashLedgerTo] = useState('');
   const [cashDepositFormData, setCashDepositFormData] = useState({
     depositType: 'partner_capital',
     amount: '',
@@ -763,6 +1079,7 @@ export default function App() {
 
   // BANKA TALİMATI: fatura + vade satırı seçimi
   const [bankSelectedLines, setBankSelectedLines] = useState<{ [key: string]: boolean }>({});
+  const [bankWaveFilter, setBankWaveFilter] = useState<'all' | 'term1' | 'term2'>('all');
 
   // MANUEL TAŞERON FATURA EKLEME MODALI
   const [isManualSubInvoiceModalOpen, setIsManualSubInvoiceModalOpen] = useState(false);
@@ -878,10 +1195,9 @@ export default function App() {
  // 6. TAŞERON IBAN EŞLEŞTİRME HARİTASI (TÜRKÇE VE BOŞLUK KORUMALI)
   const subIbanMap = useMemo(() => {
     const map = new Map<string, string>();
-    const cleanKey = (str: string) => (str || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
     dbSubcontractors.forEach(s => {
       if (s.name && s.iban) {
-        map.set(cleanKey(s.name), s.iban.trim());
+        map.set(normalizeContractorKey(s.name), s.iban.trim());
       }
     });
     return map;
@@ -970,6 +1286,7 @@ export default function App() {
 
         const t1 = totalAmt / 2;
         const t2 = totalAmt / 2;
+        const termDates = defaultContractorTermDates(rowDate);
 
         if (existingInvoicesMap.has(normKey)) {
           skippedCount++;
@@ -982,11 +1299,11 @@ export default function App() {
             category: 'subcontractor_invoice',
             total_amount: totalAmt,
             issue_date: rowDate,
-            due_date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-            term1_due_date: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
+            due_date: termDates.term1 || rowDate,
+            term1_due_date: termDates.term1 || rowDate,
             term1_amount: t1,
             term1_status: 'unpaid',
-            term2_due_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+            term2_due_date: termDates.term2 || rowDate,
             term2_amount: t2,
             term2_status: 'unpaid',
             status: 'unpaid'
@@ -1448,14 +1765,13 @@ export default function App() {
   const totalConsolidatedDebt = unpaidSubcontractorNet + totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt;
 
   const cashInCategories = new Set(['customer_collection', 'customer_advance', 'cash_deposit']);
-  const cashAfterOpening = (inv: any) => sanitizeDate(inv.issue_date || inv.created_at) > cashOpeningAsOf;
-  const cashInflow = dbInvoices
-    .filter(i => cashInCategories.has(String(i.category || '')) && cashAfterOpening(i))
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-
+  const cashBooksStart = '2026-10-01';
+  const inCashBooks = (inv: any) => {
+    const d = sanitizeDate(inv.issue_date || inv.created_at);
+    return !!d && d >= cashBooksStart;
+  };
   const isExpensePaidByCard = (inv: any) =>
     String(inv.paid_source || '') === 'card' || /\[KK\]/i.test(String(inv.invoice_no || ''));
-
   const skipCashOut = new Set([
     'customer_collection',
     'customer_advance',
@@ -1464,17 +1780,151 @@ export default function App() {
     'subcontractor_invoice',
     'opening_balance'
   ]);
-  const cashOutflow = dbInvoices
-    .filter(i =>
-      i.status === 'paid' &&
-      !skipCashOut.has(String(i.category || '')) &&
-      i.direction !== 'outgoing' &&
-      cashAfterOpening(i) &&
-      !isExpensePaidByCard(i)
-    )
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
-  const currentRealCash = cashOpening + cashInflow - cashOutflow;
+  const pickUniqueContractorOutflows = (rows: any[]) => {
+    const rank = (inv: any) => {
+      const no = String(inv.invoice_no || '');
+      if (/tamam|1 ve 2/i.test(no)) return 0;
+      if (/banka talimat/i.test(no)) return 1;
+      return 2;
+    };
+    const sorted = [...rows].sort((a, b) =>
+      rank(a) - rank(b) ||
+      sanitizeDate(a.issue_date || a.created_at).localeCompare(sanitizeDate(b.issue_date || b.created_at))
+    );
+    const kept: any[] = [];
+    sorted.forEach(inv => {
+      const name = extractContractorName(inv.invoice_no || '');
+      const d = sanitizeDate(inv.issue_date || inv.created_at);
+      const amt = cleanNumber(inv.total_amount);
+      const exact = kept.some(k =>
+        contractorKeysLooselyMatch(name, extractContractorName(k.invoice_no || '')) &&
+        sanitizeDate(k.issue_date || k.created_at) === d &&
+        amountsClose(cleanNumber(k.total_amount), amt, 0.05)
+      );
+      if (exact) return;
+      const swallowed = kept.some(k => {
+        const kn = extractContractorName(k.invoice_no || '');
+        if (!contractorKeysLooselyMatch(name, kn)) return false;
+        const kd = sanitizeDate(k.issue_date || k.created_at);
+        const ka = cleanNumber(k.total_amount);
+        const days = Math.abs(Date.parse(d) - Date.parse(kd)) / 86400000;
+        if (!Number.isFinite(days) || days > 20) return false;
+        const kFull = /tamam|1 ve 2/i.test(String(k.invoice_no || ''));
+        if (kFull && (amountsClose(ka, amt * 2, 1) || amountsClose(ka, amt, 0.51))) return true;
+        return false;
+      });
+      if (swallowed) return;
+      kept.push(inv);
+    });
+    return kept;
+  };
+
+  const cashInRows = (dbInvoices || []).filter((i: any) => cashInCategories.has(String(i.category || '')) && inCashBooks(i));
+  const cashOutCandidates = (dbInvoices || []).filter((i: any) =>
+    i.status === 'paid' &&
+    !skipCashOut.has(String(i.category || '')) &&
+    i.direction !== 'outgoing' &&
+    inCashBooks(i) &&
+    !isExpensePaidByCard(i)
+  );
+  const cashOutRows = [
+    ...cashOutCandidates.filter((i: any) => i.category !== 'subcontractor_paid_outflow'),
+    ...pickUniqueContractorOutflows(cashOutCandidates.filter((i: any) => i.category === 'subcontractor_paid_outflow'))
+  ];
+  const cashInflow = cashInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const cashOutflow = cashOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const currentRealCash = cashInflow - cashOutflow;
+
+  const cashLedgerView = useMemo(() => {
+    const from = cashLedgerFrom || '2026-10-01';
+    const to = cashLedgerTo || new Date().toISOString().split('T')[0];
+    const labelOf = (cat: string) => {
+      if (cat === 'customer_collection') return 'Müşteri tahsilatı';
+      if (cat === 'customer_advance') return 'Müşteri avansı';
+      if (cat === 'cash_deposit') return 'Kasa / banka girişi';
+      if (cat === 'subcontractor_paid_outflow') return 'Taşeron ödemesi';
+      if (cat === 'subcontractor_advance_paid') return 'Taşeron avansı';
+      if (cat === 'salary_payroll') return 'Maaş / bordro';
+      if (cat === 'credit_card_payment') return 'Kredi kartı nakit ödeme';
+      if (cat === 'taxes_sgk') return 'SGK / vergi';
+      if (cat === 'traffic_fines') return 'Trafik cezası';
+      return 'Gider';
+    };
+    type CashLine = {
+      id: any;
+      date: string;
+      label: string;
+      title: string;
+      inflow: number;
+      outflow: number;
+      kind: 'live' | 'ghost' | 'open';
+    };
+    const txs: CashLine[] = [];
+    const pushInv = (inv: any, inflow: number, outflow: number) => {
+      const date = sanitizeDate(inv.issue_date || inv.created_at);
+      if (!date) return;
+      const cat = String(inv.category || '');
+      const amt = inflow || outflow;
+      if (amt <= 0) return;
+      let title = String(inv.invoice_no || '');
+      let label = labelOf(cat);
+      if (cat === 'credit_card_payment') {
+        const no = title;
+        const card = (dbCreditCards || []).find((c: any) => no.includes(String(c.card_name || '')) || (c.last_four_digits && no.includes(String(c.last_four_digits))));
+        const last4 = String(card?.last_four_digits || '').replace(/\D/g, '').slice(-4);
+        title = `${card?.card_name || no} · ${last4 ? `**** ${last4}` : 'kart no yok'} · Nakit ödeme yapıldı`;
+        label = last4 ? `Nakit kart **** ${last4}` : 'Kredi kartı nakit ödeme';
+      }
+      txs.push({ id: inv.id, date, label, title, inflow, outflow, kind: 'live' });
+    };
+    cashInRows.forEach((inv: any) => pushInv(inv, cleanNumber(inv.total_amount), 0));
+    cashOutRows.forEach((inv: any) => pushInv(inv, 0, cleanNumber(inv.total_amount)));
+
+    const live = txs.filter(t => t.kind === 'live');
+    let startBal = 0;
+    live.forEach(t => {
+      if (t.date < from) startBal += t.inflow - t.outflow;
+    });
+
+    const inRange = txs.filter(t => t.date >= from && t.date <= to);
+    const events: CashLine[] = [...inRange];
+    events.push({
+      id: 'open',
+      date: from,
+      label: 'Dönem başı',
+      title: 'Seçilen tarihten önceki tahsilat − kasa çıkışı. Fiili açılış bu ay içinde ayrı netleştirilecek.',
+      inflow: 0,
+      outflow: 0,
+      kind: 'open'
+    });
+    const rank = (k: CashLine['kind']) => (k === 'ghost' ? 0 : k === 'open' ? 1 : 2);
+    events.sort((a, b) => a.date.localeCompare(b.date) || rank(a.kind) - rank(b.kind) || a.title.localeCompare(b.title, 'tr'));
+
+    let run = startBal;
+    const lines = events.map(t => {
+      if (t.kind === 'ghost') return { ...t, balance: null as number | null, isHist: true, isOpen: false };
+      if (t.kind === 'open') {
+        return { ...t, balance: run, isHist: false, isOpen: true };
+      }
+      run += t.inflow - t.outflow;
+      return { ...t, balance: run, isHist: false, isOpen: false };
+    }).reverse();
+    const liveInRange = live.filter(t => t.date >= from && t.date <= to);
+    const contractorOut = liveInRange
+      .filter(t => t.label === 'Taşeron ödemesi' || t.label === 'Taşeron avansı')
+      .reduce((s, t) => s + t.outflow, 0);
+    return {
+      from,
+      to,
+      startBal,
+      endBal: run,
+      periodIn: liveInRange.reduce((s, t) => s + t.inflow, 0),
+      periodOut: liveInRange.reduce((s, t) => s + t.outflow, 0),
+      contractorOut,
+      lines
+    };
+  }, [dbInvoices, dbCreditCards, cashLedgerFrom, cashLedgerTo, cashInRows, cashOutRows]);
 
   // 9. MÜŞTERİ SATIŞLARI (MİGROS & GERÇEK CARİ EŞLEŞMESİ)
   const salesDetailedList = useMemo(() => {
@@ -1490,7 +1940,7 @@ export default function App() {
           cust = parts.slice(1).join(' - ').trim();
         }
 
-        const matched = matchCustomer(cust || fNo, '', dbCustomers);
+        const matched = resolveInvoiceCustomer(inv, dbCustomers, dbInvoices) || matchCustomer(cust || fNo, '', dbCustomers);
         if (matched) cust = matched.name;
         else if (!cust) cust = 'Eşleşmeyen müşteri';
 
@@ -1504,7 +1954,7 @@ export default function App() {
 
   const customerBalances = useMemo(() => {
     const belongsTo = (inv: any, customer: Customer) =>
-      !!matchCustomer(String(inv.invoice_no || ''), '', [customer]);
+      invoiceBelongsToCustomer(inv, customer, dbCustomers, dbInvoices);
 
     const rows = dbCustomers.map(customer => {
       const sales = dbInvoices.filter(i =>
@@ -1535,14 +1985,14 @@ export default function App() {
     const assignedNet = customerBalances.reduce((s, r) => s + r.net, 0);
     const unmatchedOpen = dbInvoices
       .filter(i => (i.category === 'freight_sales' || i.direction === 'outgoing') && i.status !== 'paid')
-      .filter(i => !(dbCustomers || []).some(c => matchCustomer(String(i.invoice_no || ''), '', [c])))
+      .filter(i => !resolveInvoiceCustomer(i, dbCustomers || [], dbInvoices))
       .reduce((s, i) => s + cleanNumber(i.total_amount), 0);
     return assignedNet + unmatchedOpen;
   }, [customerBalances, dbInvoices, dbCustomers]);
 
   const selectedCariLedger = useMemo(() => {
     if (!selectedCariCustomer) return [];
-    const belongs = (inv: any) => !!matchCustomer(String(inv.invoice_no || ''), '', [selectedCariCustomer]);
+    const belongs = (inv: any) => invoiceBelongsToCustomer(inv, selectedCariCustomer, dbCustomers, dbInvoices);
     const lines: { date: string; type: string; title: string; debit: number; credit: number }[] = [];
 
     dbInvoices.filter(belongs).forEach(inv => {
@@ -1564,7 +2014,7 @@ export default function App() {
       running += line.debit - line.credit;
       return { ...line, balance: running };
     });
-  }, [selectedCariCustomer, dbInvoices]);
+  }, [selectedCariCustomer, dbInvoices, dbCustomers]);
 
   // SATIŞ TABLOSU İÇİN ARAMA VE BAŞLIĞA GÖRE SIRALAMA
   const [salesSearchQuery, setSalesSearchQuery] = useState('');
@@ -1672,7 +2122,7 @@ export default function App() {
     if (!selectedPayrollEmp) return [];
     const emp = selectedPayrollEmp;
     const empIdStr = String(emp.id || '');
-    const empNorm = String(emp.full_name || '').toLowerCase().trim();
+    const empNorm = foldPersonName(emp.full_name);
     const months = payrollMonthList;
     if (!months.length) return [];
     const startInfo = resolveEmployeeStart(emp);
@@ -1695,6 +2145,7 @@ export default function App() {
     const base = cleanNumber(emp.base_salary);
     const cardBonus = cleanNumber(emp.monthly_bonus);
 
+    const closedYm = personnelClosedYearMonth();
     months.forEach(ym => {
       if (ym < personnelBooksStartYm) return;
       if (hireYm && ym < hireYm) return;
@@ -1706,7 +2157,8 @@ export default function App() {
       const proNote = share.startedThisMonth
         ? ` · ${startInfo.label} ${formatDateTR(hire)}, ${share.daysWorked}/${share.daysInMonth} gün`
         : '';
-      if (base > 0) {
+      const salaryOpen = ym <= closedYm;
+      if (salaryOpen && base > 0) {
         lines.push({
           date,
           type: 'Sabit maaş',
@@ -1715,7 +2167,7 @@ export default function App() {
           cut: 0
         });
       }
-      if (cardBonus > 0) {
+      if (salaryOpen && cardBonus > 0) {
         lines.push({
           date,
           type: 'Kart primi',
@@ -1759,13 +2211,7 @@ export default function App() {
     });
 
     (dbAdvances || []).forEach((a: any) => {
-      if (a.target_type !== 'employee') return;
-      const targetNorm = String(a.target_name || '').toLowerCase().trim();
-      const targetId = String(a.target_id || '');
-      const isMatch =
-        (targetId && targetId === empIdStr) ||
-        (targetNorm.length >= 3 && (targetNorm.includes(empNorm) || empNorm.includes(targetNorm)));
-      if (!isMatch) return;
+      if (!employeeMatchesAdvance(emp, a)) return;
       const d = sanitizeDate(a.issue_date || a.payment_date || a.created_at);
       const tot = cleanNumber(a.total_amount);
       if (a.payment_type === 'employee_bonus') {
@@ -1809,11 +2255,12 @@ export default function App() {
     });
 
     (dbInvoices || []).forEach((inv: any) => {
-      if (inv.category !== 'salary_payroll') return;
-      const hay = String(inv.invoice_no || '').toLowerCase();
-      if (!empNorm || !hay.includes(empNorm)) return;
+      if (!salaryPayrollMatchesEmployee(inv, emp)) return;
       const d = sanitizeDate(inv.issue_date || inv.created_at);
-      if (!inRange(d)) return;
+      if (!d) return;
+      if (hire && d < hire) return;
+      if (d < `${personnelBooksStartYm}-01`) return;
+      if (d < rangeStart) return;
       lines.push({
         date: d,
         type: 'Maaş ödemesi',
@@ -1864,24 +2311,17 @@ export default function App() {
   };
 
   const openPayrollReport = (emp: any) => {
-    const d = new Date();
-    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
-    const nowYm = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
     const hireYm = resolveEmployeeStart(emp).date.slice(0, 7);
     let from = personnelBooksStartYm;
     if (hireYm && hireYm > from) from = hireYm;
-    if (from > nowYm) from = nowYm;
+    const closed = personnelClosedYearMonth();
+    const current = currentPayYearMonth();
+    let to = current > closed ? current : closed;
+    if (to < from) to = from;
     setPayrollFrom(from);
-    setPayrollTo(nowYm);
+    setPayrollTo(to);
     setSelectedPayrollEmp(emp);
   };
-
-  const normalizeContractorKey = (str: string) =>
-    (str || '')
-      .replace(/İ/g, 'i')
-      .replace(/I/g, 'ı')
-      .toLocaleLowerCase('tr-TR')
-      .replace(/[^a-z0-9]/g, '');
 
   const findContractorIban = (contractorName: string, inv?: any) => {
     const key = normalizeContractorKey(contractorName);
@@ -1904,12 +2344,6 @@ export default function App() {
     return foundIban || 'IBAN Eksik';
   };
 
-  const extractContractorName = (invoiceNo: string) => {
-    const full = String(invoiceNo || '');
-    const idx = full.indexOf(' - ');
-    return idx >= 0 ? full.slice(idx + 3).trim() : full;
-  };
-
   const matchesContractor = (sub: any, ...texts: any[]) => {
     const nameKey = normalizeContractorKey(sub?.company_name || sub?.name || '');
     const id = String(sub?.id || '');
@@ -1918,12 +2352,7 @@ export default function App() {
       if (t === undefined || t === null || t === '') return false;
       const s = String(t);
       if (id && s === id) return true;
-      const k = normalizeContractorKey(s);
-      if (!k || !nameKey) return false;
-      if (k === nameKey) return true;
-      if (nameKey.length >= 6 && k.includes(nameKey)) return true;
-      if (k.length >= 6 && nameKey.includes(k)) return true;
-      return false;
+      return contractorKeysLooselyMatch(nameKey, s) || contractorKeysLooselyMatch(sub?.company_name || sub?.name || '', s);
     });
   };
 
@@ -1931,75 +2360,295 @@ export default function App() {
     const lines: { id: string; date: string; type: string; desc: string; debit: number; credit: number; isManual?: boolean; rawId?: any }[] = [];
     if (!sub) return [] as (typeof lines[number] & { balance: number })[];
 
+    const invoices: any[] = [];
     (dbInvoices || []).forEach((inv: any) => {
       if (inv.category !== 'subcontractor_invoice') return;
       const no = String(inv.invoice_no || '');
+      if (no.toUpperCase().includes('AVANS')) return;
       if (!matchesContractor(sub, extractContractorName(no), inv.supplier_name, inv.description, no)) return;
-      const amt = cleanNumber(inv.total_amount);
+      invoices.push(inv);
       lines.push({
         id: 'inv_' + inv.id,
         date: sanitizeDate(inv.issue_date || inv.created_at),
         type: 'Hakediş faturası',
         desc: no,
-        debit: amt,
+        debit: cleanNumber(inv.total_amount),
         credit: 0
       });
-      const t1 = cleanNumber(inv.term1_amount || amt / 2);
-      const t2 = cleanNumber(inv.term2_amount || amt / 2);
-      if (inv.term1_status === 'paid' && t1 > 0) {
-        lines.push({
-          id: 't1_' + inv.id,
-          date: sanitizeDate(inv.term1_due_date || inv.issue_date || inv.created_at),
-          type: '1. vade ödemesi',
-          desc: no,
-          debit: 0,
-          credit: t1
-        });
-      }
-      if (inv.term2_status === 'paid' && t2 > 0) {
-        lines.push({
-          id: 't2_' + inv.id,
-          date: sanitizeDate(inv.term2_due_date || inv.issue_date || inv.created_at),
-          type: '2. vade ödemesi',
-          desc: no,
-          debit: 0,
-          credit: t2
-        });
-      }
     });
 
+    const advAmounts: number[] = [];
     (dbAdvances || []).forEach((adv: any, idx: number) => {
-      if (adv.target_type !== 'contractor') return;
-      if (!matchesContractor(sub, adv.target_name, adv.target_id)) return;
+      if (adv.target_type && adv.target_type !== 'contractor') return;
+      if (!matchesContractor(sub, adv.target_name, adv.target_id, adv.notes)) return;
       const amt = cleanNumber(adv.total_amount);
-      if (amt <= 0) return;
+      if (amt <= 0 || advAmounts.some(x => amountsClose(x, amt))) return;
+      advAmounts.push(amt);
       const inst = Math.max(1, Number(adv.total_installments) || 1);
-      const isInst = String(adv.payment_type || '').includes('installment') || inst > 1;
       lines.push({
         id: 'adv_' + (adv.id || idx),
         date: sanitizeDate(adv.issue_date || adv.created_at),
-        type: isInst ? `Avans (${inst} taksit)` : 'Peşin avans',
-        desc: adv.notes || adv.description || 'Verilen avans',
+        type: inst > 1 ? `Taksitli avans (${inst} taksit)` : 'Peşin avans',
+        desc: (adv.notes || adv.description || 'Verilen avans').replace(/\(\s*1\s*Taksit\s*\)/i, '').trim(),
         debit: 0,
         credit: amt
       });
     });
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'subcontractor_advance_paid') return;
+      const no = String(inv.invoice_no || '');
+      if (!matchesContractor(sub, extractAdvanceContractorName(no), no)) return;
+      const amt = cleanNumber(inv.total_amount);
+      if (amt <= 0 || advAmounts.some(x => amountsClose(x, amt))) return;
+      advAmounts.push(amt);
+      const instMatch = no.match(/(\d+)\s*Taksit/i);
+      const inst = instMatch ? Number(instMatch[1]) : 1;
+      lines.push({
+        id: 'advinv_' + inv.id,
+        date: sanitizeDate(inv.issue_date || inv.created_at),
+        type: inst > 1 ? `Taksitli avans (${inst} taksit)` : 'Peşin avans',
+        desc: no.replace(/\(\s*1\s*Taksit\s*\)/i, '').trim(),
+        debit: 0,
+        credit: amt
+      });
+    });
+    const advanceTotal = advAmounts.reduce((s, n) => s + n, 0);
+    let pesinPool = 0;
+    let instMonthly = 0;
+    let instRemaining = 0;
+    (dbAdvances || []).forEach((adv: any) => {
+      if (adv.target_type && adv.target_type !== 'contractor') return;
+      if (!matchesContractor(sub, adv.target_name, adv.target_id, adv.notes)) return;
+      const amt = cleanNumber(adv.total_amount);
+      if (amt <= 0) return;
+      const inst = Math.max(1, Number(adv.total_installments) || 1);
+      if (inst > 1) {
+        instMonthly += amt / inst;
+        instRemaining += amt;
+      } else {
+        pesinPool += amt;
+      }
+    });
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'subcontractor_advance_paid') return;
+      const no = String(inv.invoice_no || '');
+      if (!matchesContractor(sub, extractAdvanceContractorName(no), no)) return;
+      const amt = cleanNumber(inv.total_amount);
+      if (amt <= 0 || advAmounts.filter(x => amountsClose(x, amt)).length > 1) return;
+      if (advAmounts.some(x => amountsClose(x, amt)) && (dbAdvances || []).some((a: any) =>
+        matchesContractor(sub, a.target_name, a.target_id) && amountsClose(cleanNumber(a.total_amount), amt)
+      )) return;
+      const instMatch = no.match(/(\d+)\s*Taksit/i);
+      const inst = instMatch ? Number(instMatch[1]) : 1;
+      if (inst > 1) {
+        instMonthly += amt / inst;
+        instRemaining += amt;
+      } else {
+        pesinPool += amt;
+      }
+    });
+    instMonthly = Math.round(instMonthly * 100) / 100;
 
+    type Slot = {
+      key: string;
+      invoiceId: any;
+      invoiceNo: string;
+      term: 'term1' | 'term2';
+      issueDate: string;
+      dueDate: string;
+      gross: number;
+      net: number;
+      paid: boolean;
+      payDate: string;
+    };
+    const slots: Slot[] = [];
+    invoices.forEach((inv: any) => {
+      const total = cleanNumber(inv.total_amount);
+      const t1 = cleanNumber(inv.term1_amount || total / 2);
+      const t2 = cleanNumber(inv.term2_amount || Math.max(0, total - t1));
+      const issueDate = sanitizeDate(inv.issue_date || inv.created_at);
+      const add = (term: 'term1' | 'term2', gross: number) => {
+        if (gross <= 0.009) return;
+        slots.push({
+          key: `${inv.id}-${term}`,
+          invoiceId: inv.id,
+          invoiceNo: String(inv.invoice_no || ''),
+          term,
+          issueDate,
+          dueDate: contractorTermPayDate(issueDate, term, sanitizeDate(term === 'term1' ? inv.term1_due_date : inv.term2_due_date)),
+          gross,
+          net: gross,
+          paid: inv[term === 'term1' ? 'term1_status' : 'term2_status'] === 'paid',
+          payDate: ''
+        });
+      };
+      add('term1', t1);
+      add('term2', t2);
+    });
+    slots.sort((a, b) => {
+      if (a.term !== b.term) return a.term === 'term1' ? -1 : 1;
+      return (a.issueDate || '').localeCompare(b.issueDate || '') || a.key.localeCompare(b.key);
+    });
+    const invoiceMonths = [...new Set(slots.map(s => (s.issueDate || '').slice(0, 7)).filter(Boolean))].sort();
+    invoiceMonths.forEach(ym => {
+      let monthInst = Math.round(Math.min(instMonthly, instRemaining) * 100) / 100;
+      slots.filter(s => (s.issueDate || '').startsWith(ym) && s.term === 'term1').forEach(s => {
+        const instCut = Math.round(Math.min(s.gross, monthInst) * 100) / 100;
+        monthInst = Math.round((monthInst - instCut) * 100) / 100;
+        instRemaining = Math.round((instRemaining - instCut) * 100) / 100;
+        const pesinCut = Math.round(Math.min(s.gross - instCut, pesinPool) * 100) / 100;
+        pesinPool = Math.round((pesinPool - pesinCut) * 100) / 100;
+        s.net = Math.round((s.gross - instCut - pesinCut) * 100) / 100;
+      });
+      slots.filter(s => (s.issueDate || '').startsWith(ym) && s.term === 'term2').forEach(s => {
+        const pesinCut = Math.round(Math.min(s.gross, pesinPool) * 100) / 100;
+        pesinPool = Math.round((pesinPool - pesinCut) * 100) / 100;
+        s.net = Math.round((s.gross - pesinCut) * 100) / 100;
+      });
+    });
+
+    type Pay = { date: string; desc: string; amount: number; type: string };
+    const pays: Pay[] = [];
     (dbSubcontractorsLedger || []).forEach((l: any) => {
       if (String(l.subcontractor_id) !== String(sub.id)) return;
       const amt = cleanNumber(l.amount);
-      const isDebit = l.transaction_type === 'invoice';
-      lines.push({
-        id: 'ledger_' + l.id,
-        date: sanitizeDate(l.created_at),
-        type: l.transaction_type === 'invoice' ? 'Manuel fatura' : (l.transaction_type === 'advance' ? 'Manuel avans' : 'Manuel ödeme'),
-        desc: l.description || 'Cari hareket',
-        debit: isDebit ? amt : 0,
-        credit: isDebit ? 0 : amt,
-        isManual: true,
-        rawId: l.id
-      });
+      if (amt <= 0) return;
+      if (l.transaction_type === 'invoice') {
+        lines.push({
+          id: 'ledger_' + l.id,
+          date: sanitizeDate(l.created_at),
+          type: 'Manuel fatura',
+          desc: l.description || 'Cari hareket',
+          debit: amt,
+          credit: 0,
+          isManual: true,
+          rawId: l.id
+        });
+        return;
+      }
+      if (l.transaction_type === 'advance' && advAmounts.some(x => amountsClose(x, amt))) return;
+      pays.push({ date: sanitizeDate(l.created_at), desc: l.description || '', amount: amt, type: String(l.transaction_type || '') });
     });
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'subcontractor_paid_outflow') return;
+      const no = String(inv.invoice_no || '');
+      if (!matchesContractor(sub, extractContractorName(no), extractAdvanceContractorName(no), no)) return;
+      const amt = cleanNumber(inv.total_amount);
+      if (amt <= 0) return;
+      pays.push({ date: sanitizeDate(inv.issue_date || inv.created_at), desc: no, amount: amt, type: /banka|talimat/i.test(no) ? 'bank' : 'pay' });
+    });
+
+    const markPaid = (list: Slot[], date: string) => {
+      list.forEach(s => {
+        s.paid = true;
+        if (date && (!s.payDate || date < s.payDate)) s.payDate = date;
+      });
+    };
+    const findSubset = (cands: Slot[], amount: number) => {
+      const n = Math.min(cands.length, 12);
+      let best: Slot[] | null = null;
+      for (let mask = 1; mask < (1 << n); mask++) {
+        const picked: Slot[] = [];
+        let netS = 0;
+        let grossS = 0;
+        for (let i = 0; i < n; i++) {
+          if (!(mask & (1 << i))) continue;
+          picked.push(cands[i]);
+          netS += cands[i].net;
+          grossS += cands[i].gross;
+        }
+        if (amountsClose(netS, amount, 0.51) || amountsClose(grossS, amount, 0.51)) {
+          if (!best || picked.length < best.length) best = picked;
+        }
+      }
+      return best;
+    };
+    const nearerWave = (issueDate: string, payDate: string): 'term1' | 'term2' | null => {
+      const issue = String(issueDate || '').slice(0, 10);
+      const pay = String(payDate || '').slice(0, 10);
+      if (!issue || !pay) return null;
+      const y = Number(issue.slice(0, 4));
+      const m = Number(issue.slice(5, 7));
+      if (!y || !m) return null;
+      const n1 = shiftYearMonth(y, m, 1);
+      const n2 = shiftYearMonth(y, m, 2);
+      const payYm = pay.slice(0, 7);
+      const payDay = Number(pay.slice(8, 10));
+      const ym1 = `${n1.y}-${pad2(n1.m)}`;
+      const ym2 = `${n2.y}-${pad2(n2.m)}`;
+      if (payYm === ym1) return 'term1';
+      if (payYm === ym2 && payDay <= 12) return 'term2';
+      return null;
+    };
+
+    pays.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    pays.forEach(p => {
+      const txt = `${p.desc} ${p.type}`.toLocaleLowerCase('tr-TR');
+      const unpaid = slots.filter(s => !s.paid);
+      if (!unpaid.length) return;
+      if (/tamam|1 ve 2/.test(txt) || amountsClose(p.amount, invoices.reduce((s, inv) => s + cleanNumber(inv.total_amount), 0), 0.51)) {
+        markPaid(unpaid, p.date);
+        return;
+      }
+      const dateWaves = unpaid.map(s => nearerWave(s.issueDate, p.date)).filter(Boolean) as ('term1' | 'term2')[];
+      const dateWave = dateWaves[0] && dateWaves.every(w => w === dateWaves[0]) ? dateWaves[0] : null;
+      const labelWave: 'term1' | 'term2' | null = /2\s*\.?\s*vade|2 nci/.test(txt) ? 'term2' : (/1\s*\.?\s*vade|1 nci/.test(txt) ? 'term1' : null);
+      const wave = dateWave || labelWave;
+      const primary = wave ? unpaid.filter(s => s.term === wave) : unpaid;
+      const hit = findSubset(primary, p.amount);
+      if (hit && hit.length) {
+        markPaid(hit, p.date);
+        return;
+      }
+      if (wave === 'term2' && primary.length) {
+        const term2Gross = primary.reduce((s, x) => s + x.gross, 0);
+        if (advanceTotal > 0.05 && amountsClose(p.amount + advanceTotal, term2Gross, 0.51)) {
+          markPaid(primary, p.date);
+          return;
+        }
+        const asFirst = findSubset(unpaid.filter(s => s.term === 'term1'), p.amount);
+        if (asFirst && asFirst.length) {
+          const invIds = new Set(asFirst.map(s => s.invoiceId));
+          markPaid(unpaid.filter(s => invIds.has(s.invoiceId)), p.date);
+          return;
+        }
+        if (invoices.length <= 2) markPaid(unpaid, p.date);
+      }
+    });
+
+    const pushGroup = (term: 'term1' | 'term2') => {
+      const group = slots.filter(s => s.term === term && s.paid && s.net > 0.009);
+      if (!group.length) return;
+      const date = contractorTermPayDate(group[0].issueDate, term, group[0].dueDate);
+      const amount = Math.round(group.reduce((s, x) => s + x.net, 0) * 100) / 100;
+      lines.push({
+        id: 'wave_' + term,
+        date,
+        type: termPayLabel(term),
+        desc: group.length === 1 ? group[0].invoiceNo : `${group.length} fatura ${termPayLabel(term)}`,
+        debit: 0,
+        credit: amount
+      });
+    };
+    const invoiceTotal = invoices.reduce((s, inv) => s + cleanNumber(inv.total_amount), 0);
+    const oneShot = pays.some(p => /tamam|1 ve 2/.test(`${p.desc} ${p.type}`.toLocaleLowerCase('tr-TR')) || amountsClose(p.amount, invoiceTotal, 0.51));
+    if (oneShot && slots.length > 0 && slots.every(s => s.paid)) {
+      const amount = Math.round(slots.reduce((s, x) => s + x.net, 0) * 100) / 100;
+      if (amount > 0.009) {
+        const p = pays.find(x => /tamam|1 ve 2/.test(`${x.desc} ${x.type}`.toLocaleLowerCase('tr-TR')) || amountsClose(x.amount, invoiceTotal, 0.51));
+        lines.push({
+          id: 'wave_full',
+          date: contractorTermPayDate(slots[0].issueDate, 'term1', p?.date || slots[0].payDate),
+          type: 'Tamamı ödeme',
+          desc: p?.desc || 'Fatura tamamı ödendi',
+          debit: 0,
+          credit: amount
+        });
+      }
+    } else {
+      pushGroup('term1');
+      pushGroup('term2');
+    }
 
     lines.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.type.localeCompare(b.type, 'tr'));
     let running = 0;
@@ -2028,7 +2677,7 @@ export default function App() {
       .forEach(inv => {
         const fullTitle = String(inv.invoice_no || '');
         if (fullTitle.toUpperCase().includes('AVANS')) return;
-        const contractorName = fullTitle.includes(' - ') ? fullTitle.split(' - ')[1].trim() : fullTitle;
+        const contractorName = extractContractorName(fullTitle);
         const iban = findContractorIban(contractorName, inv);
         const t1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
         const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
@@ -2039,8 +2688,8 @@ export default function App() {
             invoiceNo: fullTitle,
             contractorName,
             term: 'term1',
-            termLabel: '1. Vade',
-            dueDate: sanitizeDate(inv.term1_due_date || inv.due_date || inv.issue_date),
+            termLabel: '1 nci ödeme',
+            dueDate: contractorTermPayDate(sanitizeDate(inv.issue_date), 'term1', sanitizeDate(inv.term1_due_date || inv.due_date || inv.issue_date)),
             issueDate: sanitizeDate(inv.issue_date),
             amount: t1,
             iban
@@ -2053,8 +2702,8 @@ export default function App() {
             invoiceNo: fullTitle,
             contractorName,
             term: 'term2',
-            termLabel: '2. Vade',
-            dueDate: sanitizeDate(inv.term2_due_date || inv.due_date || inv.issue_date),
+            termLabel: '2 nci ödeme',
+            dueDate: contractorTermPayDate(sanitizeDate(inv.issue_date), 'term2', sanitizeDate(inv.term2_due_date || inv.due_date || inv.issue_date)),
             issueDate: sanitizeDate(inv.issue_date),
             amount: t2,
             iban
@@ -2085,57 +2734,199 @@ export default function App() {
 
   const contractorAdvanceCuts = useMemo(() => {
     const ym = currentPayYearMonth();
-    const byKey = new Map<string, { cut: number; applies: { id: any; remaining: number; apply: number }[] }>();
+    const byKey = new Map<string, { cut: number; applies: { id: any; remaining: number; apply: number; isInst: boolean }[] }>();
+    const addCut = (name: string, remaining: number, apply: number, isInst: boolean, id: any) => {
+      const key = normalizeContractorKey(name);
+      if (key.length < 3 || apply <= 0) return;
+      const cur = byKey.get(key) || { cut: 0, applies: [] };
+      cur.cut += apply;
+      cur.applies.push({ id, remaining, apply, isInst });
+      byKey.set(key, cur);
+    };
+
     (dbAdvances || []).forEach((a: any) => {
-      if (a.target_type !== 'contractor') return;
-      if (String(a.last_applied_month || '') === ym) return;
+      const t = String(a.target_type || '');
+      if (t && t !== 'contractor' && t !== 'subcontractor') return;
       const remaining = a.remaining_amount === null || a.remaining_amount === undefined
         ? cleanNumber(a.total_amount)
         : cleanNumber(a.remaining_amount);
       if (remaining <= 0) return;
-      const key = normalizeContractorKey(String(a.target_name || a.target_id || ''));
-      if (key.length < 3) return;
       const inst = Math.max(1, Number(a.total_installments) || 1);
-      const isInst = a.payment_type === 'contractor_installment_advance' || inst > 1;
+      const isInst = inst > 1;
+      if (isInst && String(a.last_applied_month || '') === ym) return;
       const apply = Math.round((isInst ? Math.min(remaining, cleanNumber(a.total_amount) / inst) : remaining) * 100) / 100;
-      if (apply <= 0) return;
-      const cur = byKey.get(key) || { cut: 0, applies: [] };
-      cur.cut += apply;
-      cur.applies.push({ id: a.id, remaining, apply });
-      byKey.set(key, cur);
+      addCut(String(a.target_name || a.target_id || ''), remaining, apply, isInst, a.id);
     });
-    return byKey;
-  }, [dbAdvances]);
 
-  const decorateBankLinesWithAdvance = (lines: typeof bankTermLines) => {
-    const firstLineId = new Map<string, string>();
-    [...lines]
-      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '') || a.lineId.localeCompare(b.lineId))
-      .forEach(l => {
-        const k = normalizeContractorKey(l.contractorName);
-        if (k && !firstLineId.has(k)) firstLineId.set(k, l.lineId);
-      });
-    return lines.map(l => {
-      const k = normalizeContractorKey(l.contractorName);
-      const cut = firstLineId.get(k) === l.lineId ? (contractorAdvanceCuts.get(k)?.cut || 0) : 0;
-      const netAmount = Math.round(Math.max(0, l.amount - cut) * 100) / 100;
-      return { ...l, advanceCut: cut, netAmount };
+    (dbInvoices || []).forEach((inv: any) => {
+      const no = String(inv.invoice_no || '');
+      const isAdvCat = inv.category === 'subcontractor_advance_paid';
+      const isAdvTitle = no.toUpperCase().includes('AVANS');
+      if (!isAdvCat && !isAdvTitle) return;
+      if (inv.category === 'subcontractor_invoice') return;
+      const name = extractAdvanceContractorName(no);
+      const already = [...byKey.keys()].some(ak => contractorKeysLooselyMatch(ak, name));
+      if (already) return;
+      const amt = cleanNumber(inv.total_amount);
+      if (amt <= 0) return;
+      addCut(name, amt, amt, false, 'invadv_' + inv.id);
     });
+
+    return byKey;
+  }, [dbAdvances, dbInvoices]);
+
+  const findContractorAdvanceInfo = (contractorName: string) => {
+    const k = normalizeContractorKey(contractorName);
+    type AdvInfo = { mapKey: string; cut: number; applies: { id: any; remaining: number; apply: number; isInst: boolean }[] };
+    if (!k) return undefined as undefined | AdvInfo;
+    const direct = contractorAdvanceCuts.get(k);
+    if (direct) return { mapKey: k, ...direct };
+    let best: AdvInfo | undefined;
+    contractorAdvanceCuts.forEach((val, ak) => {
+      if (!ak || ak.length < 4) return;
+      if (!contractorKeysLooselyMatch(k, ak)) return;
+      if (!best || ak.length > best.mapKey.length) best = { mapKey: ak, cut: val.cut, applies: val.applies };
+    });
+    return best;
   };
 
-  const displayBankTermLines = useMemo(() => {
-    const selectedKeys = new Set(selectedBankTermLines.map(l => normalizeContractorKey(l.contractorName)));
-    const previewSource = selectedBankTermLines.length
-      ? bankTermLines.map(l => {
-          const k = normalizeContractorKey(l.contractorName);
-          if (selectedKeys.has(k) && !bankSelectedLines[l.lineId]) return null;
-          return l;
-        }).filter(Boolean) as typeof bankTermLines
-      : bankTermLines;
-    const decoratedPreview = decorateBankLinesWithAdvance(previewSource);
-    const cutById = new Map(decoratedPreview.map(l => [l.lineId, l]));
-    return bankTermLines.map(l => cutById.get(l.lineId) || { ...l, advanceCut: 0, netAmount: l.amount });
-  }, [bankTermLines, selectedBankTermLines, bankSelectedLines, contractorAdvanceCuts]);
+  const canonicalContractorKey = (contractorName: string) => {
+    const adv = findContractorAdvanceInfo(contractorName);
+    if (adv) return adv.mapKey;
+    const sub = (dbSubcontractors || []).find(s => matchesContractor(s, contractorName));
+    if (sub) return normalizeContractorKey(sub.company_name || sub.name);
+    return normalizeContractorKey(contractorName);
+  };
+
+  const decorateBankLinesWithAdvance = (lines: typeof bankTermLines) => {
+    const leftover = new Map<string, number>();
+    const decorated = new Map<string, (typeof bankTermLines)[number] & { advanceCut: number; netAmount: number }>();
+    const selectedIds = new Set(lines.map(l => l.lineId));
+    [...lines]
+      .sort((a, b) => {
+        if (a.term !== b.term) return a.term === 'term1' ? -1 : 1;
+        return (a.dueDate || '').localeCompare(b.dueDate || '') || a.lineId.localeCompare(b.lineId);
+      })
+      .forEach(l => {
+        const k = canonicalContractorKey(l.contractorName);
+        const info = findContractorAdvanceInfo(l.contractorName);
+        if (k && !leftover.has(k + ':p')) {
+          const inst = (info?.applies || []).filter(a => a.isInst).reduce((s, a) => s + a.apply, 0);
+          const pesin = (info?.applies || []).filter(a => !a.isInst).reduce((s, a) => s + a.apply, 0);
+          leftover.set(k + ':i', inst);
+          leftover.set(k + ':p', pesin);
+        }
+        let instPool = leftover.get(k + ':i') || 0;
+        let pesinPool = leftover.get(k + ':p') || 0;
+        const unpaidTerm1Held = l.term === 'term2' && bankTermLines.some(x =>
+          canonicalContractorKey(x.contractorName) === k &&
+          x.term === 'term1' &&
+          !selectedIds.has(x.lineId)
+        );
+        let cut = 0;
+        if (!unpaidTerm1Held) {
+          if (l.term === 'term1' && instPool > 0) {
+            const instCut = Math.round(Math.min(l.amount, instPool) * 100) / 100;
+            cut += instCut;
+            instPool = Math.round((instPool - instCut) * 100) / 100;
+          }
+          const pesinCut = Math.round(Math.min(l.amount - cut, pesinPool) * 100) / 100;
+          cut += pesinCut;
+          pesinPool = Math.round((pesinPool - pesinCut) * 100) / 100;
+        }
+        leftover.set(k + ':i', instPool);
+        leftover.set(k + ':p', pesinPool);
+        decorated.set(l.lineId, {
+          ...l,
+          advanceCut: cut,
+          netAmount: Math.round(Math.max(0, l.amount - cut) * 100) / 100
+        });
+      });
+    return lines.map(l => decorated.get(l.lineId) || { ...l, advanceCut: 0, netAmount: l.amount });
+  };
+
+  const allDecoratedBankLines = useMemo(
+    () => decorateBankLinesWithAdvance(bankTermLines),
+    [bankTermLines, contractorAdvanceCuts, dbSubcontractors]
+  );
+
+  const decoratedBankByLineId = useMemo(() => {
+    const m = new Map<string, (typeof allDecoratedBankLines)[number]>();
+    allDecoratedBankLines.forEach(l => m.set(l.lineId, l));
+    return m;
+  }, [allDecoratedBankLines]);
+
+  const displayBankTermLines = allDecoratedBankLines;
+
+  const sentBatchLineIds = useMemo(() => {
+    const ids = new Set<string>();
+    (dbPaymentBatches || []).forEach((b: any) => {
+      if (String(b.status) !== 'sent') return;
+      const lines = (b.payload && b.payload.lines) || [];
+      if (!Array.isArray(lines)) return;
+      lines.forEach((l: any) => { if (l.lineId) ids.add(String(l.lineId)); });
+    });
+    return ids;
+  }, [dbPaymentBatches]);
+
+  const payableBankTermLines = useMemo(
+    () => displayBankTermLines.filter(l => (l.netAmount || 0) > 0.009 && !sentBatchLineIds.has(l.lineId)),
+    [displayBankTermLines, sentBatchLineIds]
+  );
+
+  const waveBankTermLines = useMemo(() => {
+    if (bankWaveFilter === 'all') return payableBankTermLines;
+    return payableBankTermLines.filter(l => l.term === bankWaveFilter);
+  }, [payableBankTermLines, bankWaveFilter]);
+
+  const bankContractorRows = useMemo(() => {
+    const map = new Map<string, {
+      groupKey: string;
+      contractorName: string;
+      iban: string;
+      netAmount: number;
+      advanceCut: number;
+      lineIds: string[];
+      invoiceNos: string[];
+      dueDate: string;
+    }>();
+    waveBankTermLines.forEach(l => {
+      const groupKey = canonicalContractorKey(l.contractorName) || l.contractorName;
+      const cur = map.get(groupKey) || {
+        groupKey,
+        contractorName: l.contractorName,
+        iban: l.iban,
+        netAmount: 0,
+        advanceCut: 0,
+        lineIds: [] as string[],
+        invoiceNos: [] as string[],
+        dueDate: l.dueDate || ''
+      };
+      cur.netAmount += l.netAmount;
+      cur.advanceCut += l.advanceCut || 0;
+      cur.lineIds.push(l.lineId);
+      if (l.invoiceNo && !cur.invoiceNos.includes(l.invoiceNo)) cur.invoiceNos.push(l.invoiceNo);
+      if (l.iban && l.iban !== 'IBAN Eksik' && (cur.iban === 'IBAN Eksik' || !cur.iban)) cur.iban = l.iban;
+      if (l.dueDate && (!cur.dueDate || l.dueDate < cur.dueDate)) cur.dueDate = l.dueDate;
+      if ((l.contractorName || '').length > (cur.contractorName || '').length) cur.contractorName = l.contractorName;
+      map.set(groupKey, cur);
+    });
+    const rows = Array.from(map.values());
+    rows.sort((a, b) => {
+      let comparison = 0;
+      if (bankSortField === 'contractorName') {
+        comparison = a.contractorName.localeCompare(b.contractorName, 'tr-TR', { sensitivity: 'base' });
+      } else if (bankSortField === 'iban') {
+        comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
+      } else if (bankSortField === 'amount') {
+        comparison = a.netAmount - b.netAmount;
+      } else {
+        comparison = (a.dueDate || '').localeCompare(b.dueDate || '');
+      }
+      return bankSortOrder === 'asc' ? comparison : -comparison;
+    });
+    return rows;
+  }, [waveBankTermLines, bankSortField, bankSortOrder]);
   // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
   const processedEmployees = useMemo(() => {
     const ym = currentPayYearMonth();
@@ -2192,32 +2983,81 @@ export default function App() {
     return { totalBase, totalBonus, totalAdv, totalNet, totalDebt, count: processedEmployees.length };
   }, [processedEmployees]);
     
+  const resolveDecoratedBankLines = (lines: typeof bankTermLines) =>
+    lines
+      .map(l => decoratedBankByLineId.get(l.lineId) || { ...l, advanceCut: 0, netAmount: l.amount })
+      .filter(l => (l.netAmount || 0) > 0.009);
+
   const bankLiveSelectionSummary = useMemo(() => {
-    const decorated = decorateBankLinesWithAdvance(selectedBankTermLines);
+    const decorated = resolveDecoratedBankLines(selectedBankTermLines);
     const names = new Set(decorated.map(l => l.contractorName));
     const total = decorated.reduce((sum, l) => sum + l.netAmount, 0);
     return { total, count: names.size, lineCount: decorated.length };
-  }, [selectedBankTermLines, contractorAdvanceCuts]);
+  }, [selectedBankTermLines, decoratedBankByLineId]);
+
+  const applyAdvanceUsageToDb = async (lines: { contractorName: string; advanceCut: number }[]) => {
+    const ym = currentPayYearMonth();
+    const usedByKey = new Map<string, { info: NonNullable<ReturnType<typeof findContractorAdvanceInfo>>; used: number }>();
+    for (const line of lines) {
+      if (!line.advanceCut) continue;
+      const info = findContractorAdvanceInfo(line.contractorName);
+      const key = info?.mapKey || canonicalContractorKey(line.contractorName);
+      if (!key || !info) continue;
+      const cur = usedByKey.get(key) || { info, used: 0 };
+      cur.used += line.advanceCut;
+      usedByKey.set(key, cur);
+    }
+    for (const { info, used } of usedByKey.values()) {
+      let left = Math.round(used * 100) / 100;
+      for (const ap of info.applies) {
+        if (left <= 0) break;
+        if (!ap.id || String(ap.id).startsWith('invadv_')) continue;
+        const take = Math.round(Math.min(ap.remaining, ap.apply, left) * 100) / 100;
+        if (take <= 0) continue;
+        const nextRemaining = Math.round(Math.max(0, ap.remaining - take) * 100) / 100;
+        left = Math.round((left - take) * 100) / 100;
+        const payload: any = { remaining_amount: nextRemaining };
+        if (ap.isInst) payload.last_applied_month = ym;
+        const { error } = await supabase.from('advance_payments').update(payload).eq('id', ap.id);
+        if (error && /last_applied_month/i.test(error.message)) {
+          await supabase.from('advance_payments').update({ remaining_amount: nextRemaining }).eq('id', ap.id);
+        }
+      }
+    }
+  };
 
   const handleToggleSelectAllBank = () => {
-    const allSelected = bankTermLines.length > 0 && bankTermLines.every(l => bankSelectedLines[l.lineId]);
+    const allSelected = waveBankTermLines.length > 0 && waveBankTermLines.every(l => bankSelectedLines[l.lineId]);
     const next: { [key: string]: boolean } = {};
-    bankTermLines.forEach(l => {
+    waveBankTermLines.forEach(l => {
       next[l.lineId] = !allSelected;
+    });
+    setBankSelectedLines(next);
+  };
+
+  const handleToggleBankContractor = (lineIds: string[]) => {
+    const allOn = lineIds.length > 0 && lineIds.every(id => bankSelectedLines[id]);
+    const next = { ...bankSelectedLines };
+    lineIds.forEach(id => {
+      next[id] = !allOn;
     });
     setBankSelectedLines(next);
   };
 
   const handleDownloadBankExcel = () => {
     if (selectedBankTermLines.length === 0) {
-      alert('Lütfen ödemek istediğiniz fatura vadelerini tek tek işaretleyin. Üst üste biriken faturaların hepsi otomatik seçilmez.');
+      alert('Lütfen ödemek istediğiniz alt yüklenicileri işaretleyin. Excel’de her kişi için tek tutar çıkar.');
       return;
     }
 
-    const decoratedSelected = decorateBankLinesWithAdvance(selectedBankTermLines);
+    const decoratedSelected = resolveDecoratedBankLines(selectedBankTermLines);
+    if (decoratedSelected.length === 0) {
+      alert('Seçilen ödemelerin tamamı avans ile kapandı. Bankaya gidecek tutar yok.');
+      return;
+    }
     const grouped = new Map<string, { contractorName: string; iban: string; amount: number; notes: string[] }>();
     decoratedSelected.forEach(line => {
-      const key = normalizeContractorKey(line.contractorName) || line.contractorName;
+      const key = canonicalContractorKey(line.contractorName) || line.contractorName;
       if (!grouped.has(key)) {
         grouped.set(key, { contractorName: line.contractorName, iban: line.iban, amount: 0, notes: [] });
       }
@@ -2226,7 +3066,7 @@ export default function App() {
       cur.notes.push(`${line.invoiceNo} ${line.termLabel}${line.advanceCut ? ' −avans' : ''}`);
       if (cur.iban === 'IBAN Eksik' && line.iban !== 'IBAN Eksik') cur.iban = line.iban;
     });
-    const selectedRows = Array.from(grouped.values());
+    const selectedRows = Array.from(grouped.values()).filter(r => r.amount > 0.009);
 
     const missingIbans = selectedRows.filter(r => !r.iban || r.iban === 'IBAN Eksik' || r.iban.trim().length < 15);
     if (missingIbans.length > 0) {
@@ -2246,55 +3086,200 @@ export default function App() {
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Toplu Odeme');
-    XLSX.writeFile(workbook, `Tazeyol_Banka_Odeme_Talimati_${new Date().toISOString().split('T')[0]}.xlsx`);
+    const todayStr = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(workbook, `Tazeyol_Banka_Odeme_Talimati_${todayStr}.xlsx`);
 
-    setTimeout(async () => {
-      if (window.confirm(`Banka Exceli oluşturuldu.\n\nYalnızca işaretlediğiniz ${selectedBankTermLines.length} vade satırı "Ödendi" kapansın mı? İşaretlemediğiniz birikmiş faturalar açık kalır.`)) {
-        try {
-          const byInvoice = new Map<any, { term1?: boolean; term2?: boolean }>();
-          selectedBankTermLines.forEach(line => {
-            const cur = byInvoice.get(line.invoiceId) || {};
-            if (line.term === 'term1') cur.term1 = true;
-            if (line.term === 'term2') cur.term2 = true;
-            byInvoice.set(line.invoiceId, cur);
-          });
-          for (const [invoiceId, terms] of byInvoice) {
-            const inv = dbInvoices.find(i => i.id === invoiceId);
-            if (!inv) continue;
-            const updates: any = {};
-            if (terms.term1) updates.term1_status = 'paid';
-            if (terms.term2) updates.term2_status = 'paid';
-            const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
-            const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
-            if (isT1Paid && isT2Paid) updates.status = 'paid';
-            await supabase.from('invoices').update(updates).eq('id', invoiceId);
-          }
-          const ym = currentPayYearMonth();
-          const touched = new Set<string>();
-          for (const line of decoratedSelected) {
-            if (!line.advanceCut) continue;
-            const key = normalizeContractorKey(line.contractorName);
-            if (touched.has(key)) continue;
-            touched.add(key);
-            const info = contractorAdvanceCuts.get(key);
-            if (!info) continue;
-            for (const ap of info.applies) {
-              const nextRemaining = Math.round(Math.max(0, ap.remaining - ap.apply) * 100) / 100;
-              const payload: any = { remaining_amount: nextRemaining, last_applied_month: ym };
-              const { error } = await supabase.from('advance_payments').update(payload).eq('id', ap.id);
-              if (error && /last_applied_month/i.test(error.message)) {
-                await supabase.from('advance_payments').update({ remaining_amount: nextRemaining }).eq('id', ap.id);
-              }
-            }
-          }
-          setBankSelectedLines({});
-          alert('Yalnızca seçilen vadeler kapatıldı. Bu ayın avans taksiti ilk ödemeden düşüldü. Diğer birikmiş faturalar açık duruyor.');
-          loadPortalData();
-        } catch (err: any) {
-          alert('Durum güncelleme hatası: ' + err.message);
+    const cashTotal = selectedRows.reduce((s, r) => s + r.amount, 0);
+    const payload = {
+      rows: selectedRows.map(r => ({ contractorName: r.contractorName, iban: r.iban, amount: Math.round(r.amount * 100) / 100 })),
+      lines: decoratedSelected.map(l => ({
+        lineId: l.lineId,
+        invoiceId: l.invoiceId,
+        term: l.term,
+        contractorName: l.contractorName,
+        netAmount: l.netAmount,
+        advanceCut: l.advanceCut || 0
+      }))
+    };
+    const waveLabel = bankWaveFilter === 'term1' ? '1 nci ödeme' : bankWaveFilter === 'term2' ? '2 nci ödeme' : 'karışık / kalan';
+    supabase.from('payment_batches').insert([{
+      pay_date: todayStr,
+      status: 'sent',
+      title: `${todayStr} banka talimatı (${waveLabel})`,
+      total_amount: Math.round(cashTotal * 100) / 100,
+      contractor_count: selectedRows.length,
+      payload
+    }]).then(({ error }) => {
+      if (error) {
+        alert('Excel indi ama talimat partisi kaydedilemedi. setup_payment_batches.sql dosyasını SQL Editor’da çalıştırın.\n' + error.message);
+        return;
+      }
+      setBankSelectedLines({});
+      loadPortalData();
+      alert(`Talimat Excel’i indirildi. Ödendi işaretlenmedi.\nBanka başarılı raporu gelince aşağıdaki partiden “Ödendi işle” deyin.\n${selectedRows.length} kişi, ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`);
+    });
+  };
+
+  const handleConfirmPaymentBatch = async (batch: any) => {
+    if (!isAdmin) return;
+    if (String(batch.status) === 'paid') {
+      alert('Bu parti zaten ödendi işlendi.');
+      return;
+    }
+    const payload = batch.payload || {};
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    const lines = Array.isArray(payload.lines) ? payload.lines : [];
+    const cashTotal = rows.reduce((s: number, r: any) => s + cleanNumber(r.amount), 0);
+    const payDate = sanitizeDate(batch.pay_date) || new Date().toISOString().split('T')[0];
+    if (!window.confirm(`Banka bu partiyi ödedi mi?\n${formatDateTR(payDate)} · ${rows.length} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır.`)) return;
+    try {
+      const byInvoice = new Map<any, { term1?: boolean; term2?: boolean }>();
+      lines.forEach((line: any) => {
+        const cur = byInvoice.get(line.invoiceId) || {};
+        if (line.term === 'term1') cur.term1 = true;
+        if (line.term === 'term2') cur.term2 = true;
+        byInvoice.set(line.invoiceId, cur);
+      });
+      for (const [invoiceId, terms] of byInvoice) {
+        const inv = dbInvoices.find(i => i.id === invoiceId);
+        if (!inv) continue;
+        const updates: any = {};
+        if (terms.term1) updates.term1_status = 'paid';
+        if (terms.term2) updates.term2_status = 'paid';
+        const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
+        const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
+        if (isT1Paid && isT2Paid) updates.status = 'paid';
+        await supabase.from('invoices').update(updates).eq('id', invoiceId);
+      }
+      const existing = (dbInvoices || []).filter((i: any) => i.category === 'subcontractor_paid_outflow');
+      const cashRows = rows
+        .filter((r: any) => cleanNumber(r.amount) > 0.009)
+        .filter((r: any) => !existing.some((i: any) =>
+          sanitizeDate(i.issue_date) === payDate &&
+          Math.abs(cleanNumber(i.total_amount) - cleanNumber(r.amount)) < 0.05 &&
+          contractorKeysLooselyMatch(r.contractorName, extractContractorName(i.invoice_no || ''))
+        ))
+        .map((r: any) => ({
+          invoice_no: `ÖDEME - Banka talimatı - ${r.contractorName}`,
+          direction: 'incoming',
+          category: 'subcontractor_paid_outflow',
+          total_amount: Math.round(cleanNumber(r.amount) * 100) / 100,
+          issue_date: payDate,
+          due_date: payDate,
+          status: 'paid'
+        }));
+      if (cashRows.length > 0) {
+        const { error: cashErr } = await supabase.from('invoices').insert(cashRows);
+        if (cashErr) throw cashErr;
+      }
+      await applyAdvanceUsageToDb(lines.map((l: any) => ({ contractorName: l.contractorName, advanceCut: cleanNumber(l.advanceCut) })));
+      const { error: stErr } = await supabase.from('payment_batches').update({ status: 'paid', pay_date: payDate }).eq('id', batch.id);
+      if (stErr) throw stErr;
+      alert(`Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ düşüldü.`);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Parti onay hatası: ' + err.message);
+    }
+  };
+
+  const handleCancelPaymentBatch = async (batch: any) => {
+    if (!isAdmin) return;
+    if (String(batch.status) === 'paid') {
+      alert('Ödendi işlenmiş parti iptal edilmez.');
+      return;
+    }
+    if (!window.confirm('Bu talimatı iptal edeyim mi? Excel bankaya gitmediyse satırlar tekrar listelenir. Cariye işlem yazılmaz.')) return;
+    const { error } = await supabase.from('payment_batches').update({ status: 'cancelled' }).eq('id', batch.id);
+    if (error) {
+      alert('İptal hatası: ' + error.message);
+      return;
+    }
+    loadPortalData();
+  };
+
+  const handleImportPaidBankExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isAdmin) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const payDate = window.prompt('Bu Excel hangi günde ödendi? (YYYY-AA-GG)', new Date().toISOString().split('T')[0]);
+    if (!payDate) {
+      e.target.value = '';
+      return;
+    }
+    const date = sanitizeDate(payDate);
+    if (!date) {
+      alert('Geçerli bir tarih girin.');
+      e.target.value = '';
+      return;
+    }
+    const invYmRaw = window.prompt('Bu tutarlar hangi ayın faturaları? (YYYY-AA)\nÖrn. 26.10 ve 05.11 ödemeleri için 2026-09', date.slice(0, 7));
+    const invYm = /^\d{4}-\d{2}$/.test(String(invYmRaw || '').trim()) ? String(invYmRaw).trim() : '';
+    const waveRaw = window.prompt('1 nci ödeme mi 2 nci mi? (1 veya 2, boş = yalnızca cariye ödeme yaz)', '1');
+    const closeTerm: 'term1' | 'term2' | null = String(waveRaw || '').trim() === '2' ? 'term2' : (String(waveRaw || '').trim() === '1' ? 'term1' : null);
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const existing = (dbInvoices || []).filter((i: any) => i.category === 'subcontractor_paid_outflow');
+      const toInsert: any[] = [];
+      let skipped = 0;
+      rows.forEach((row: any) => {
+        const name = String(row['Alıcı Unvanı'] || row['Unvan'] || row['Ad Soyad'] || row['Alt Yüklenici'] || '').trim();
+        const amt = cleanNumber(row['Ödeme Tutarı (TL)'] || row['Tutar'] || row['Tutar (TL)'] || row['Net']);
+        if (!name || amt <= 0) return;
+        const dup = existing.some((i: any) => {
+          if (Math.abs(cleanNumber(i.total_amount) - amt) > 0.05) return false;
+          if (sanitizeDate(i.issue_date) !== date) return false;
+          return contractorKeysLooselyMatch(name, extractContractorName(i.invoice_no || ''));
+        });
+        if (dup || toInsert.some(x => contractorKeysLooselyMatch(name, extractContractorName(x.invoice_no)) && Math.abs(x.total_amount - amt) < 0.05)) {
+          skipped += 1;
+          return;
+        }
+        toInsert.push({
+          invoice_no: `ÖDEME - Banka talimatı - ${name}`,
+          direction: 'incoming',
+          category: 'subcontractor_paid_outflow',
+          total_amount: Math.round(amt * 100) / 100,
+          issue_date: date,
+          due_date: date,
+          status: 'paid'
+        });
+      });
+      if (toInsert.length) {
+        const { error } = await supabase.from('invoices').insert(toInsert);
+        if (error) throw error;
+      }
+      let closed = 0;
+      if (closeTerm && invYm) {
+        const names = toInsert.map(x => extractContractorName(x.invoice_no));
+        const extraNames = rows.map((row: any) => String(row['Alıcı Unvanı'] || row['Unvan'] || row['Ad Soyad'] || row['Alt Yüklenici'] || '').trim()).filter(Boolean);
+        const allNames = [...names, ...extraNames];
+        for (const inv of dbInvoices || []) {
+          if (inv.category !== 'subcontractor_invoice') continue;
+          const issueYm = sanitizeDate(inv.issue_date || '').slice(0, 7);
+          if (issueYm !== invYm) continue;
+          const contractor = extractContractorName(inv.invoice_no || '');
+          if (!allNames.some(n => contractorKeysLooselyMatch(n, contractor))) continue;
+          const updates: any = {};
+          if (closeTerm === 'term1' && inv.term1_status !== 'paid') updates.term1_status = 'paid';
+          if (closeTerm === 'term2' && inv.term2_status !== 'paid') updates.term2_status = 'paid';
+          if (!Object.keys(updates).length) continue;
+          const t1 = updates.term1_status === 'paid' || inv.term1_status === 'paid';
+          const t2 = updates.term2_status === 'paid' || inv.term2_status === 'paid';
+          if (t1 && t2) updates.status = 'paid';
+          const { error } = await supabase.from('invoices').update(updates).eq('id', inv.id);
+          if (!error) closed += 1;
         }
       }
-    }, 500);
+      alert(`${date} tarihli ${toInsert.length} ödeme carilere işlendi.${skipped ? `\n${skipped} satır zaten vardı, atlandı.` : ''}${closed ? `\n${invYm} faturalarında ${closed} vade kapatıldı.` : ''}`);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Ödeme Excel yükleme hatası: ' + err.message);
+    } finally {
+      e.target.value = '';
+    }
   };
 
   // 11. HAKEDİŞ SATIRINDA ESNEK VADE ÖDEME (1. Vade / 2. Vade / Tümü)
@@ -2302,13 +3287,19 @@ export default function App() {
     if (!isAdmin) return;
     const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
     const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
+    const line1 = decoratedBankByLineId.get(`${inv.id}-term1`);
+    const line2 = decoratedBankByLineId.get(`${inv.id}-term2`);
 
     let payAmt = 0;
-    if (term === 'term1') payAmt = t1;
-    else if (term === 'term2') payAmt = t2;
-    else if (term === 'both') payAmt = (inv.term1_status !== 'paid' ? t1 : 0) + (inv.term2_status !== 'paid' ? t2 : 0);
+    if (term === 'term1') payAmt = line1 ? line1.netAmount : t1;
+    else if (term === 'term2') payAmt = line2 ? line2.netAmount : t2;
+    else if (term === 'both') {
+      payAmt =
+        (inv.term1_status !== 'paid' ? (line1 ? line1.netAmount : t1) : 0) +
+        (inv.term2_status !== 'paid' ? (line2 ? line2.netAmount : t2) : 0);
+    }
 
-    const confirmMsg = `${inv.invoice_no}\nÖdenecek Tutar: ${payAmt.toLocaleString('tr-TR')} ₺\nBu ödemeyi onaylıyor musunuz? (Kasadan fiilen düşülecektir)`;
+    const confirmMsg = `${inv.invoice_no}\nÖdenecek tutar (avans mahsubu düşülmüş): ${payAmt.toLocaleString('tr-TR')} ₺\nBu ödemeyi onaylıyor musunuz? (Kasadan fiilen düşülecektir)`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -2329,17 +3320,34 @@ export default function App() {
 
       await supabase.from('invoices').update(updates).eq('id', inv.id);
 
-      await supabase.from('invoices').insert([{
-        invoice_no: `ÖDEME - ${inv.invoice_no} (${term === 'term1' ? '1. Vade' : term === 'term2' ? '2. Vade' : 'Tamamı'})`,
-        direction: 'incoming',
-        category: 'subcontractor_paid_outflow',
-        total_amount: payAmt,
-        issue_date: todayStr,
-        due_date: todayStr,
-        status: 'paid'
-      }]);
+      if (payAmt > 0.009) {
+        const contractor = extractContractorName(inv.invoice_no || '');
+        const already = (dbInvoices || []).some((i: any) => {
+          if (i.category !== 'subcontractor_paid_outflow' || i.status !== 'paid') return false;
+          if (!contractorKeysLooselyMatch(contractor, extractContractorName(i.invoice_no || ''))) return false;
+          const ia = cleanNumber(i.total_amount);
+          const idate = sanitizeDate(i.issue_date);
+          if (idate === todayStr && amountsClose(ia, payAmt, 0.05)) return true;
+          if (/tamam|1 ve 2/i.test(String(i.invoice_no || '')) && (amountsClose(ia, payAmt, 0.51) || amountsClose(ia, payAmt * 2, 1))) return true;
+          return false;
+        });
+        if (!already) {
+          await supabase.from('invoices').insert([{
+            invoice_no: `ÖDEME - ${inv.invoice_no} (${term === 'term1' ? '1 nci ödeme' : term === 'term2' ? '2 nci ödeme' : 'Tamamı'})`,
+            direction: 'incoming',
+            category: 'subcontractor_paid_outflow',
+            total_amount: payAmt,
+            issue_date: todayStr,
+            due_date: todayStr,
+            status: 'paid'
+          }]);
+        }
+      }
 
-      alert('Ödeme başarıyla işlendi ve kasadan düşüldü!');
+      const paidCuts = [term === 'term2' ? line2 : line1, term === 'both' ? line2 : null].filter(Boolean) as NonNullable<typeof line1>[];
+      await applyAdvanceUsageToDb(paidCuts);
+
+      alert('Ödeme başarıyla işlendi. Avans önce 1 nci ödemeden, gerekirse 2 nci ödemeden mahsup edildi.');
       loadPortalData();
     } catch (err: any) {
       alert('Ödeme hatası: ' + err.message);
@@ -2361,7 +3369,7 @@ export default function App() {
       const isInstallment = subPaymentFormData.actionType === 'installment_advance';
       const singleDeduction = isInstallment ? amt / instCount : amt;
 
-      await supabase.from('invoices').insert([{
+      const { error: invErr } = await supabase.from('invoices').insert([{
         invoice_no: `AVANS - ${subPaymentFormData.subcontractorName} (${isInstallment ? instCount + ' Taksit' : 'Peşin Avans'})`,
         direction: 'incoming',
         category: 'subcontractor_advance_paid',
@@ -2370,8 +3378,9 @@ export default function App() {
         due_date: todayStr,
         status: 'paid'
       }]);
+      if (invErr) throw invErr;
 
-      await supabase.from('advance_payments').insert([{
+      const advRow: any = {
         target_type: 'contractor',
         target_id: subPaymentFormData.subcontractorName,
         target_name: subPaymentFormData.subcontractorName,
@@ -2384,7 +3393,14 @@ export default function App() {
         notes: isInstallment 
           ? `Taksit başı düşüm: ${singleDeduction.toLocaleString('tr-TR')} TL (Kalan: ${instCount - 1} Taksit / ${(amt - singleDeduction).toLocaleString('tr-TR')} TL)`
           : 'Peşin avans (Faturadan mahsup edilecek)'
-      }]);
+      };
+      let { error: advErr } = await supabase.from('advance_payments').insert([advRow]);
+      if (advErr && /last_applied_month/i.test(advErr.message)) {
+        delete advRow.last_applied_month;
+        const retry = await supabase.from('advance_payments').insert([advRow]);
+        advErr = retry.error;
+      }
+      if (advErr) throw advErr;
 
       alert(`Taşeron avansı (${amt.toLocaleString('tr-TR')} ₺) başarıyla işlendi ve ${subPaymentFormData.targetAccount === 'bank' ? 'Banka' : 'Kasa'} çıkışı yapıldı!`);
       setIsSubPaymentModalOpen(false);
@@ -2686,17 +3702,25 @@ export default function App() {
       return;
     }
 
-    const totalBulkAmount = selectedIds.reduce((sum, id) => sum + cleanNumber(bulkSalaryItems[Number(id)].amount), 0);
-    const confirm = window.confirm(`Seçilen ${selectedIds.length} personelin toplam ${totalBulkAmount.toLocaleString('tr-TR')} ₺ maaş ödemesi ${bulkSalarySource === 'bank' ? 'Banka Hesabından' : 'Elden Kasa'} çıkılsın mı?`);
+    const payRows = selectedIds
+      .map(id => ({ id, amount: cleanNumber(bulkSalaryItems[Number(id)].amount), name: bulkSalaryItems[Number(id)].name }))
+      .filter(row => row.amount > 0);
+    if (payRows.length === 0) {
+      alert('Ödenecek tutar 0 olan kayıtlar atlanır. En az bir kişiye tutar girin.');
+      return;
+    }
+    const totalBulkAmount = payRows.reduce((sum, row) => sum + row.amount, 0);
+    const confirm = window.confirm(`Seçilen ${payRows.length} personele toplam ${totalBulkAmount.toLocaleString('tr-TR')} ₺ ödenecek.\nBu tutar kasadan düşer; personel carisinde kalan borç durur.`);
     if (!confirm) return;
 
     try {
       const today = new Date().toISOString().split('T')[0];
-      const invInserts = selectedIds.map(id => ({
-        invoice_no: `MAAŞ - ${bulkSalaryItems[Number(id)].name} (${bulkSalarySource === 'bank' ? 'Banka' : 'Kasa'})`,
+      const sourceLabel = bulkSalarySource === 'bank' ? 'Banka' : 'Kasa';
+      const invInserts = payRows.map(row => ({
+        invoice_no: `MAAŞ - ${row.name} (#${row.id}) (${sourceLabel})`,
         direction: 'incoming',
         category: 'salary_payroll',
-        total_amount: cleanNumber(bulkSalaryItems[Number(id)].amount),
+        total_amount: row.amount,
         issue_date: today,
         due_date: today,
         status: 'paid'
@@ -2705,7 +3729,7 @@ export default function App() {
       const { error } = await supabase.from('invoices').insert(invInserts);
       if (error) throw error;
 
-      alert('Toplu maaş ödemeleri başarıyla kasadan düşüldü ve ödendi!');
+      alert(`Toplu ödeme işlendi. Kasadan ${totalBulkAmount.toLocaleString('tr-TR')} ₺ düşüldü. Resmi tutarı ödenenlerde kalan (prim vb.) caride durur.`);
       setIsBulkSalaryModalOpen(false);
       loadPortalData();
     } catch (err: any) {
@@ -3104,6 +4128,37 @@ export default function App() {
     });
   };
 
+  const plateRentalRows = useMemo(() => {
+    const term = plateRentalSearch.toLocaleLowerCase('tr-TR').trim();
+    const amountOf = (r: any) => r.collection_kind === 'devlet' ? cleanNumber(r.government_fee) : cleanNumber(r.rent_amount);
+    return (dbPlateRentals || [])
+      .map((r: any) => {
+        const days = daysUntilDate(r.renewal_date);
+        let alert: 'overdue' | 'd15' | 'd30' | null = null;
+        if (days !== null) {
+          if (days <= 0) alert = 'overdue';
+          else if (days <= 15) alert = 'd15';
+          else if (days <= 30) alert = 'd30';
+        }
+        return { ...r, days, alert };
+      })
+      .filter((r: any) => {
+        if (plateRentalTypeFilter !== 'all' && plateVehicleTypeOf(r) !== plateRentalTypeFilter) return false;
+        if (!term) return true;
+        return `${r.plate} ${r.owner_name} ${r.phone || ''} ${plateVehicleTypeOf(r)} ${r.notes || ''}`.toLocaleLowerCase('tr-TR').includes(term);
+      })
+      .sort((a: any, b: any) => {
+        if (plateRentalSort === 'plate') return String(a.plate || '').localeCompare(String(b.plate || ''), 'tr');
+        if (plateRentalSort === 'owner') return String(a.owner_name || '').localeCompare(String(b.owner_name || ''), 'tr');
+        if (plateRentalSort === 'type') return plateVehicleTypeOf(a).localeCompare(plateVehicleTypeOf(b), 'tr');
+        if (plateRentalSort === 'amount') return amountOf(a) - amountOf(b);
+        const ar = a.alert ? 0 : 1;
+        const br = b.alert ? 0 : 1;
+        if (ar !== br) return ar - br;
+        return String(a.renewal_date || '9999').localeCompare(String(b.renewal_date || '9999'));
+      });
+  }, [dbPlateRentals, plateRentalSearch, plateRentalSort, plateRentalTypeFilter]);
+
   // GİRİŞ EKRANI (AUTH)
   if (!authReady) {
     return (
@@ -3187,12 +4242,14 @@ export default function App() {
     { id: 'profitability', label: 'Öz Mal Karlılık & Maliyet', badge: dbProfitability.length, icon: BarChart3 },
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
+    { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
   ];
   const sidebarItems = [
     ...menuItems.filter((item) => item.id === 'overview'),
     ...menuItems
-      .filter((item) => item.id !== 'overview')
+      .filter((item) => item.id !== 'overview' && item.id !== 'plate_rentals')
       .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
+    ...menuItems.filter((item) => item.id === 'plate_rentals'),
   ];
 
   return (
@@ -3520,14 +4577,30 @@ export default function App() {
               </button>
 
               <div className="bg-[#009fe3] text-white p-5 rounded-2xl shadow-sm relative overflow-hidden">
-                <div className="flex justify-between items-start">
-                  <span className="text-xs text-blue-100 font-semibold tracking-wider uppercase flex items-center gap-1">
-                    <DollarSign className="w-3.5 h-3.5" /> Güncel Kasa / Banka
-                  </span>
+                <div className="flex justify-between items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCashLedgerFrom('2026-10-01');
+                      setCashLedgerTo(new Date().toISOString().split('T')[0]);
+                      setIsCashLedgerOpen(true);
+                    }}
+                    className="flex-1 text-left hover:opacity-90 transition"
+                    title="Kasa hareketleri"
+                  >
+                    <span className="text-xs text-blue-100 font-semibold tracking-wider uppercase flex items-center gap-1">
+                      <DollarSign className="w-3.5 h-3.5" /> Güncel Kasa / Banka
+                    </span>
+                    <div className="text-2xl font-bold mt-2">
+                      {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    </div>
+                    <span className="text-xs text-blue-100 mt-1 block">Tıklayın: tarih seçip hareketleri görün</span>
+                  </button>
                   {isAdmin && (
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 shrink-0">
                     <button 
-                      onClick={async () => {
+                      onClick={async (e) => {
+                        e.stopPropagation();
                         const raw = window.prompt('Güncel kasa / banka — fiili tutar (₺)', String(cashOpening || 1550000));
                         if (raw === null) return;
                         const next = cleanNumber(raw);
@@ -3545,17 +4618,13 @@ export default function App() {
                       Açılış
                     </button>
                     <button 
-                      onClick={() => setIsCashDepositModalOpen(true)}
+                      onClick={(e) => { e.stopPropagation(); setIsCashDepositModalOpen(true); }}
                       className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded text-[10px] font-bold transition flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Para Ekle
                     </button>
                     </div>
                   )}
                 </div>
-                <div className="text-2xl font-bold mt-2">
-                  {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </div>
-                <span className="text-xs text-blue-100 mt-1 block">Fiili {cashOpening.toLocaleString('tr-TR')} ₺ ({formatDateTR(cashOpeningAsOf)}). Sonrası tahsilat − ödeme.</span>
               </div>
             </div>
 
@@ -3616,77 +4685,22 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  {dbInvoices
-                    .filter(i => i.category === 'subcontractor_invoice' && (i.term1_status !== 'paid' || i.term2_status !== 'paid'))
-                    .map(inv => {
-                      const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
-                      const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
-                      const isT1Paid = inv.term1_status === 'paid';
-                      const isT2Paid = inv.term2_status === 'paid';
-
-                      const invTitle = String(inv.invoice_no || '');
-                      const subNameOnly = invTitle.includes(' - ') ? invTitle.split(' - ')[1].trim() : invTitle;
-                      const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
-                      const targetKey = cleanTxt(subNameOnly);
-
-                      const activeAdv = dbAdvances.find(a => {
-                        if (a.target_type !== 'contractor') return false;
-                        const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
-                        return targetKey.length >= 4 && (advTarget === targetKey || advTarget.includes(targetKey) || targetKey.includes(advTarget));
-                      });
-
-                      const advInvoice = dbInvoices.find(i => {
-                        const title = String(i.invoice_no || '');
-                        if (!title.toUpperCase().includes('AVANS')) return false;
-                        if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
-                        return targetKey.length >= 4 && cleanTxt(title).includes(targetKey);
-                      });
-
-                      let advDeduction = 0;
-                      if (activeAdv) {
-                        const inst = Math.max(1, activeAdv.total_installments || 1);
-                        advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-                      } else if (advInvoice) {
-                        const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
-                        const inst = match ? parseInt(match[1]) : 1;
-                        advDeduction = cleanNumber(advInvoice.total_amount) / inst;
-                      }
-
-                      const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
-                      const remainingAdvForT2 = isT1Paid ? Math.max(0, advDeduction - t1) : Math.max(0, advDeduction - t1);
-                      const dynamicT2 = isT2Paid ? 0 : Math.max(0, t2 - remainingAdvForT2);
-
-                      let activeTermLabel = '1. Vade';
-                      let activeDueDate = inv.term1_due_date;
-                      let activeAmount = dynamicT1;
-
-                      if (dynamicT1 <= 0 && dynamicT2 > 0) {
-                        activeTermLabel = '2. Vade';
-                        activeDueDate = inv.term2_due_date;
-                        activeAmount = dynamicT2;
-                      }
-
-                      return { ...inv, activeTermLabel, activeDueDate, activeAmount };
-                    })
-                    .filter(inv => inv.activeAmount > 0)
-                    .sort((a, b) => {
-                      const dateA = new Date(sanitizeDate(a.activeDueDate)).getTime();
-                      const dateB = new Date(sanitizeDate(b.activeDueDate)).getTime();
-                      return dateA - dateB;
-                    })
+                  {[...allDecoratedBankLines]
+                    .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
+                    .filter(l => l.netAmount > 0)
                     .slice(0, 5)
-                    .map((inv, idx) => (
-                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
+                    .map((line) => (
+                      <div key={line.lineId} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
                         <div>
-                          <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={inv.invoice_no}>
-                            {inv.invoice_no}
+                          <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={line.invoiceNo}>
+                            {line.invoiceNo}
                           </span>
-                          <span className={`text-[11px] font-semibold mt-0.5 block ${new Date(sanitizeDate(inv.activeDueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
-                            {inv.activeTermLabel}: {formatDateTR(inv.activeDueDate)}
+                          <span className={`text-[11px] font-semibold mt-0.5 block ${line.dueDate && new Date(sanitizeDate(line.dueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
+                            {line.termLabel}: {formatDateTR(line.dueDate)}
                           </span>
                         </div>
                         <span className="font-bold text-rose-600 text-sm">
-                          {inv.activeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          {line.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                         </span>
                       </div>
                     ))}
@@ -4060,7 +5074,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Taşeron mutabakat faturaları, taksitli avans mahsubu ve doğrudan vade kapatma.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Cari = fatura − avans (tek kayıt) − fiili ödeme. Avans herkese 1 nci, artanı 2 nci, kalanı sonraki aya. Banka Excel’i ödeme değildir; hakedişte Tamamını Öde fiili tekil ödemedir.</p>
               </div>
               {isAdmin && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -4157,8 +5171,8 @@ export default function App() {
               >
                 Toplam Tutar {subSortField === 'total_amount' ? (subSortOrder === 'asc' ? '↑' : '↓') : '↕'}
               </th>
-                    <th className="py-3 px-3">1. Vade</th>
-                    <th className="py-3 px-3">2. Vade</th>
+                    <th className="py-3 px-3">1 nci ödeme</th>
+                    <th className="py-3 px-3">2 nci ödeme</th>
                     {isAdmin && <th className="py-3 px-3 text-center">Ödeme & İşlem</th>}
                   </tr>
                 </thead>
@@ -4215,50 +5229,12 @@ export default function App() {
                     const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
                     const isT1Paid = inv.term1_status === 'paid';
                     const isT2Paid = inv.term2_status === 'paid';
-                      // Fatura No veya Taşeron Adından Avansı Yakalama
-                    const invTitle = String(inv.invoice_no || '');
-                    const subNameOnly = invTitle.includes(' - ') ? invTitle.split(' - ')[1].trim() : invTitle;
-
-                    const cleanTxt = (s: string) => (s || '').toLocaleLowerCase('tr-TR').replace(/[^a-z0-9]/g, '');
-                    const cleanInv = cleanTxt(invTitle);
-                    const cleanSub = cleanTxt(subNameOnly);
-
-                // Hem dbAdvances tablosundan hem de dbInvoices avans kayıtlarından eşleştirme
-    const targetKey = cleanTxt(subNameOnly || inv.customer_name || inv.invoice_no || '');
-    
-    const activeAdv = dbAdvances.find(a => {
-      if (a.target_type !== 'contractor') return false;
-      const advTarget = cleanTxt(String(a.target_name || a.target_id || ''));
-      return targetKey.length >= 4 && (advTarget === targetKey || advTarget.includes(targetKey) || targetKey.includes(advTarget));
-    });
-
-    const advInvoice = dbInvoices.find(i => {
-      const title = String(i.invoice_no || '');
-      if (!title.toUpperCase().includes('AVANS')) return false;
-      if (i.term1_status === 'paid' && i.term2_status === 'paid') return false;
-      return targetKey.length >= 4 && cleanTxt(title).includes(targetKey);
-    });
-
-    let advDeduction = 0;
-    if (activeAdv) {
-      const inst = Math.max(1, activeAdv.total_installments || 1);
-      advDeduction = cleanNumber(activeAdv.total_amount) / inst;
-    } else if (advInvoice) {
-      const match = String(advInvoice.invoice_no).match(/\((\d+)\s*Taksit\)/i);
-      const inst = match ? parseInt(match[1]) : 1;
-      advDeduction = cleanNumber(advInvoice.total_amount) / inst;
-    }
-
-    const dynamicT1 = isT1Paid ? 0 : Math.max(0, t1 - advDeduction);
-const deductedAdvAmt = isT1Paid ? 0 : Math.min(t1, advDeduction);
-
-// 1. vade ödendiyse, o eski avans 1. vadede kapanmıştır; sadece 1. vadeyi aşan veya yeni avans 2. vadeye geçer:
-const remainingAdvForT2 = isT1Paid 
-  ? Math.max(0, advDeduction - t1) 
-  : Math.max(0, advDeduction - t1);
-
-const dynamicT2 = isT2Paid ? 0 : Math.max(0, t2 - remainingAdvForT2);
-const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
+                    const line1 = decoratedBankByLineId.get(`${inv.id}-term1`);
+                    const line2 = decoratedBankByLineId.get(`${inv.id}-term2`);
+                    const dynamicT1 = isT1Paid ? 0 : (line1 ? line1.netAmount : t1);
+                    const deductedAdvAmt = line1?.advanceCut || 0;
+                    const dynamicT2 = isT2Paid ? 0 : (line2 ? line2.netAmount : t2);
+                    const deductedAdvForT2 = line2?.advanceCut || 0;
                
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
@@ -4274,7 +5250,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     (-{deductedAdvAmt.toLocaleString('tr-TR')} ₺ Avans Mahsubu)
                   </span>
                 )}
-                          <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(inv.term1_due_date)}</span>
+                          <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(contractorTermPayDate(sanitizeDate(inv.issue_date), 'term1', inv.term1_due_date))}</span>
                         </td>
                       <td className="py-3 px-3">
             <span className={`font-semibold block ${isT2Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
@@ -4285,23 +5261,37 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 (-{deductedAdvForT2.toLocaleString('tr-TR')} ₺ Avans Mahsubu)
               </span>
             )}
-            <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : formatDateTR(inv.term2_due_date)}</span>
+            <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : formatDateTR(contractorTermPayDate(sanitizeDate(inv.issue_date), 'term2', inv.term2_due_date))}</span>
           </td>
                         {isAdmin && (
                           <td className="py-3 px-3 text-center">
                             <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                              {!isT1Paid && (
+                              {!isT1Paid && dynamicT1 > 0.009 && (
                                 <button
                                   onClick={() => handlePaySubcontractorTerm(inv, 'term1')}
                                   className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-1 rounded text-[10px] transition">
-                                  1. Vadeyi Öde
+                                  1 nci ödemeyi yap
                                 </button>
                               )}
-                              {!isT2Paid && (
+                              {!isT1Paid && dynamicT1 <= 0.009 && (
+                                <button
+                                  onClick={() => handlePaySubcontractorTerm(inv, 'term1')}
+                                  className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold px-2 py-1 rounded text-[10px] transition">
+                                  1 nci ödemeyi avansla kapat
+                                </button>
+                              )}
+                              {!isT2Paid && dynamicT2 > 0.009 && (
                                 <button
                                   onClick={() => handlePaySubcontractorTerm(inv, 'term2')}
                                   className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-1 rounded text-[10px] transition">
-                                  2. Vadeyi Öde
+                                  2 nci ödemeyi yap
+                                </button>
+                              )}
+                              {!isT2Paid && dynamicT2 <= 0.009 && (
+                                <button
+                                  onClick={() => handlePaySubcontractorTerm(inv, 'term2')}
+                                  className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold px-2 py-1 rounded text-[10px] transition">
+                                  2 nci ödemeyi avansla kapat
                                 </button>
                               )}
                               {(!isT1Paid || !isT2Paid) && (
@@ -4361,7 +5351,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Cari Kartları ve Avans Yönetimi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Taşeronların cari bakiyelerini, geçmiş faturalarını ve avans/ödeme geçmişini yönetin.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Cari bakiye tüm avansı düşer (kalan borç). Banka talimatı ise bu ay ödenecek vadeyi gösterir; taksitli avansta yalnızca bu ayın taksiti düşülür.</p>
               </div>
             </div>
 
@@ -4531,19 +5521,76 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Banka Toplu Ödeme Talimatı (Excel)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Biriken faturalardan ödemek istediğiniz vade satırlarını işaretleyin. Excel yalnızca seçilenleri toplar; diğerleri açık kalır.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Excel indirme = talimat, henüz ödenmedi. Banka başarılı raporu gelince partiyi “Ödendi işle” deyin; cari ve kasa o zaman yazılır. Avans herkese önce 1 nci, artanı 2 nci, kalanı sonraki aya geçer. Bir kişiyi işaretlemek kalan tüm açık tutarını alır; 1 nci / 2 nci filtreleriyle dalga seçilir.</p>
               </div>
 
               {isAdmin ? (
+                <div className="flex flex-wrap items-center gap-2">
+                <label className="cursor-pointer bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition">
+                  <FileUp className="w-4 h-4" /> Ödenen banka Excelini yükle
+                  <input type="file" accept=".xlsx,.xls" onChange={handleImportPaidBankExcel} className="hidden" />
+                </label>
                 <button 
                   onClick={handleDownloadBankExcel}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-sm transition">
                   <Download className="w-4 h-4" /> Seçilenleri Banka Exceli Olarak İndir
                 </button>
+                </div>
               ) : (
                 <span className="text-xs text-rose-600 font-bold">Raporör rolünde Excel indirme yetkisi kapalıdır.</span>
               )}
             </div>
+
+            <div className="flex flex-wrap gap-2">
+              {([
+                ['all', 'Tümü (kalan)'],
+                ['term1', '1 nci ödeme'],
+                ['term2', '2 nci ödeme']
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => { setBankWaveFilter(id); setBankSelectedLines({}); }}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${bankWaveFilter === id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {(dbPaymentBatches || []).filter((b: any) => String(b.status) === 'sent').length > 0 && (
+              <div className="border border-amber-200 bg-amber-50 rounded-xl p-4 space-y-2">
+                <p className="text-xs font-bold text-amber-900">Bankaya giden, henüz ödendi işlenmeyen talimatlar</p>
+                {(dbPaymentBatches || [])
+                  .filter((b: any) => String(b.status) === 'sent')
+                  .sort((a: any, b: any) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+                  .map((b: any) => (
+                    <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 bg-white border border-amber-100 rounded-lg px-3 py-2">
+                      <div>
+                        <div className="text-sm font-bold text-slate-800">{b.title || 'Banka talimatı'}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {formatDateTR(b.pay_date)} · {b.contractor_count || 0} kişi · {cleanNumber(b.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        </div>
+                      </div>
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleConfirmPaymentBatch(b)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg"
+                          >
+                            Ödendi işle
+                          </button>
+                          <button
+                            onClick={() => handleCancelPaymentBatch(b)}
+                            className="bg-white border border-slate-200 text-slate-600 text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-slate-50"
+                          >
+                            İptal
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            )}
 
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 p-4 rounded-xl flex items-center justify-between">
               <div>
@@ -4551,9 +5598,14 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 <span className="text-2xl font-black text-blue-700">
                   {bankLiveSelectionSummary.total.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
+                {displayBankTermLines.some(l => l.advanceCut > 0) && (
+                  <span className="text-[11px] font-semibold text-amber-700 mt-1 block">
+                    Listede avans mahsubu: −{displayBankTermLines.reduce((s, l) => s + (l.advanceCut || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  </span>
+                )}
               </div>
               <span className="bg-blue-200 text-blue-900 font-bold px-3 py-1 rounded-full text-xs">
-                {bankLiveSelectionSummary.lineCount} vade / {bankLiveSelectionSummary.count} alt yüklenici
+                {bankLiveSelectionSummary.count} alt yüklenici
               </span>
             </div>
 
@@ -4565,7 +5617,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                       <button 
                         onClick={handleToggleSelectAllBank}
                         className="font-bold text-blue-600 hover:underline">
-                        {bankTermLines.length > 0 && bankTermLines.every(l => bankSelectedLines[l.lineId]) ? 'Bırak' : 'Tümü'}
+                        {bankContractorRows.length > 0 && bankContractorRows.every(r => r.lineIds.every(id => bankSelectedLines[id])) ? 'Bırak' : 'Tümü'}
                       </button>
                     </th>
                     <th
@@ -4577,8 +5629,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                     >
                       Alt yüklenici {bankSortField === 'contractorName' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
-                    <th className="py-3 px-3">Fatura</th>
-                    <th className="py-3 px-3">Vade</th>
+                    <th className="py-3 px-3">Faturalar</th>
                     <th
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
@@ -4586,7 +5637,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                         else { setBankSortField('dueDate'); setBankSortOrder('asc'); }
                       }}
                     >
-                      Vade tarihi {bankSortField === 'dueDate' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                      En yakın vade {bankSortField === 'dueDate' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
                     <th
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
@@ -4609,42 +5660,42 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {bankTermLines.length === 0 && (
+                  {bankContractorRows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400">Açık vade yok.</td>
+                      <td colSpan={6} className="py-8 text-center text-slate-400">Bankaya gidecek açık tutar yok (avansla kapananlar listelenmez).</td>
                     </tr>
                   )}
-                  {displayBankTermLines.map(line => {
-                    const isChecked = !!bankSelectedLines[line.lineId];
-                    const overdue = line.dueDate && new Date(line.dueDate) < new Date(new Date().toISOString().split('T')[0]);
+                  {bankContractorRows.map(row => {
+                    const isChecked = row.lineIds.length > 0 && row.lineIds.every(id => bankSelectedLines[id]);
+                    const overdue = row.dueDate && new Date(row.dueDate) < new Date(new Date().toISOString().split('T')[0]);
                     return (
-                      <tr key={line.lineId} className={`hover:bg-slate-50 transition ${isChecked ? 'bg-blue-50/60' : ''}`}>
+                      <tr key={row.groupKey} className={`hover:bg-slate-50 transition ${isChecked ? 'bg-blue-50/60' : ''}`}>
                         <td className="py-3 px-3 text-center">
                           <input
                             type="checkbox"
                             checked={isChecked}
-                            onChange={e => setBankSelectedLines({ ...bankSelectedLines, [line.lineId]: e.target.checked })}
+                            onChange={() => handleToggleBankContractor(row.lineIds)}
                             className="w-4 h-4 rounded text-blue-600"
                           />
                         </td>
-                        <td className="py-3 px-3 font-bold text-slate-900">{line.contractorName}</td>
-                        <td className="py-3 px-3 text-slate-600">{line.invoiceNo}</td>
-                        <td className="py-3 px-3">
-                          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${line.term === 'term1' ? 'bg-amber-50 text-amber-800' : 'bg-purple-50 text-purple-800'}`}>
-                            {line.termLabel}
+                        <td className="py-3 px-3 font-bold text-slate-900">{row.contractorName}</td>
+                        <td className="py-3 px-3 text-slate-600">
+                          {row.invoiceNos.length} fatura
+                          <span className="block text-[10px] text-slate-400 truncate max-w-[280px]" title={row.invoiceNos.join(' · ')}>
+                            {row.invoiceNos.slice(0, 2).join(' · ')}{row.invoiceNos.length > 2 ? '…' : ''}
                           </span>
                         </td>
                         <td className={`py-3 px-3 whitespace-nowrap ${overdue ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
-                          {formatDateTR(line.dueDate)}
+                          {formatDateTR(row.dueDate)}
                         </td>
-                        <td className={`py-3 px-3 font-mono ${line.iban === 'IBAN Eksik' ? 'text-rose-600 font-bold' : 'text-slate-600'}`}>
-                          {line.iban}
+                        <td className={`py-3 px-3 font-mono ${row.iban === 'IBAN Eksik' ? 'text-rose-600 font-bold' : 'text-slate-600'}`}>
+                          {row.iban}
                         </td>
                         <td className="py-3 px-3 text-right font-bold text-emerald-700">
-                          {line.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                          {line.advanceCut > 0 && (
+                          {row.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                          {row.advanceCut > 0 && (
                             <span className="block text-[10px] font-semibold text-amber-700">
-                              Avans −{line.advanceCut.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ (bu ay 1 taksit)
+                              Avans −{row.advanceCut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                             </span>
                           )}
                         </td>
@@ -4667,7 +5718,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               Personel & Maaş Yönetimi ({empSummary.count} Personel)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Personel borcu yalnızca kapanmış aylardır. Kasım içinde genel görünümde Ekim (ödenmemişse) durur; Kasım maaşı 1 Aralık’ta eklenir. Ekim’i ödemek şart değildir — aylar birbirini kilitlemez.
+              Sözleşmeli maaş ve kart primi kapanmış ayda caridedir (Kasım maaşı 1 Aralık’ta). Elle girilen sefer/prim hemen net alacağa yazılır; ödeme yoksa tutar durur. Toplu maaş yalnızca girdiğiniz kadar düşer.
             </p>
           </div>
           {isAdmin && (
@@ -5360,26 +6411,44 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
                 </label>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {(() => {
+                const included = dbProfitability.filter(p => p.included);
+                const totalRev = included.reduce((sum, p) => sum + p.invoice_rev, 0);
+                const totalCost = included.reduce((sum, p) => sum + p.totalCost, 0);
+                const totalNet = included.reduce((sum, p) => sum + p.netProfit, 0);
+                const marginPct = totalRev > 0 ? (totalNet / totalRev) * 100 : null;
+                const marginColor = marginPct == null ? 'text-slate-400' : marginPct >= 0 ? 'text-emerald-600' : 'text-rose-600';
+                const money = (n: number) => n.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam ciro</span>
                   <span className="text-2xl font-black text-slate-900 mt-1 block">
-                    {dbProfitability.filter(p => p.included).reduce((sum, p) => sum + p.invoice_rev, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                    {money(totalRev)} ₺
                   </span>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam gider</span>
                   <span className="text-2xl font-black text-rose-600 mt-1 block">
-                    {dbProfitability.filter(p => p.included).reduce((sum, p) => sum + p.totalCost, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                    {money(totalCost)} ₺
                   </span>
                 </div>
                 <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
                   <span className="text-xs font-bold text-blue-800 uppercase tracking-wider block">Net kâr / zarar</span>
-                  <span className="text-2xl font-black text-emerald-600 mt-1 block">
-                    {dbProfitability.filter(p => p.included).reduce((sum, p) => sum + p.netProfit, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  <span className={`text-2xl font-black mt-1 block ${totalNet >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {money(totalNet)} ₺
                   </span>
                 </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">Karlılık oranı</span>
+                  <span className={`text-2xl font-black mt-1 block ${marginColor}`}>
+                    {marginPct == null ? '—' : `%${marginPct.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`}
+                  </span>
+                  <span className="text-[10px] text-slate-500 mt-1 block">Net kâr ÷ ciro (bu ay, dahil araçlar)</span>
+                </div>
               </div>
+                );
+              })()}
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs border-collapse">
@@ -6030,14 +7099,23 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
               <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="block text-[10px] text-slate-600">Fatura Tarihi</label>
-                  <input type="date" value={manualSubInvoiceData.issueDate} onChange={e => setManualSubInvoiceData({ ...manualSubInvoiceData, issueDate: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]" />
+                  <input type="date" value={manualSubInvoiceData.issueDate} onChange={e => {
+                    const issueDate = e.target.value;
+                    const dates = defaultContractorTermDates(issueDate);
+                    setManualSubInvoiceData({
+                      ...manualSubInvoiceData,
+                      issueDate,
+                      term1DueDate: dates.term1 || manualSubInvoiceData.term1DueDate,
+                      term2DueDate: dates.term2 || manualSubInvoiceData.term2DueDate
+                    });
+                  }} className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]" />
                 </div>
                 <div>
-                  <label className="block text-[10px] text-slate-600">1. Vade (Yarısı)</label>
+                  <label className="block text-[10px] text-slate-600">1 nci ödeme (Yarısı)</label>
                   <input type="date" value={manualSubInvoiceData.term1DueDate} onChange={e => setManualSubInvoiceData({ ...manualSubInvoiceData, term1DueDate: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]" />
                 </div>
                 <div>
-                  <label className="block text-[10px] text-slate-600">2. Vade (Kalan)</label>
+                  <label className="block text-[10px] text-slate-600">2 nci ödeme (Kalan)</label>
                   <input type="date" value={manualSubInvoiceData.term2DueDate} onChange={e => setManualSubInvoiceData({ ...manualSubInvoiceData, term2DueDate: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-[11px]" />
                 </div>
               </div>
@@ -6544,6 +7622,79 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
         </div>
       )}
 
+      {isCashLedgerOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] flex flex-col shadow-xl border border-slate-100">
+            <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-slate-900 text-lg">Kasa / banka hareketleri</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Fiili kasa açılışı hesaba katılmaz. Bakiye Ekim’den beri tahsilat, ödeme ve kasa çıkışından oluşur.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] font-semibold text-slate-500">Başlangıç
+                  <input type="date" value={cashLedgerFrom || '2026-10-01'} onChange={e => setCashLedgerFrom(e.target.value)} className="ml-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                </label>
+                <label className="text-[11px] font-semibold text-slate-500">Bitiş
+                  <input type="date" value={cashLedgerTo || ''} onChange={e => setCashLedgerTo(e.target.value)} className="ml-1 px-2 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                </label>
+                <button onClick={() => setIsCashLedgerOpen(false)} className="p-1.5 text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+              </div>
+            </div>
+            <div className="px-5 py-3 grid grid-cols-2 sm:grid-cols-5 gap-2 border-b border-slate-100">
+              <div className="bg-slate-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Dönem başı</span>
+                <span className="text-sm font-black text-slate-800">{cashLedgerView.startBal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-emerald-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-emerald-600 uppercase block">Giriş</span>
+                <span className="text-sm font-black text-emerald-700">+{cashLedgerView.periodIn.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-rose-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-rose-600 uppercase block">Kasa çıkışı</span>
+                <span className="text-sm font-black text-rose-700">−{cashLedgerView.periodOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-orange-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-orange-600 uppercase block">Taşeron ödeme</span>
+                <span className="text-sm font-black text-orange-800">−{(cashLedgerView.contractorOut || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-blue-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-blue-600 uppercase block">Dönem sonu</span>
+                <span className="text-sm font-black text-blue-800">{cashLedgerView.endBal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              </div>
+            </div>
+            <div className="overflow-auto flex-1 p-5">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase sticky top-0">
+                  <tr>
+                    <th className="py-2 px-2">Tarih</th>
+                    <th className="py-2 px-2">Tür</th>
+                    <th className="py-2 px-2">Açıklama</th>
+                    <th className="py-2 px-2 text-right">Giriş</th>
+                    <th className="py-2 px-2 text-right">Çıkış</th>
+                    <th className="py-2 px-2 text-right">Bakiye</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {cashLedgerView.lines.map(line => (
+                    <tr key={String(line.id)} className={line.isHist ? 'bg-amber-50/40 text-slate-400' : line.isOpen ? 'bg-slate-50' : 'hover:bg-slate-50'}>
+                      <td className="py-2 px-2 whitespace-nowrap text-slate-600">{formatDateTR(line.date)}</td>
+                      <td className="py-2 px-2 font-semibold text-slate-800">
+                        {line.label}
+                        {line.isHist && <span className="block text-[10px] font-semibold text-amber-700">Açılışa dahil</span>}
+                      </td>
+                      <td className="py-2 px-2 text-slate-500 max-w-[280px] truncate" title={line.title}>{line.title}</td>
+                      <td className="py-2 px-2 text-right font-bold text-emerald-600">{line.inflow ? line.inflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                      <td className="py-2 px-2 text-right font-bold text-rose-600">{line.outflow ? line.outflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                      <td className="py-2 px-2 text-right font-black text-slate-900">{line.balance == null ? '—' : line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCashDepositModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
@@ -6875,7 +8026,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
              <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2">
             <div className="flex items-center justify-between">
               <span className="font-bold text-amber-950 text-xs">Avans / Kısmi Ödeme Mahsubu</span>
-              <span className="text-[10px] text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full font-medium">1. ve Taşan Tutar 2. Vadeden Düşer</span>
+              <span className="text-[10px] text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full font-medium">1. ve taşan tutar 2 nci ödemeden düşer</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -6909,7 +8060,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
           <div className="grid grid-cols-2 gap-3">
             <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-blue-900 text-xs">1. Vade Tutarı</span>
+                <span className="font-semibold text-blue-900 text-xs">1 nci ödeme tutarı</span>
                 <select
                   value={(subEditFormData as any).term1Status || 'pending'}
                   onChange={e => setSubEditFormData({ ...subEditFormData, term1Status: e.target.value } as any)}
@@ -6939,7 +8090,7 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
 
             <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-blue-900 text-xs">2. Vade Tutarı</span>
+                <span className="font-semibold text-blue-900 text-xs">2 nci ödeme tutarı</span>
                 <select
                   value={(subEditFormData as any).term2Status || 'pending'}
                   onChange={e => setSubEditFormData({ ...subEditFormData, term2Status: e.target.value } as any)}
@@ -7045,6 +8196,255 @@ const deductedAdvForT2 = isT2Paid ? 0 : Math.min(t2, remainingAdvForT2);
       </div>
     </div>
  )}
+
+        {activeTab === 'plate_rentals' && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Belge Plaka Kiraları ({dbPlateRentals.length} araç)</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Lojistik belgeye kayıtlı plakalar. Kira veya yalnız devlet ödemesi. 0 bedel yine yenilemeye girer. Kasa ve cariye yazılmaz. Yenilemeye 30 ve 15 gün kala kırmızı uyarı.
+                </p>
+              </div>
+              {isAdmin && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="cursor-pointer bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm">
+                    <FileUp className="w-4 h-4" /> Excel yükle
+                    <input type="file" accept=".xlsx,.xls" onChange={handleImportPlateRentals} className="hidden" />
+                  </label>
+                  <button
+                    onClick={() => {
+                      setEditingPlateRentalId(null);
+                      setPlateRentalForm(emptyPlateRentalForm);
+                      setIsPlateRentalModalOpen(true);
+                    }}
+                    className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Plus className="w-4 h-4" /> Yeni plaka
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(['all', ...PLATE_VEHICLE_TYPES] as const).map(t => {
+                    const count = t === 'all' ? dbPlateRentals.length : dbPlateRentals.filter((r: any) => plateVehicleTypeOf(r) === t).length;
+                const on = plateRentalTypeFilter === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setPlateRentalTypeFilter(t)}
+                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'}`}
+                  >
+                    {t === 'all' ? `Tümü (${count})` : `${t} (${count})`}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  value={plateRentalSearch}
+                  onChange={e => setPlateRentalSearch(e.target.value)}
+                  placeholder="Plaka, sahip, telefon, tip ara"
+                  className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm"
+                />
+              </div>
+              <select
+                value={plateRentalSort}
+                onChange={e => setPlateRentalSort(e.target.value as typeof plateRentalSort)}
+                className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 bg-white"
+              >
+                <option value="renewal">Sıra: yenileme / uyarı</option>
+                <option value="plate">Sıra: plaka</option>
+                <option value="owner">Sıra: sahip</option>
+                <option value="type">Sıra: araç tipi</option>
+                <option value="amount">Sıra: tutar</option>
+              </select>
+              <span className="text-xs font-bold text-slate-700 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl">
+                Listede {plateRentalRows.length} / {dbPlateRentals.length} araç
+              </span>
+              <span className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-2 rounded-xl">
+                {plateRentalRows.filter((r: any) => r.alert).length} yaklaşan / geçmiş yenileme
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-3">Plaka</th>
+                    <th className="py-3 px-3">Araç tipi</th>
+                    <th className="py-3 px-3">Sahip / telefon</th>
+                    <th className="py-3 px-3">Tahsilat</th>
+                    <th className="py-3 px-3 text-right">Tutar</th>
+                    <th className="py-3 px-3">Yenileme</th>
+                    <th className="py-3 px-3">Not</th>
+                    {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {plateRentalRows.length === 0 && (
+                    <tr>
+                      <td colSpan={isAdmin ? 8 : 7} className="py-8 text-center text-slate-400">
+                        Kayıt yok. SQL’de setup_plate_rentals.sql çalıştırıp Excel yükleyin veya yeni plaka ekleyin.
+                      </td>
+                    </tr>
+                  )}
+                  {plateRentalRows.map((r: any) => {
+                    const amt = r.collection_kind === 'devlet' ? cleanNumber(r.government_fee) : cleanNumber(r.rent_amount);
+                    const warn = r.alert;
+                    return (
+                      <tr key={r.id} className={warn ? 'bg-rose-100 text-rose-900' : 'hover:bg-slate-50'}>
+                        <td className="py-3 px-3 font-mono font-bold">{r.plate}</td>
+                        <td className="py-3 px-3 font-semibold">{plateVehicleTypeOf(r) || '—'}</td>
+                        <td className="py-3 px-3">
+                          <span className={`font-bold block ${warn ? 'text-rose-900' : 'text-slate-800'}`}>{r.owner_name}</span>
+                          <span className={`text-[11px] ${warn ? 'text-rose-700' : 'text-slate-500'}`}>{r.phone || 'Telefon yok'}</span>
+                        </td>
+                        <td className="py-3 px-3">
+                          {r.collection_kind === 'devlet' ? 'Yalnız devlet' : (amt === 0 ? '0 bedel kira' : 'Yıllık kira')}
+                        </td>
+                        <td className="py-3 px-3 text-right font-bold">
+                          {amt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <span className={warn ? 'font-black' : ''}>{formatDateTR(r.renewal_date) || '—'}</span>
+                          {warn === 'overdue' && (
+                            <span className="block text-[10px] font-bold">
+                              {r.days === 0 ? 'Bugün yenileme' : `${Math.abs(r.days)} gün geçti`}
+                            </span>
+                          )}
+                          {warn === 'd15' && <span className="block text-[10px] font-bold">15 gün kala</span>}
+                          {warn === 'd30' && <span className="block text-[10px] font-bold">30 gün kala</span>}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 max-w-[220px]">
+                          {[r.payment_note, stripPlateTypeTag(r.notes)].filter(Boolean).join(' · ') || '—'}
+                        </td>
+                        {isAdmin && (
+                          <td className="py-3 px-3 text-center space-x-1">
+                            <button
+                              onClick={() => {
+                                setEditingPlateRentalId(r.id);
+                                setPlateRentalForm({
+                                  plate: r.plate || '',
+                                  owner_name: r.owner_name || '',
+                                  phone: r.phone || '',
+                                  start_date: sanitizeDate(r.start_date),
+                                  renewal_date: sanitizeDate(r.renewal_date),
+                                  rent_amount: String(r.rent_amount ?? ''),
+                                  government_fee: String(r.government_fee ?? ''),
+                                  collection_kind: r.collection_kind === 'devlet' ? 'devlet' : 'kira',
+                                  payment_note: r.payment_note || '',
+                                  next_amount: r.next_amount === null || r.next_amount === undefined ? '' : String(r.next_amount),
+                                  notes: stripPlateTypeTag(r.notes),
+                                  vehicle_type: (plateVehicleTypeOf(r) as typeof plateRentalForm.vehicle_type) || ''
+                                });
+                                setIsPlateRentalModalOpen(true);
+                              }}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+                              title="Düzenle"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeletePlateRental(r.id)}
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded"
+                              title="Sil"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {isPlateRentalModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <form onSubmit={handleSavePlateRental} className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm">
+              <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                <h3 className="font-bold text-slate-900">{editingPlateRentalId ? 'Plaka kaydını düzenle' : 'Yeni plaka'}</h3>
+                <button type="button" onClick={() => setIsPlateRentalModalOpen(false)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Plaka</label>
+                  <input required value={plateRentalForm.plate} onChange={e => setPlateRentalForm({ ...plateRentalForm, plate: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Araç tipi</label>
+                  <select
+                    value={plateRentalForm.vehicle_type}
+                    onChange={e => setPlateRentalForm({ ...plateRentalForm, vehicle_type: e.target.value as typeof plateRentalForm.vehicle_type })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                  >
+                    <option value="">Seçin</option>
+                    {PLATE_VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Plaka sahibi</label>
+                <input required value={plateRentalForm.owner_name} onChange={e => setPlateRentalForm({ ...plateRentalForm, owner_name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Telefon</label>
+                <input value={plateRentalForm.phone} onChange={e => setPlateRentalForm({ ...plateRentalForm, phone: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Ne alıyoruz?</label>
+                <select
+                  value={plateRentalForm.collection_kind}
+                  onChange={e => setPlateRentalForm({ ...plateRentalForm, collection_kind: e.target.value as 'kira' | 'devlet' })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                >
+                  <option value="kira">Yıllık kira (0 bedel olabilir)</option>
+                  <option value="devlet">Yalnız devlet ödemesi</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Kira tutarı</label>
+                  <input value={plateRentalForm.rent_amount} onChange={e => setPlateRentalForm({ ...plateRentalForm, rent_amount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" placeholder="0" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Devlet tutarı</label>
+                  <input value={plateRentalForm.government_fee} onChange={e => setPlateRentalForm({ ...plateRentalForm, government_fee: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" placeholder="5000" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Başlangıç</label>
+                  <input type="date" value={plateRentalForm.start_date} onChange={e => setPlateRentalForm({ ...plateRentalForm, start_date: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Yenileme tarihi</label>
+                  <input type="date" value={plateRentalForm.renewal_date} onChange={e => setPlateRentalForm({ ...plateRentalForm, renewal_date: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Ödeme notu</label>
+                  <input value={plateRentalForm.payment_note} onChange={e => setPlateRentalForm({ ...plateRentalForm, payment_note: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" placeholder="Ödendi / 5K ödedi" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Sonraki tutar</label>
+                  <input value={plateRentalForm.next_amount} onChange={e => setPlateRentalForm({ ...plateRentalForm, next_amount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Açıklama (plaka değişimi vb.)</label>
+                <input value={plateRentalForm.notes} onChange={e => setPlateRentalForm({ ...plateRentalForm, notes: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              </div>
+              <button type="submit" className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl">Kaydet</button>
+            </form>
+          </div>
+        )}
 
 {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
   {selectedSubcontractorForDetail && (

@@ -88,7 +88,8 @@ declare
     'subcontractors',
     'subcontractor_ledger',
     'employee_transactions',
-    'general_expenses'
+    'general_expenses',
+    'plate_rentals'
   ];
 begin
   foreach t in array tables
