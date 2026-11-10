@@ -422,18 +422,131 @@ function rentalFisMarkup(row: any) {
   </div>`;
 }
 
-async function buildRentalFisPdf(row: any) {
+async function htmlNodeToPdfBlob(html: string, orientation: 'portrait' | 'landscape' = 'portrait') {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:fixed;left:-14000px;top:0;z-index:-1;';
-  wrap.innerHTML = rentalFisMarkup(row);
+  wrap.innerHTML = html;
   document.body.appendChild(wrap);
   const node = wrap.firstElementChild as HTMLElement;
   await Promise.all(Array.from(wrap.querySelectorAll('img')).map((img) => (img as HTMLImageElement).decode().catch(() => null)));
   const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
   wrap.remove();
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-  doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 210, 297);
+  const pageW = orientation === 'landscape' ? 297 : 210;
+  const pageH = orientation === 'landscape' ? 210 : 297;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation });
+  const imgW = pageW;
+  const imgH = (canvas.height * pageW) / canvas.width;
+  const img = canvas.toDataURL('image/png');
+  let y = 0;
+  let first = true;
+  while (y < imgH - 0.5) {
+    if (!first) doc.addPage();
+    first = false;
+    doc.addImage(img, 'PNG', 0, -y, imgW, imgH);
+    y += pageH;
+  }
   return doc.output('blob');
+}
+
+async function buildRentalFisPdf(row: any) {
+  return htmlNodeToPdfBlob(rentalFisMarkup(row), 'portrait');
+}
+
+function profitabilityPdfMarkup(opts: {
+  month: string;
+  monthLabel: string;
+  rows: any[];
+  totalRev: number;
+  totalCost: number;
+  totalNet: number;
+  marginPct: number | null;
+}) {
+  const co = COMPANY_IDENTITY;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const money = (n: number) => `${(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
+  const moneyNum = (n: number) => (n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const originUrl = origin;
+  const rowsHtml = opts.rows.map((item, i) => {
+    const faded = item.included ? '#0f172a' : '#94a3b8';
+    const net = item.netProfit >= 0 ? '#059669' : '#e11d48';
+    const bg = i % 2 ? '#f8fafc' : '#ffffff';
+    return `<tr style="background:${bg};color:${faded}">
+      <td style="padding:7px 8px;text-align:center">${item.included ? '✓' : ''}</td>
+      <td style="padding:7px 8px">${escHtml(item.vehicleType || '')}</td>
+      <td style="padding:7px 8px;font-weight:800;font-family:Consolas,monospace">${escHtml(item.plate_number || '')}</td>
+      <td style="padding:7px 8px">${escHtml(item.driver_name || 'Atanmadı')}</td>
+      <td style="padding:7px 8px;text-align:right;font-weight:700">${escHtml(moneyNum(item.invoice_rev))}</td>
+      <td style="padding:7px 8px;text-align:right">${escHtml(moneyNum(item.fuel))}</td>
+      <td style="padding:7px 8px;text-align:right">${escHtml(moneyNum(item.hgs))}</td>
+      <td style="padding:7px 8px;text-align:right">${escHtml(moneyNum(item.payroll))}</td>
+      <td style="padding:7px 8px;text-align:right">${escHtml(moneyNum(item.sgk))}</td>
+      <td style="padding:7px 8px;text-align:right">${escHtml(moneyNum(item.fixed_monthly))}</td>
+      <td style="padding:7px 8px;text-align:right">${escHtml(moneyNum(item.bakim))}</td>
+      <td style="padding:7px 8px;text-align:right;font-weight:900;color:${item.included ? net : faded}">${escHtml(money(item.netProfit))}</td>
+    </tr>`;
+  }).join('');
+  const marginTxt = opts.marginPct == null ? '—' : `%${opts.marginPct.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`;
+  return `
+  <div style="width:1400px;padding:28px 32px 36px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#0f172a;background:#ffffff">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;border-bottom:2px solid #009fe3;padding-bottom:12px">
+      <img src="${originUrl}${co.tazeyolLogo}" alt="Tazeyol" style="height:48px;object-fit:contain" />
+      <div style="text-align:center">
+        <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:#009fe3">ÖZ MAL ARAÇ KARLILIK</div>
+        <div style="font-size:20px;font-weight:800;margin-top:4px">${escHtml(opts.monthLabel)}</div>
+      </div>
+      <img src="${originUrl}${co.alkanLogo}" alt="Alkan Nakliyat" style="height:48px;object-fit:contain" />
+    </div>
+    <div style="display:flex;gap:12px;margin:18px 0 16px">
+      <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#64748b;letter-spacing:.6px">TOPLAM CİRO</div>
+        <div style="font-size:22px;font-weight:900">${escHtml(money(opts.totalRev))}</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#64748b;letter-spacing:.6px">TOPLAM GİDER</div>
+        <div style="font-size:22px;font-weight:900;color:#e11d48">${escHtml(money(opts.totalCost))}</div>
+      </div>
+      <div style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#1e40af;letter-spacing:.6px">NET KÂR / ZARAR</div>
+        <div style="font-size:22px;font-weight:900;color:${opts.totalNet >= 0 ? '#059669' : '#e11d48'}">${escHtml(money(opts.totalNet))}</div>
+      </div>
+      <div style="flex:1;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#065f46;letter-spacing:.6px">KARLILIK ORANI</div>
+        <div style="font-size:22px;font-weight:900">${escHtml(marginTxt)}</div>
+        <div style="font-size:9px;color:#64748b">Net kâr ÷ ciro (dahil araçlar)</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead>
+        <tr style="background:#f1f5f9;color:#475569;text-align:left">
+          <th style="padding:8px;font-size:9px">BU AY</th>
+          <th style="padding:8px;font-size:9px">TİP</th>
+          <th style="padding:8px;font-size:9px">PLAKA</th>
+          <th style="padding:8px;font-size:9px">ŞOFÖR</th>
+          <th style="padding:8px;font-size:9px;text-align:right">CİRO (ELLE)</th>
+          <th style="padding:8px;font-size:9px;text-align:right">YAKIT (ELLE)</th>
+          <th style="padding:8px;font-size:9px;text-align:right">HGS (ELLE)</th>
+          <th style="padding:8px;font-size:9px;text-align:right">MAAŞ + PRİM</th>
+          <th style="padding:8px;font-size:9px;text-align:right">SGK</th>
+          <th style="padding:8px;font-size:9px;text-align:right">SABİT / AY</th>
+          <th style="padding:8px;font-size:9px;text-align:right">BAKIM / AY</th>
+          <th style="padding:8px;font-size:9px;text-align:right">NET KÂR</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div style="margin-top:28px;display:flex;justify-content:space-between;gap:40px;font-size:11px;color:#334155">
+      <div style="flex:1">
+        <div style="border-top:1px solid #94a3b8;padding-top:8px;margin-top:36px">Hazırlayan</div>
+      </div>
+      <div style="flex:1">
+        <div style="border-top:1px solid #94a3b8;padding-top:8px;margin-top:36px">Kontrol / imza</div>
+      </div>
+    </div>
+    <div style="margin-top:18px;font-size:9px;color:#94a3b8;line-height:1.45">
+      ${escHtml(co.legalName)} · ${escHtml(co.address)} · ${escHtml(co.phone)}<br/>
+      Listede Aktif öz mal kamyonet, kamyon ve TIR. “Bu ay” işareti olmayanlar toplama girmez. Arşiv çıktısı ${escHtml(opts.month)}.
+    </div>
+  </div>`;
 }
 
 function downloadBlob(blob: Blob, fileName: string) {
@@ -1258,6 +1371,7 @@ export default function App() {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
   };
   const [profitMonth, setProfitMonth] = useState(getPreviousYearMonth);
+  const [profitPdfBusy, setProfitPdfBusy] = useState(false);
   const [monthlyInputRows, setMonthlyInputRows] = useState<any[]>([]);
 
   // 3. VERİTABANI STATE'LERİ
@@ -1338,6 +1452,7 @@ export default function App() {
     }
   }, [rentalAssignedGroups, rentalWorkGroup]);
   const [isRentalMenuOpen, setIsRentalMenuOpen] = useState(true);
+  const [openMenuGroups, setOpenMenuGroups] = useState<Record<string, boolean>>({});
   const [rentalDownloadContractor, setRentalDownloadContractor] = useState('');
   const [rentalEditRow, setRentalEditRow] = useState<any | null>(null);
   const [rentalListSort, setRentalListSort] = useState<'plate' | 'contractor' | 'status' | 'amount'>('contractor');
@@ -5470,15 +5585,15 @@ export default function App() {
     { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
     { id: 'users', label: 'Kullanıcılar', badge: portalUsers.length, icon: ShieldCheck },
   ];
-  const sidebarItems = [
-    ...menuItems.filter((item) => item.id === 'overview' && canViewMod(item.id)),
-    ...menuItems
-      .filter((item) => item.id !== 'overview' && item.id !== 'plate_rentals' && item.id !== 'rental_settlements' && item.id !== 'users' && canViewMod(item.id))
-      .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
-    ...menuItems.filter((item) => item.id === 'rental_settlements' && canViewMod(item.id)),
-    ...menuItems.filter((item) => item.id === 'plate_rentals' && canViewMod(item.id)),
-    ...menuItems.filter((item) => item.id === 'users' && canViewMod(item.id)),
-  ];
+  const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
+  const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
+  const sidebarGroups = [
+    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'payments', 'credit_cards', 'general_expenses'] },
+    { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'sub_ibans', 'rental_settlements'] },
+    { id: 'fleet', label: 'Araç', itemIds: ['fleet', 'profitability', 'plate_rentals'] },
+    { id: 'people', label: 'İnsan ve yetki', itemIds: ['employees', 'users'] }
+  ].map(g => ({ ...g, items: g.itemIds.map(id => menuById[id]).filter(item => item && canViewMod(item.id)) }))
+    .filter(g => g.items.length);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
@@ -5539,71 +5654,99 @@ export default function App() {
               </button>
             </div>
 
-            <nav className="p-3 space-y-1 flex-1 overflow-y-auto text-xs">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block px-3 py-1">Tüm Modüller</span>
-              {sidebarItems.map(item => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                if (item.id === 'rental_settlements') {
-                  return (
-                    <div key={item.id} className="space-y-1">
-                      <button
-                        type="button"
-                        onClick={() => setIsRentalMenuOpen(!isRentalMenuOpen)}
-                        className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold transition ${
-                          isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
-                          <span>Kiralık Araçlar</span>
-                        </div>
-                        <ChevronRight className={`w-4 h-4 transition ${isRentalMenuOpen ? 'rotate-90' : ''}`} />
-                      </button>
-                      {isRentalMenuOpen && rentalVisibleGroups.map(g => {
-                        const count = (dbRentalSettlements || []).filter((r: any) => rentalRowGroup(r) === g.id).length;
-                        const on = isActive && rentalWorkGroup === g.id;
-                        return (
-                          <button
-                            key={g.id}
-                            type="button"
-                            onClick={() => {
-                              setActiveTab('rental_settlements');
-                              setRentalWorkGroup(g.id);
-                              setRentalContractorFilter('');
-                              setRentalDownloadContractor('');
-                              setIsSidebarOpen(false);
-                            }}
-                            className={`w-full text-left ml-4 px-3 py-2 rounded-lg font-semibold ${on ? 'bg-[#009fe3] text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-                          >
-                            {g.label}
-                            <span className={`float-right text-[10px] ${on ? 'text-white/80' : 'text-slate-400'}`}>{count}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                }
+            <nav className="p-3 space-y-3 flex-1 overflow-y-auto text-xs">
+              {canViewMod('overview') && (
+                <button
+                  type="button"
+                  onClick={() => { setActiveTab('overview'); setIsSidebarOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-3 rounded-xl font-semibold ${activeTab === 'overview' ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'}`}
+                >
+                  <LayoutDashboard className={`w-4 h-4 ${activeTab === 'overview' ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                  Genel görünüm
+                </button>
+              )}
+              {sidebarGroups.map(group => {
+                const inThis = group.items.some(i => i.id === activeTab);
+                const groupOpen = openMenuGroups[group.id] ?? inThis;
                 return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActiveTab(item.id as any);
-                      setIsSidebarOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold transition ${
-                      isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`}>
-                    <div className="flex items-center gap-3">
-                      <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
-                      <span>{item.label}</span>
-                    </div>
-                    {item.badge !== undefined && (
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-blue-200 text-blue-800' : 'bg-slate-100 text-slate-500'}`}>
-                        {item.badge}
-                      </span>
+                  <div key={group.id}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenMenuGroups(prev => ({ ...prev, [group.id]: !groupOpen }))}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 hover:text-slate-600"
+                    >
+                      <span>{group.label}</span>
+                      <ChevronRight className={`w-3.5 h-3.5 transition ${groupOpen ? 'rotate-90' : ''}`} />
+                    </button>
+                    {groupOpen && (
+                      <div className="space-y-0.5 mt-0.5">
+                        {group.items.map(item => {
+                          const Icon = item.icon;
+                          const isActive = activeTab === item.id;
+                          if (item.id === 'rental_settlements') {
+                            return (
+                              <div key={item.id} className="space-y-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsRentalMenuOpen(!isRentalMenuOpen)}
+                                  className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold ${
+                                    isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                                    <span>Kiralık araçlar</span>
+                                  </div>
+                                  <ChevronRight className={`w-4 h-4 transition ${isRentalMenuOpen ? 'rotate-90' : ''}`} />
+                                </button>
+                                {isRentalMenuOpen && rentalVisibleGroups.map(g => {
+                                  const count = (dbRentalSettlements || []).filter((r: any) => rentalRowGroup(r) === g.id).length;
+                                  const on = isActive && rentalWorkGroup === g.id;
+                                  return (
+                                    <button
+                                      key={g.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveTab('rental_settlements');
+                                        setRentalWorkGroup(g.id);
+                                        setRentalContractorFilter('');
+                                        setRentalDownloadContractor('');
+                                        setIsSidebarOpen(false);
+                                      }}
+                                      className={`w-full text-left ml-4 px-3 py-2 rounded-lg font-semibold ${on ? 'bg-[#009fe3] text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                                    >
+                                      {g.label}
+                                      <span className={`float-right text-[10px] ${on ? 'text-white/80' : 'text-slate-400'}`}>{count}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => { setActiveTab(item.id as any); setIsSidebarOpen(false); }}
+                              className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold ${
+                                isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="flex items-center gap-3">
+                                <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                                <span>{item.label}</span>
+                              </div>
+                              {item.badge !== undefined && (
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-blue-200 text-blue-800' : 'bg-slate-100 text-slate-500'}`}>
+                                  {item.badge}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </nav>
@@ -7700,6 +7843,7 @@ export default function App() {
                     Ayın ilk haftasında bir önceki ay kapanır. Ciro, yakıt ve HGS diğer portaldan elle girilir; maaş+prim, SGK, sigorta/kasko/MTV/muayene ve bakım-lastik (yıllık÷12) sistemden gelir.
                   </p>
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
                 <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700">
                   <Calendar className="w-4 h-4 text-[#009fe3]" />
                   <span>Ay</span>
@@ -7710,6 +7854,39 @@ export default function App() {
                     className="bg-transparent outline-none font-bold"
                   />
                 </label>
+                <button
+                  type="button"
+                  disabled={profitPdfBusy || !dbProfitability.length}
+                  onClick={async () => {
+                    const included = dbProfitability.filter((p: any) => p.included);
+                    const totalRev = included.reduce((sum: number, p: any) => sum + p.invoice_rev, 0);
+                    const totalCost = included.reduce((sum: number, p: any) => sum + p.totalCost, 0);
+                    const totalNet = included.reduce((sum: number, p: any) => sum + p.netProfit, 0);
+                    const marginPct = totalRev > 0 ? (totalNet / totalRev) * 100 : null;
+                    setProfitPdfBusy(true);
+                    try {
+                      const blob = await htmlNodeToPdfBlob(profitabilityPdfMarkup({
+                        month: profitMonth,
+                        monthLabel: yearMonthTrLabel(profitMonth),
+                        rows: dbProfitability,
+                        totalRev,
+                        totalCost,
+                        totalNet,
+                        marginPct
+                      }), 'landscape');
+                      downloadBlob(blob, `Oz_Mal_Karlilik_${profitMonth}.pdf`);
+                    } catch (err: any) {
+                      alert('PDF hazırlanamadı: ' + (err.message || ''));
+                    } finally {
+                      setProfitPdfBusy(false);
+                    }
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  <Download className="w-4 h-4" />
+                  {profitPdfBusy ? 'PDF hazırlanıyor…' : 'PDF arşiv'}
+                </button>
+                </div>
               </div>
 
               {(() => {
