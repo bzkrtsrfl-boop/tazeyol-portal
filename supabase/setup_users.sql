@@ -200,3 +200,87 @@ create policy staff_update on public.rental_settlements
       select pr.rental_work_group from public.profiles pr where pr.id = auth.uid()
     )
   );
+
+-- Esnek yetki: birden fazla kiralık grup + menü bazlı görür/işler
+alter table public.profiles add column if not exists rental_work_groups text[] not null default '{}';
+alter table public.profiles add column if not exists portal_access jsonb not null default '{}'::jsonb;
+
+update public.profiles
+set rental_work_groups = array[rental_work_group]
+where rental_work_group is not null
+  and rental_work_group <> ''
+  and (rental_work_groups is null or rental_work_groups = '{}');
+
+update public.profiles
+set portal_access = '{"rental_settlements":"edit"}'::jsonb
+where role = 'saha'
+  and (portal_access is null or portal_access = '{}'::jsonb);
+
+create or replace function public.my_rental_groups()
+returns text[]
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    nullif(p.rental_work_groups, '{}'),
+    case when p.rental_work_group is not null then array[p.rental_work_group] else '{}'::text[] end
+  )
+  from public.profiles p
+  where p.id = auth.uid();
+$$;
+
+revoke all on function public.my_rental_groups() from public, anon;
+grant execute on function public.my_rental_groups() to authenticated;
+
+create or replace function public.list_portal_users()
+returns table (
+  id uuid,
+  email text,
+  full_name text,
+  role text,
+  rental_work_group text,
+  rental_work_groups text[],
+  portal_access jsonb,
+  created_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p.id, u.email::text, p.full_name, p.role, p.rental_work_group, p.rental_work_groups, p.portal_access, p.created_at
+  from public.profiles p
+  join auth.users u on u.id = p.id
+  where public.is_admin()
+  order by p.created_at;
+$$;
+
+drop policy if exists staff_select on public.rental_settlements;
+drop policy if exists staff_update on public.rental_settlements;
+create policy staff_select on public.rental_settlements
+  for select to authenticated
+  using (
+    public.is_admin()
+    or public.is_reporter()
+    or (
+      public.is_saha()
+      and work_group is not null
+      and work_group = any(public.my_rental_groups())
+    )
+  );
+create policy staff_update on public.rental_settlements
+  for update to authenticated
+  using (
+    public.is_saha()
+    and coalesce(status, 'draft') <> 'approved'
+    and work_group is not null
+    and work_group = any(public.my_rental_groups())
+  )
+  with check (
+    public.is_saha()
+    and coalesce(status, 'draft') <> 'approved'
+    and work_group is not null
+    and work_group = any(public.my_rental_groups())
+  );

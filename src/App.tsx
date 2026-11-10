@@ -45,7 +45,7 @@ import {
   Tag
 } from 'lucide-react';
 import { supabase } from './supabase';
-import { fetchProfile } from './auth';
+import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, type AccessLevel } from './auth';
 import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, type Customer } from './db';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -531,7 +531,11 @@ export default function App() {
     rental_work_group: 'magazalar'
   });
   const [newPortalUserBusy, setNewPortalUserBusy] = useState(false);
+  const [newPortalUserOpen, setNewPortalUserOpen] = useState(false);
+  const [newPortalUserHint, setNewPortalUserHint] = useState('');
   const [rentalAssignedGroup, setRentalAssignedGroup] = useState<string | null>(null);
+  const [rentalAssignedGroups, setRentalAssignedGroups] = useState<string[]>([]);
+  const [portalAccess, setPortalAccess] = useState<Record<string, AccessLevel>>({});
   const [authReady, setAuthReady] = useState(false);
   const isAuthenticated = !!currentUserRole;
 
@@ -559,11 +563,15 @@ export default function App() {
         setCurrentUserRole(null);
         setCurrentUserId(null);
         setRentalAssignedGroup(null);
+        setRentalAssignedGroups([]);
+        setPortalAccess({});
         return;
       }
       setCurrentUserRole(profile.role);
       setCurrentUserId(userId);
-      setRentalAssignedGroup(profile.rental_work_group);
+      setRentalAssignedGroup(profile.rental_work_groups[0] || profile.rental_work_group);
+      setRentalAssignedGroups(profile.rental_work_groups);
+      setPortalAccess(profile.portal_access);
     };
 
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -612,7 +620,9 @@ export default function App() {
       localStorage.removeItem('tazeyol_user_role');
       setCurrentUserRole(profile.role);
       setCurrentUserId(data.user.id);
-      setRentalAssignedGroup(profile.rental_work_group);
+      setRentalAssignedGroup(profile.rental_work_groups[0] || profile.rental_work_group);
+      setRentalAssignedGroups(profile.rental_work_groups);
+      setPortalAccess(profile.portal_access);
     } catch {
       setLoginError('Giriş sırasında bir hata oluştu.');
     } finally {
@@ -626,6 +636,8 @@ export default function App() {
     setCurrentUserRole(null);
     setCurrentUserId(null);
     setRentalAssignedGroup(null);
+    setRentalAssignedGroups([]);
+    setPortalAccess({});
   };
 
   const loadPortalUsers = async () => {
@@ -642,12 +654,22 @@ export default function App() {
     setPortalUsers(data || []);
   };
 
-  const handleSavePortalUser = async (user: any, patch: { full_name?: string; role?: 'admin' | 'reporter' | 'saha'; rental_work_group?: string | null }) => {
+  const handleSavePortalUser = async (user: any, patch: {
+    full_name?: string;
+    role?: 'admin' | 'reporter' | 'saha';
+    rental_work_groups?: string[];
+    portal_access?: Record<string, AccessLevel>;
+  }) => {
     if (currentUserRole !== 'admin') return;
     const nextRole = patch.role ?? user.role;
-    const nextGroup = patch.rental_work_group !== undefined ? patch.rental_work_group : user.rental_work_group;
-    if (nextRole === 'saha' && !nextGroup) {
-      alert('Saha kullanıcısına Mağazalar, Batı Marmara Yemek veya Doğu Marmara Yemek grubundan birini seçin.');
+    const nextGroups = normalizeGroups(
+      patch.rental_work_groups !== undefined ? patch.rental_work_groups : (user.rental_work_groups || user.rental_work_group)
+    );
+    const nextAccess = patch.portal_access !== undefined
+      ? normalizeAccess(patch.portal_access)
+      : normalizeAccess(user.portal_access);
+    if (nextRole === 'saha' && nextAccess.rental_settlements && !nextGroups.length) {
+      alert('Kiralık mutabakat yetkisi varsa en az bir grup işaretleyin. İzin döneminde birden fazla grup açabilirsiniz.');
       return;
     }
     if (user.id === currentUserId && nextRole !== 'admin') {
@@ -660,14 +682,21 @@ export default function App() {
     const payload: any = {
       full_name: patch.full_name !== undefined ? patch.full_name : user.full_name,
       role: nextRole,
-      rental_work_group: nextRole === 'saha' ? nextGroup : null
+      rental_work_groups: nextRole === 'saha' ? nextGroups : [],
+      rental_work_group: nextRole === 'saha' ? (nextGroups[0] || null) : null,
+      portal_access: nextRole === 'saha' ? nextAccess : {}
     };
     const { error } = await supabase.from('profiles').update(payload).eq('id', user.id);
     if (error) {
-      alert('Kullanıcı kaydedilemedi: ' + error.message);
+      alert('Kullanıcı kaydedilemedi: ' + (error.message || '') + ( /portal_access|rental_work_groups/i.test(error.message || '') ? ' setup_users.sql dosyasını bir kez daha Run edin.' : ''));
       return;
     }
     setPortalUsers(prev => prev.map((u: any) => u.id === user.id ? { ...u, ...payload } : u));
+    if (user.id === currentUserId) {
+      setRentalAssignedGroups(payload.rental_work_groups);
+      setRentalAssignedGroup(payload.rental_work_group);
+      setPortalAccess(payload.portal_access);
+    }
   };
 
   const handleCreatePortalUser = async (e: React.FormEvent) => {
@@ -702,12 +731,18 @@ export default function App() {
           if (j?.error) msg = j.error;
         }
       } catch { /* ignore */ }
-      if (/not found|404|Failed to send/i.test(String(msg))) {
-        msg = 'Kullanıcı açma servisi henüz yayında değil. Bir kez: npx supabase functions deploy create-portal-user';
+      if (/not found|404|Failed to send|FunctionsRelayError|function/i.test(String(msg))) {
+        setNewPortalUserHint(
+          `Portaldan otomatik açma henüz kapalı. Aynı bilgileri Supabase’de yazın:\n1) Authentication → Users → Add user / Create new user\n2) E-posta: ${email}\n3) Şifre: formdaki şifre (kopyalayın)\n4) Auto Confirm User işaretli → Create user\n5) Bu sayfada Listeyi yenile, sonra grup ve menü işaretleyin.`
+        );
+        alert(`Hesap burada otomatik oluşmadı.\n\nAuthentication → Users → Add user\nE-posta: ${email}\nŞifreyi bu formdan kopyalayın.\nAuto Confirm açık olsun.\nSonra Listeyi yenile.`);
+        return;
       }
       alert(msg);
       return;
     }
+    setNewPortalUserHint('');
+    setNewPortalUserOpen(false);
     setNewPortalUser({ email: '', password: '', full_name: '', role: 'saha', rental_work_group: 'magazalar' });
     await loadPortalUsers();
     alert(`${email} açıldı. Bu e-posta ve şifre ile giriş yapabilir.`);
@@ -715,7 +750,7 @@ export default function App() {
 
   const handleSavePlateRental = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin) return;
+    if (!canEditMod('plate_rentals')) return;
     if (!plateRentalForm.plate.trim() || !plateRentalForm.owner_name.trim()) {
       alert('Plaka ve plaka sahibi zorunludur.');
       return;
@@ -758,7 +793,7 @@ export default function App() {
   };
 
   const handleDeletePlateRental = async (id: string) => {
-    if (!isAdmin) return;
+    if (!canEditMod('plate_rentals')) return;
     if (!window.confirm('Bu plaka kaydını silmek istiyor musunuz? Kasa ve cariye bağlı değildir.')) return;
     const { error } = await supabase.from('plate_rentals').delete().eq('id', id);
     if (error) {
@@ -792,7 +827,7 @@ export default function App() {
 
   const handleSaveRentalSettlement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin) return;
+    if (!canEditMod('rental_settlements')) return;
     if (!rentalSettlementForm.plate.trim() || !rentalSettlementForm.contractor_name.trim() || !rentalSettlementForm.year_month) {
       alert('Dönem, plaka ve fatura kesen zorunludur. Yeni unvanı buraya yazmanız yeter.');
       return;
@@ -886,7 +921,7 @@ export default function App() {
   };
 
   const handleDeleteRentalSettlement = async (id: string) => {
-    if (!isAdmin) return;
+    if (!canEditMod('rental_settlements')) return;
     if (!window.confirm('Bu mutabakat satırı silinsin mi? Fatura ve cariye bağlı değildir.')) return;
     const { error } = await supabase.from('rental_settlements').delete().eq('id', id);
     if (error) {
@@ -1015,6 +1050,7 @@ export default function App() {
   };
 
   const handlePatchRentalField = async (id: string, field: string, raw: string) => {
+    if (!canEditMod('rental_settlements')) return;
     const numeric = !['plate', 'contractor_name', 'status', 'work_group', 'notes', 'year_month', 'province', 'region'].includes(field);
     const value = numeric ? cleanNumber(raw) : raw;
     const payload: any = { [field]: value };
@@ -1056,6 +1092,7 @@ export default function App() {
 
   const handleSaveRentalEntry = async () => {
     if (!rentalEditRow) return;
+    if (!canEditMod('rental_settlements')) return;
     if (rentalRowLockedForUser(rentalEditRow, currentUserRole)) {
       alert(isAdmin
         ? `Bu ay kilitli. Yönetici düzeltmesi ${yearMonthTrLabel(rentalAdminGraceUntilMonth(rentalEditRow.year_month))} sonuna kadardı.`
@@ -1153,6 +1190,19 @@ export default function App() {
   const isAdmin = currentUserRole === 'admin';
   const isReporter = currentUserRole === 'reporter';
   const isSaha = currentUserRole === 'saha';
+  const canViewMod = (mod: string) => {
+    if (mod === 'users') return isAdmin;
+    if (isAdmin || isReporter) return true;
+    if (mod === 'overview') return false;
+    const a = portalAccess[mod];
+    return a === 'view' || a === 'edit';
+  };
+  const canEditMod = (mod: string) => {
+    if (mod === 'users') return isAdmin;
+    if (isAdmin) return true;
+    if (isReporter) return false;
+    return portalAccess[mod] === 'edit';
+  };
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -1161,7 +1211,7 @@ export default function App() {
   >('overview');
 
   useEffect(() => {
-    if (currentUserRole === 'saha') setActiveTab('rental_settlements');
+    if (currentUserRole === 'saha' && !canViewMod('overview')) setActiveTab('rental_settlements');
   }, [currentUserRole]);
 
   useEffect(() => {
@@ -1282,11 +1332,11 @@ export default function App() {
   });
   const [rentalWorkGroup, setRentalWorkGroup] = useState<(typeof RENTAL_WORK_GROUPS)[number]['id']>('magazalar');
   useEffect(() => {
-    if (!rentalAssignedGroup) return;
-    if (RENTAL_WORK_GROUPS.some(g => g.id === rentalAssignedGroup)) {
-      setRentalWorkGroup(rentalAssignedGroup as (typeof RENTAL_WORK_GROUPS)[number]['id']);
+    if (!rentalAssignedGroups.length) return;
+    if (!rentalAssignedGroups.includes(rentalWorkGroup)) {
+      setRentalWorkGroup(rentalAssignedGroups[0] as (typeof RENTAL_WORK_GROUPS)[number]['id']);
     }
-  }, [rentalAssignedGroup]);
+  }, [rentalAssignedGroups, rentalWorkGroup]);
   const [isRentalMenuOpen, setIsRentalMenuOpen] = useState(true);
   const [rentalDownloadContractor, setRentalDownloadContractor] = useState('');
   const [rentalEditRow, setRentalEditRow] = useState<any | null>(null);
@@ -4810,6 +4860,7 @@ export default function App() {
   // 18. PERSONEL EKLEME & DÜZENLEME FORMU (PRİM / EK MASRAF DESTEKLİ)
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEditMod('employees')) return;
     if (!employeeFormData.fullName.trim()) return;
 
     try {
@@ -4899,6 +4950,7 @@ export default function App() {
   // 20. GELİŞMİŞ ARAÇ KAYIT & DÜZENLEME
   const handleSaveVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEditMod('fleet')) return;
     if (!vehicleFormData.plateNumber.trim()) {
       alert('Lütfen araç plakasını giriniz.');
       return;
@@ -5103,8 +5155,8 @@ export default function App() {
     ...(dbRentalSettlements || []).map((r: any) => r.contractor_name),
     ...(dbSubcontractors || []).map((s: any) => s.name || s.full_name || s.title)
   ].filter(Boolean))].sort((a: string, b: string) => a.localeCompare(b, 'tr'));
-  const rentalVisibleGroups = isSaha && rentalAssignedGroup
-    ? RENTAL_WORK_GROUPS.filter(g => g.id === rentalAssignedGroup)
+  const rentalVisibleGroups = isSaha
+    ? RENTAL_WORK_GROUPS.filter(g => rentalAssignedGroups.includes(g.id))
     : RENTAL_WORK_GROUPS;
   const rentalContractorsInGroup = [...new Set(
     (dbRentalSettlements || [])
@@ -5418,17 +5470,15 @@ export default function App() {
     { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
     { id: 'users', label: 'Kullanıcılar', badge: portalUsers.length, icon: ShieldCheck },
   ];
-  const sidebarItems = isSaha
-    ? menuItems.filter((item) => item.id === 'rental_settlements')
-    : [
-        ...menuItems.filter((item) => item.id === 'overview'),
-        ...menuItems
-          .filter((item) => item.id !== 'overview' && item.id !== 'plate_rentals' && item.id !== 'rental_settlements' && item.id !== 'users')
-          .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
-        ...menuItems.filter((item) => item.id === 'rental_settlements'),
-        ...menuItems.filter((item) => item.id === 'plate_rentals'),
-        ...(isAdmin ? menuItems.filter((item) => item.id === 'users') : []),
-      ];
+  const sidebarItems = [
+    ...menuItems.filter((item) => item.id === 'overview' && canViewMod(item.id)),
+    ...menuItems
+      .filter((item) => item.id !== 'overview' && item.id !== 'plate_rentals' && item.id !== 'rental_settlements' && item.id !== 'users' && canViewMod(item.id))
+      .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
+    ...menuItems.filter((item) => item.id === 'rental_settlements' && canViewMod(item.id)),
+    ...menuItems.filter((item) => item.id === 'plate_rentals' && canViewMod(item.id)),
+    ...menuItems.filter((item) => item.id === 'users' && canViewMod(item.id)),
+  ];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
@@ -5444,13 +5494,13 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab(isSaha ? 'rental_settlements' : 'overview')}
+              onClick={() => setActiveTab(canViewMod('overview') ? 'overview' : (canViewMod('rental_settlements') ? 'rental_settlements' : (sidebarItems[0]?.id as any) || 'overview'))}
               className="border-l border-slate-200 pl-3 text-left hover:opacity-80 transition"
               title="Ana ekran"
             >
               <TazeyolBrand />
             </button>
-            {!isSaha && activeTab !== 'overview' && (
+            {canViewMod('overview') && activeTab !== 'overview' && (
               <button
                 type="button"
                 onClick={() => setActiveTab('overview')}
@@ -5463,7 +5513,7 @@ export default function App() {
           
           <div className="flex items-center gap-3">
             <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${isAdmin ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : isReporter ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-              {isAdmin ? 'Yönetici' : isReporter ? 'Rapor · salt okuma' : (rentalAssignedGroup ? `Saha · ${RENTAL_WORK_GROUPS.find(g => g.id === rentalAssignedGroup)?.label || 'Grup'}` : 'Saha')}
+              {isAdmin ? 'Yönetici' : isReporter ? 'Rapor · salt okuma' : `Personel${rentalAssignedGroups.length ? ' · ' + rentalAssignedGroups.map(id => RENTAL_WORK_GROUPS.find(g => g.id === id)?.label).filter(Boolean).join(', ') : ''}`}
             </span>
             <button onClick={loadPortalData} title="Verileri Yenile" className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -5481,7 +5531,7 @@ export default function App() {
           <div onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" />
           <div className="relative w-80 bg-white h-full shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-200">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <button type="button" onClick={() => { setActiveTab(isSaha ? 'rental_settlements' : 'overview'); setIsSidebarOpen(false); }} className="text-left" title="Ana ekran">
+              <button type="button" onClick={() => { setActiveTab(canViewMod('overview') ? 'overview' : (canViewMod('rental_settlements') ? 'rental_settlements' : (sidebarItems[0]?.id as any) || 'overview')); setIsSidebarOpen(false); }} className="text-left" title="Ana ekran">
                 <TazeyolBrand />
               </button>
               <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700">
@@ -9490,7 +9540,7 @@ export default function App() {
           const meta = rentalGroupMeta(rentalWorkGroup);
           const approved = rentalEditRow?.status === 'approved';
           const adminGrace = isAdmin && rentalAdminCanEditMonth(rentalEditRow?.year_month || rentalSettlementMonth);
-          const locked = rentalRowLockedForUser(rentalEditRow, currentUserRole);
+          const locked = !canEditMod('rental_settlements') || rentalRowLockedForUser(rentalEditRow, currentUserRole);
           const stopCount = parseLocaleNumber(rentalSettlementForm.stop_count);
           const live = rentalEditRow ? rentalSettlementTotals({
             ...rentalEditRow,
@@ -10277,113 +10327,144 @@ export default function App() {
 
         {activeTab === 'users' && isAdmin && (
           <div className="space-y-3">
-            <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
-              <div>
-                <h3 className="font-bold text-slate-900">Kullanıcı tanımları</h3>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  <b>Yönetici</b> her şeyi görür ve işlem yapar.
-                  <b>Rapor</b> her şeyi görür, hiçbir kaydı değiştirmez (`rapor@` bu roldedir).
-                  <b>Saha</b> yalnız kendi kiralık grubuna KM / gün girer.
-                </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="font-bold text-slate-900">Kullanıcı yetkileri</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-3xl">
+                    <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın. Otomatik açılmazsa aynı bilgileri Authentication → Users → Add user içine bir kez girersiniz; yetki yine bu listeden verilir.
+                    <b>Yönetici</b> her şey. <b>Rapor</b> görür işlem yok. <b>Personel</b> işaretlenen menü ve gruplar (izin için birden fazla grup).
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => void loadPortalUsers()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold">Listeyi yenile</button>
+                  <button type="button" onClick={() => { setNewPortalUserOpen(v => !v); setNewPortalUserHint(''); }} className="px-3 py-2 rounded-lg bg-[#009fe3] text-white text-xs font-bold">
+                    {newPortalUserOpen ? 'Vazgeç' : 'Kullanıcı ekle'}
+                  </button>
+                </div>
               </div>
-              <form onSubmit={handleCreatePortalUser} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2 items-end">
-                <label className="block lg:col-span-2">
-                  <span className="text-[10px] font-bold text-slate-500">E-posta</span>
-                  <input value={newPortalUser.email} onChange={e => setNewPortalUser({ ...newPortalUser, email: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" type="email" required />
-                </label>
-                <label className="block">
-                  <span className="text-[10px] font-bold text-slate-500">Şifre (min 8)</span>
-                  <input value={newPortalUser.password} onChange={e => setNewPortalUser({ ...newPortalUser, password: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" type="text" minLength={8} required />
-                </label>
-                <label className="block">
-                  <span className="text-[10px] font-bold text-slate-500">Ad</span>
-                  <input value={newPortalUser.full_name} onChange={e => setNewPortalUser({ ...newPortalUser, full_name: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
-                </label>
-                <label className="block">
-                  <span className="text-[10px] font-bold text-slate-500">Rol</span>
-                  <select value={newPortalUser.role} onChange={e => setNewPortalUser({ ...newPortalUser, role: e.target.value as 'admin' | 'reporter' | 'saha' })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white">
-                    <option value="saha">Saha</option>
-                    <option value="reporter">Rapor (salt okuma)</option>
-                    <option value="admin">Yönetici</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="text-[10px] font-bold text-slate-500">Grup</span>
-                  <select value={newPortalUser.rental_work_group} onChange={e => setNewPortalUser({ ...newPortalUser, rental_work_group: e.target.value })} disabled={newPortalUser.role !== 'saha'} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white disabled:bg-slate-100">
-                    {RENTAL_WORK_GROUPS.map(g => <option key={g.id} value={g.id}>{g.label}</option>)}
-                  </select>
-                </label>
-                <button type="submit" disabled={newPortalUserBusy} className="sm:col-span-2 lg:col-span-6 px-4 py-2 rounded-lg bg-[#009fe3] text-white text-sm font-bold disabled:opacity-60">
-                  {newPortalUserBusy ? 'Açılıyor…' : 'Kullanıcı aç'}
-                </button>
-              </form>
-              <button type="button" onClick={() => void loadPortalUsers()} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold">
-                Listeyi yenile
-              </button>
+              {newPortalUserOpen && (
+                <form onSubmit={handleCreatePortalUser} className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 items-end border-t border-slate-100 pt-3">
+                  <label className="block lg:col-span-2">
+                    <span className="text-[10px] font-bold text-slate-500">E-posta</span>
+                    <input value={newPortalUser.email} onChange={e => setNewPortalUser({ ...newPortalUser, email: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" type="email" required />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-bold text-slate-500">Şifre (min 8)</span>
+                    <input value={newPortalUser.password} onChange={e => setNewPortalUser({ ...newPortalUser, password: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" type="text" minLength={8} required />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-bold text-slate-500">Ad</span>
+                    <input value={newPortalUser.full_name} onChange={e => setNewPortalUser({ ...newPortalUser, full_name: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-bold text-slate-500">Rol</span>
+                    <select value={newPortalUser.role} onChange={e => setNewPortalUser({ ...newPortalUser, role: e.target.value as 'admin' | 'reporter' | 'saha' })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white">
+                      <option value="saha">Personel</option>
+                      <option value="reporter">Rapor</option>
+                      <option value="admin">Yönetici</option>
+                    </select>
+                  </label>
+                  <button type="submit" disabled={newPortalUserBusy} className="sm:col-span-2 lg:col-span-5 px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold disabled:opacity-60">
+                    {newPortalUserBusy ? 'Açılıyor…' : 'Kaydet / oluştur'}
+                  </button>
+                </form>
+              )}
+              {newPortalUserHint && (
+                <pre className="mt-3 text-[11px] bg-amber-50 border border-amber-200 text-amber-950 rounded-xl p-3 whitespace-pre-wrap font-sans">{newPortalUserHint}</pre>
+              )}
             </div>
             {portalUsersError && (
               <div className="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-xl px-4 py-3">{portalUsersError}</div>
             )}
-            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-[11px] font-bold text-slate-500">
-                  <tr>
-                    <th className="py-2 px-3">E-posta</th>
-                    <th className="py-2 px-3">Ad</th>
-                    <th className="py-2 px-3">Rol</th>
-                    <th className="py-2 px-3">Kiralık grup</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {portalUsersBusy && (
-                    <tr><td colSpan={4} className="py-8 text-center text-slate-400 text-sm">Yükleniyor…</td></tr>
-                  )}
-                  {!portalUsersBusy && !portalUsers.length && !portalUsersError && (
-                    <tr><td colSpan={4} className="py-8 text-center text-slate-400 text-sm">Kullanıcı yok. Önce Auth’da hesap açın, sonra bu sayfayı yenileyin.</td></tr>
-                  )}
-                  {portalUsers.map((u: any) => (
-                    <tr key={u.id} className={u.id === currentUserId ? 'bg-blue-50/40' : ''}>
-                      <td className="py-2 px-3 font-semibold text-slate-800">
-                        {u.email}
-                        {u.id === currentUserId && <span className="ml-2 text-[10px] font-bold text-[#009fe3]">Siz</span>}
-                      </td>
-                      <td className="py-2 px-3">
-                        <input
-                          defaultValue={u.full_name || ''}
-                          onBlur={e => {
-                            const v = e.target.value.trim();
-                            if (v !== (u.full_name || '')) void handleSavePortalUser(u, { full_name: v });
-                          }}
-                          className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"
-                        />
-                      </td>
-                      <td className="py-2 px-3">
-                        <select
-                          value={u.role}
-                          onChange={e => void handleSavePortalUser(u, { role: e.target.value as 'admin' | 'reporter' | 'saha' })}
-                          className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white"
-                        >
-                          <option value="admin">Yönetici</option>
-                          <option value="reporter">Rapor (salt okuma)</option>
-                          <option value="saha">Saha</option>
-                        </select>
-                      </td>
-                      <td className="py-2 px-3">
-                        <select
-                          value={u.rental_work_group || ''}
-                          onChange={e => void handleSavePortalUser(u, { rental_work_group: e.target.value || null })}
-                          className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white max-w-[220px]"
-                        >
-                          <option value="">{u.role === 'saha' ? 'Grup seçin' : 'Tüm gruplar'}</option>
-                          {RENTAL_WORK_GROUPS.map(g => (
-                            <option key={g.id} value={g.id}>{g.label}</option>
+            {portalUsersBusy && <div className="text-sm text-slate-400 p-6">Yükleniyor…</div>}
+            <div className="space-y-3">
+              {portalUsers.map((u: any) => {
+                const groups = normalizeGroups(u.rental_work_groups, u.rental_work_group);
+                const access = normalizeAccess(u.portal_access);
+                const toggleGroup = (id: string) => {
+                  const next = groups.includes(id) ? groups.filter((g: string) => g !== id) : [...groups, id];
+                  void handleSavePortalUser(u, { rental_work_groups: next });
+                };
+                const setMod = (id: string, level: '' | AccessLevel) => {
+                  const next = { ...access };
+                  if (!level) delete next[id];
+                  else next[id] = level;
+                  void handleSavePortalUser(u, { portal_access: next, rental_work_groups: groups });
+                };
+                return (
+                  <div key={u.id} className={`bg-white rounded-2xl border p-4 space-y-3 ${u.id === currentUserId ? 'border-[#009fe3]' : 'border-slate-200'}`}>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <div className="font-semibold text-slate-800">{u.email}{u.id === currentUserId ? <span className="ml-2 text-[10px] font-bold text-[#009fe3]">Siz</span> : null}</div>
+                      <input
+                        defaultValue={u.full_name || ''}
+                        onBlur={e => {
+                          const v = e.target.value.trim();
+                          if (v !== (u.full_name || '')) void handleSavePortalUser(u, { full_name: v });
+                        }}
+                        className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm min-w-[140px]"
+                      />
+                      <select
+                        value={u.role}
+                        onChange={e => void handleSavePortalUser(u, { role: e.target.value as 'admin' | 'reporter' | 'saha', rental_work_groups: groups, portal_access: access })}
+                        className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white"
+                      >
+                        <option value="admin">Yönetici</option>
+                        <option value="reporter">Rapor (salt okuma)</option>
+                        <option value="saha">Personel (yetkili)</option>
+                      </select>
+                    </div>
+                    {u.role === 'saha' && (
+                      <>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ACCESS_PRESETS.map(p => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => void handleSavePortalUser(u, { portal_access: p.access, rental_work_groups: groups })}
+                              className="px-2 py-1 rounded-lg border border-slate-200 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
+                            >
+                              Şablon: {p.label}
+                            </button>
                           ))}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Kiralık gruplar (birden fazla işaretlenebilir)</div>
+                          <div className="flex flex-wrap gap-2">
+                            {RENTAL_WORK_GROUPS.map(g => (
+                              <label key={g.id} className={`text-xs font-semibold px-2 py-1 rounded-lg border cursor-pointer ${groups.includes(g.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white text-slate-600 border-slate-200'}`}>
+                                <input type="checkbox" className="hidden" checked={groups.includes(g.id)} onChange={() => toggleGroup(g.id)} />
+                                {g.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Menüler · kapalı / görür / işler</div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                            {PORTAL_MODULES.map(m => (
+                              <label key={m.id} className="flex items-center justify-between gap-2 text-[11px] px-2 py-1 rounded-lg bg-slate-50">
+                                <span className="text-slate-700">{m.label}</span>
+                                <select
+                                  value={access[m.id] || ''}
+                                  onChange={e => setMod(m.id, e.target.value as '' | AccessLevel)}
+                                  className="text-[11px] font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white"
+                                >
+                                  <option value="">Kapalı</option>
+                                  <option value="view">Görür</option>
+                                  <option value="edit">İşler</option>
+                                </select>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    {u.role === 'reporter' && <p className="text-[11px] text-slate-500">Tüm menüler açık, kayıt düğmeleri kapalı.</p>}
+                    {u.role === 'admin' && <p className="text-[11px] text-slate-500">Tüm menüler ve işlemler açık.</p>}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
