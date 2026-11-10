@@ -45,9 +45,13 @@ import {
   Tag
 } from 'lucide-react';
 import { supabase } from './supabase';
-import { fetchUserRole } from './auth';
+import { fetchProfile } from './auth';
 import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, type Customer } from './db';
 import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import JSZip from 'jszip';
+import html2canvas from 'html2canvas';
+import { COMPANY_IDENTITY } from './companyIdentity';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
@@ -124,6 +128,42 @@ function shiftYearMonth(year: number, month: number, add: number) {
   return { y: d.getFullYear(), m: d.getMonth() + 1 };
 }
 
+function addYearMonth(ym: string, add: number) {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  if (!y || !m) return '';
+  const s = shiftYearMonth(y, m, add);
+  return `${s.y}-${pad2(s.m)}`;
+}
+
+const TR_MONTH_NAMES = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+
+function yearMonthTrLabel(ym: string) {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  if (!y || !m) return ym || '';
+  return `${TR_MONTH_NAMES[m - 1]} ${y}`;
+}
+
+/** Mutabakat ayı + sonraki takvim ayı (Ekim → Kasım sonu). */
+function rentalAdminGraceUntilMonth(yearMonth: string) {
+  return addYearMonth(String(yearMonth || '').slice(0, 7), 1);
+}
+
+function rentalAdminCanEditMonth(yearMonth: string, now = new Date()) {
+  const ym = String(yearMonth || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  const current = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+  return current <= rentalAdminGraceUntilMonth(ym);
+}
+
+function rentalRowLockedForUser(row: any, role: string | null) {
+  if (role === 'admin') {
+    if ((row?.status || 'draft') !== 'approved') return false;
+    return !rentalAdminCanEditMonth(row.year_month);
+  }
+  if (role === 'saha') return (row?.status || 'draft') === 'approved';
+  return true;
+}
+
 const PLATE_VEHICLE_TYPES = ['Çekici', 'Dorse', 'Kamyon', 'Kamyonet'] as const;
 
 function normalizePlateVehicleType(raw: any) {
@@ -143,6 +183,268 @@ function plateVehicleTypeOf(row: any) {
   return normalizePlateVehicleType(row?.vehicle_type)
     || normalizePlateVehicleType((String(row?.notes || '').match(/^\[([^\]]+)\]/) || [])[1])
     || '';
+}
+
+function excelCol(row: any, names: string[]) {
+  const keys = Object.keys(row || {});
+  for (const name of names) {
+    const hit = keys.find(k => String(k).trim().toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR'));
+    if (hit !== undefined && row[hit] !== undefined && String(row[hit]).trim() !== '') return row[hit];
+  }
+  return '';
+}
+
+function foldHeader(s: any) {
+  return String(s || '')
+    .replace(/İ/g, 'i')
+    .replace(/I/g, 'i')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ö/g, 'o')
+    .replace(/ç/g, 'c')
+    .replace(/[/\\]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function excelColFuzzy(row: any, needles: string[]) {
+  const keys = Object.keys(row || {});
+  for (const n of needles.map(foldHeader).filter(Boolean)) {
+    for (const k of keys) {
+      const fk = foldHeader(k);
+      if (!fk) continue;
+      if (fk === n || fk.includes(n)) {
+        const v = row[k];
+        if (v !== undefined && String(v).trim() !== '') return v;
+      }
+    }
+  }
+  return '';
+}
+
+function rentalListeFromWorkbook(workbook: XLSX.WorkBook) {
+  const names = workbook.SheetNames || [];
+  const preferred = names.find(n => foldHeader(n).includes('liste')) || names[0];
+  const sheet = workbook.Sheets[preferred];
+  const matrix: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(matrix.length, 20); i++) {
+    const cells = (matrix[i] || []).map(c => foldHeader(c));
+    const hasPlate = cells.some(c => c.includes('plak'));
+    const hasContractor = cells.some(c => c.includes('yuklen') || c.includes('kesen') || c.includes('sofor') || c.includes('unvan'));
+    if (hasPlate && hasContractor) {
+      headerIdx = i;
+      break;
+    }
+    if (hasPlate) headerIdx = i;
+  }
+  const headers = (matrix[headerIdx] || []).map((h, i) => String(h || '').replace(/\s+/g, ' ').trim() || `COL${i}`);
+  const rows: any[] = [];
+  for (let r = headerIdx + 1; r < matrix.length; r++) {
+    const line = matrix[r] || [];
+    if (line.every(c => String(c ?? '').trim() === '')) continue;
+    const obj: any = {};
+    headers.forEach((h, i) => { obj[h] = line[i]; });
+    rows.push(obj);
+  }
+  return { sheetName: preferred, headers, rows };
+}
+
+function rentalFuelIncome(km: any, rate: any, unit: any) {
+  return (Number(km) || 0) / 100 * (Number(rate) || 0) * (Number(unit) || 0);
+}
+
+const RENTAL_WORK_GROUPS = [
+  { id: 'magazalar', label: 'Mağazalar', rentMode: 'monthly' as const, visitUnit: 35, hasHgs: false, hasWorkDays: false, stopLabel: 'Nokta sayısı' },
+  { id: 'bati_marmara_yemek', label: 'Batı Marmara Yemek', rentMode: 'daily' as const, visitUnit: 355, hasHgs: true, hasWorkDays: true, stopLabel: 'Uğrama gün' },
+  { id: 'dogu_marmara_yemek', label: 'Doğu Marmara Yemek', rentMode: 'daily' as const, visitUnit: 205, hasHgs: true, hasWorkDays: true, stopLabel: 'Uğrama gün' }
+] as const;
+
+function rentalGroupMeta(id: string | undefined | null) {
+  return RENTAL_WORK_GROUPS.find(g => g.id === id) || RENTAL_WORK_GROUPS[0];
+}
+
+function parseLocaleNumber(val: any): number {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+  let str = String(val).trim().replace(/[₺TL]/gi, '').replace(/\s/g, '');
+  if (!str) return 0;
+  const hasComma = str.includes(',');
+  const hasDot = str.includes('.');
+  if (hasComma && hasDot) {
+    if (str.lastIndexOf(',') > str.lastIndexOf('.')) str = str.replace(/\./g, '').replace(',', '.');
+    else str = str.replace(/,/g, '');
+  } else if (hasComma) {
+    const frac = str.split(',')[1] || '';
+    str = frac.length === 3 ? str.replace(/,/g, '') : str.replace(',', '.');
+  } else if (hasDot) {
+    const parts = str.split('.');
+    const last = parts[parts.length - 1] || '';
+    if (parts.length > 2 || (parts.length === 2 && last.length === 3)) str = parts.join('');
+  }
+  const n = parseFloat(str);
+  return isNaN(n) ? 0 : n;
+}
+
+function excelColExact(row: any, names: string[]) {
+  const keys = Object.keys(row || {});
+  for (const name of names) {
+    const n = foldHeader(name);
+    const hit = keys.find(k => foldHeader(k) === n);
+    if (hit !== undefined && row[hit] !== undefined && String(row[hit]).trim() !== '') return row[hit];
+  }
+  return '';
+}
+
+function inferRentalWorkGroup(text: string) {
+  const n = foldHeader(text);
+  if (n.includes('magaza')) return 'magazalar';
+  if (n.includes('dogu') && n.includes('marmara')) return 'dogu_marmara_yemek';
+  if (n.includes('bati') && n.includes('marmara')) return 'bati_marmara_yemek';
+  if (n.includes('dogu marmara')) return 'dogu_marmara_yemek';
+  if (n.includes('bati marmara')) return 'bati_marmara_yemek';
+  return '';
+}
+
+function rentalRowGroup(row: any) {
+  return row?.work_group
+    || inferRentalWorkGroup(`${row?.notes || ''} ${row?.region || ''} ${row?.province || ''}`);
+}
+
+function rentalMonthlyRent(row: any) {
+  const meta = rentalGroupMeta(rentalRowGroup(row));
+  const rent = Number(row?.rent_amount) || 0;
+  const days = Number(row?.work_days) || 0;
+  if (meta.rentMode === 'daily') return rent > 15000 ? rent : rent * days;
+  return rent;
+}
+
+function rentalVisitMoney(row: any) {
+  const stored = Number(row?.visit_prime) || 0;
+  if (stored > 0) return stored;
+  const meta = rentalGroupMeta(rentalRowGroup(row));
+  return (Number(row?.stop_count) || 0) * (meta.visitUnit || 0);
+}
+
+function rentalSettlementTotals(row: any) {
+  const fuelIncome = rentalFuelIncome(row?.total_km, row?.fuel_rate, row?.fuel_unit_price);
+  const brut = rentalMonthlyRent(row)
+    + rentalVisitMoney(row)
+    + (Number(row?.extra_work) || 0)
+    + (Number(row?.hgs) || 0)
+    + fuelIncome
+    - (Number(row?.fuel_charge) || 0);
+  const kdv = brut * 0.2;
+  const stoppage = kdv * 0.2;
+  const payable = brut + kdv - stoppage;
+  return {
+    fuelIncome,
+    brut,
+    kdv,
+    stoppage,
+    payable,
+    term1: payable / 2,
+    term2: payable / 2
+  };
+}
+
+function rentalFisFileName(row: any) {
+  const plate = String(row?.plate || 'plaka').replace(/\s+/g, '').replace(/[\\/:*?"<>|]/g, '-');
+  const name = String(row?.contractor_name || 'unvan').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '-');
+  const ym = String(row?.year_month || '').slice(0, 7) || 'ay';
+  return `${plate}_${name}_${ym}.pdf`;
+}
+
+function escHtml(s: any) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function moneyHtml(n: any) {
+  return `${(Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`;
+}
+
+function rentalFisMarkup(row: any) {
+  const t = row?.totals || rentalSettlementTotals(row);
+  const co = COMPANY_IDENTITY;
+  const lines: [string, string][] = [
+    ['Fatura kesen / alt yüklenici', String(row?.contractor_name || '—')],
+    ['Bölge / il', String(row?.province || row?.region || '—')],
+    ['Dönem', String(row?.year_month || '—')],
+    ['Plaka', String(row?.plate || '—')],
+    ['Kira', moneyHtml(row?.rent_amount)],
+    ['Yakıt oranı / birim', `${Number(row?.fuel_rate) || 0}  ·  ${moneyHtml(row?.fuel_unit_price)}`],
+    ['KM / gün / uğrama-nokta', `${(Number(row?.total_km) || 0).toLocaleString('tr-TR')}  ·  ${Number(row?.work_days) || 0}  ·  ${Number(row?.stop_count) || 0}`],
+    ['Yakıt geliri', moneyHtml(t.fuelIncome)],
+    ['Uğrama / ek iş / HGS', moneyHtml((Number(row?.visit_prime) || 0) + (Number(row?.extra_work) || 0) + (Number(row?.hgs) || 0))],
+    ['Yakıt kesintisi', moneyHtml(row?.fuel_charge)],
+    ['Brüt hakediş', moneyHtml(t.brut)],
+    ['KDV %20', moneyHtml(t.kdv)],
+    ['Tevkifat 2/10', moneyHtml(t.stoppage)]
+  ];
+  const zebra = lines.map(([k, v], i) => `
+    <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f1f5f9'}">
+      <td style="padding:8px 12px;color:#64748b;font-size:11px;border-bottom:1px solid #e2e8f0">${escHtml(k)}</td>
+      <td style="padding:8px 12px;text-align:right;font-weight:700;font-size:11px;border-bottom:1px solid #e2e8f0">${escHtml(v)}</td>
+    </tr>`).join('');
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const tazeyolSrc = `${origin}${co.tazeyolLogo}`;
+  const alkanSrc = `${origin}${co.alkanLogo}`;
+  return `
+  <div style="width:794px;min-height:1123px;padding:28px 40px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#0f172a;background:#ffffff">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;border-bottom:2px solid #009fe3;padding-bottom:14px">
+      <img src="${tazeyolSrc}" alt="Tazeyol" style="height:52px;max-width:260px;object-fit:contain" />
+      <img src="${alkanSrc}" alt="Alkan Nakliyat" style="height:52px;max-width:260px;object-fit:contain" />
+    </div>
+    <div style="margin-top:8px;font-size:10px;color:#475569">${escHtml(co.tagline)}</div>
+    <div style="text-align:center;margin:20px 0 14px">
+      <div style="font-size:11px;font-weight:900;letter-spacing:2.5px;color:#009fe3">ARAÇ MUTABAKAT RAPORU</div>
+      <div style="font-size:18px;font-weight:800;margin-top:6px">${escHtml(row?.year_month || '')} · ${escHtml(row?.plate || '')}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">${zebra}</table>
+    <div style="margin-top:14px;background:#0f2744;color:#ffffff;padding:16px 18px">
+      <div style="font-size:9px;letter-spacing:2px;opacity:.75">ÖDENECEK MUTABAKAT</div>
+      <div style="font-size:24px;font-weight:900;margin-top:2px">${escHtml(moneyHtml(t.payable))}</div>
+      <div style="font-size:11px;margin-top:6px;opacity:.9">1. ödeme ${escHtml(moneyHtml(t.term1))} &nbsp;·&nbsp; 2. ödeme ${escHtml(moneyHtml(t.term2))}</div>
+    </div>
+    <div style="margin-top:36px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:9px;color:#64748b;line-height:1.55">
+      <div style="font-weight:800;color:#0f2744;font-size:10px">${escHtml(co.legalName)}</div>
+      ${escHtml(co.address)}<br/>
+      ${escHtml(co.district)} · ${escHtml(co.phone)}<br/>
+      Bu fiş bilgi içindir; fatura ve cari bu fişten yazılmaz.
+    </div>
+  </div>`;
+}
+
+async function buildRentalFisPdf(row: any) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;left:-14000px;top:0;z-index:-1;';
+  wrap.innerHTML = rentalFisMarkup(row);
+  document.body.appendChild(wrap);
+  const node = wrap.firstElementChild as HTMLElement;
+  await Promise.all(Array.from(wrap.querySelectorAll('img')).map((img) => (img as HTMLImageElement).decode().catch(() => null)));
+  const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+  wrap.remove();
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 210, 297);
+  return doc.output('blob');
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 function daysUntilDate(dateStr: string) {
@@ -216,7 +518,20 @@ function salaryPayrollMatchesEmployee(inv: any, emp: any) {
 
 export default function App() {
   // 1. KULLANICI GİRİŞ & YETKİLENDİRME (RBAC)
-  const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | 'saha' | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [portalUsers, setPortalUsers] = useState<any[]>([]);
+  const [portalUsersError, setPortalUsersError] = useState('');
+  const [portalUsersBusy, setPortalUsersBusy] = useState(false);
+  const [newPortalUser, setNewPortalUser] = useState({
+    email: '',
+    password: '',
+    full_name: '',
+    role: 'saha' as 'admin' | 'reporter' | 'saha',
+    rental_work_group: 'magazalar'
+  });
+  const [newPortalUserBusy, setNewPortalUserBusy] = useState(false);
+  const [rentalAssignedGroup, setRentalAssignedGroup] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const isAuthenticated = !!currentUserRole;
 
@@ -231,17 +546,24 @@ export default function App() {
 
     const applySession = async (userId: string | undefined) => {
       if (!userId) {
-        if (!cancelled) setCurrentUserRole(null);
+        if (!cancelled) {
+          setCurrentUserRole(null);
+          setCurrentUserId(null);
+        }
         return;
       }
-      const role = await fetchUserRole(userId);
+      const profile = await fetchProfile(userId);
       if (cancelled) return;
-      if (!role) {
+      if (!profile) {
         await supabase.auth.signOut();
         setCurrentUserRole(null);
+        setCurrentUserId(null);
+        setRentalAssignedGroup(null);
         return;
       }
-      setCurrentUserRole(role);
+      setCurrentUserRole(profile.role);
+      setCurrentUserId(userId);
+      setRentalAssignedGroup(profile.rental_work_group);
     };
 
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -281,14 +603,16 @@ export default function App() {
         }
         return;
       }
-      const role = await fetchUserRole(data.user.id);
-      if (!role) {
+      const profile = await fetchProfile(data.user.id);
+      if (!profile) {
         await supabase.auth.signOut();
         setLoginError('Hesabınıza rol atanmamış. Supabase profiles kaydını kontrol edin.');
         return;
       }
       localStorage.removeItem('tazeyol_user_role');
-      setCurrentUserRole(role);
+      setCurrentUserRole(profile.role);
+      setCurrentUserId(data.user.id);
+      setRentalAssignedGroup(profile.rental_work_group);
     } catch {
       setLoginError('Giriş sırasında bir hata oluştu.');
     } finally {
@@ -300,6 +624,93 @@ export default function App() {
     localStorage.removeItem('tazeyol_user_role');
     await supabase.auth.signOut();
     setCurrentUserRole(null);
+    setCurrentUserId(null);
+    setRentalAssignedGroup(null);
+  };
+
+  const loadPortalUsers = async () => {
+    if (currentUserRole !== 'admin') return;
+    setPortalUsersBusy(true);
+    setPortalUsersError('');
+    const { data, error } = await supabase.rpc('list_portal_users');
+    setPortalUsersBusy(false);
+    if (error) {
+      setPortalUsers([]);
+      setPortalUsersError('Kullanıcı listesi yok. supabase/setup_users.sql dosyasını SQL Editor’da bir kez Run edin.');
+      return;
+    }
+    setPortalUsers(data || []);
+  };
+
+  const handleSavePortalUser = async (user: any, patch: { full_name?: string; role?: 'admin' | 'reporter' | 'saha'; rental_work_group?: string | null }) => {
+    if (currentUserRole !== 'admin') return;
+    const nextRole = patch.role ?? user.role;
+    const nextGroup = patch.rental_work_group !== undefined ? patch.rental_work_group : user.rental_work_group;
+    if (nextRole === 'saha' && !nextGroup) {
+      alert('Saha kullanıcısına Mağazalar, Batı Marmara Yemek veya Doğu Marmara Yemek grubundan birini seçin.');
+      return;
+    }
+    if (user.id === currentUserId && nextRole !== 'admin') {
+      const otherAdmins = portalUsers.filter((u: any) => u.role === 'admin' && u.id !== user.id);
+      if (!otherAdmins.length) {
+        alert('Son yönetici rolü kaldırılamaz.');
+        return;
+      }
+    }
+    const payload: any = {
+      full_name: patch.full_name !== undefined ? patch.full_name : user.full_name,
+      role: nextRole,
+      rental_work_group: nextRole === 'saha' ? nextGroup : null
+    };
+    const { error } = await supabase.from('profiles').update(payload).eq('id', user.id);
+    if (error) {
+      alert('Kullanıcı kaydedilemedi: ' + error.message);
+      return;
+    }
+    setPortalUsers(prev => prev.map((u: any) => u.id === user.id ? { ...u, ...payload } : u));
+  };
+
+  const handleCreatePortalUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (currentUserRole !== 'admin') return;
+    const email = newPortalUser.email.trim().toLowerCase();
+    if (!email || newPortalUser.password.length < 8) {
+      alert('E-posta ve en az 8 karakter şifre gerekli.');
+      return;
+    }
+    if (newPortalUser.role === 'saha' && !newPortalUser.rental_work_group) {
+      alert('Saha için grup seçin.');
+      return;
+    }
+    setNewPortalUserBusy(true);
+    const { data, error } = await supabase.functions.invoke('create-portal-user', {
+      body: {
+        email,
+        password: newPortalUser.password,
+        full_name: newPortalUser.full_name.trim(),
+        role: newPortalUser.role,
+        rental_work_group: newPortalUser.role === 'saha' ? newPortalUser.rental_work_group : null
+      }
+    });
+    setNewPortalUserBusy(false);
+    if (error || data?.error) {
+      let msg = data?.error || error?.message || 'Kullanıcı açılamadı.';
+      try {
+        const ctx = (error as any)?.context;
+        if (ctx && typeof ctx.json === 'function') {
+          const j = await ctx.json();
+          if (j?.error) msg = j.error;
+        }
+      } catch { /* ignore */ }
+      if (/not found|404|Failed to send/i.test(String(msg))) {
+        msg = 'Kullanıcı açma servisi henüz yayında değil. Bir kez: npx supabase functions deploy create-portal-user';
+      }
+      alert(msg);
+      return;
+    }
+    setNewPortalUser({ email: '', password: '', full_name: '', role: 'saha', rental_work_group: 'magazalar' });
+    await loadPortalUsers();
+    alert(`${email} açıldı. Bu e-posta ve şifre ile giriş yapabilir.`);
   };
 
   const handleSavePlateRental = async (e: React.FormEvent) => {
@@ -355,6 +766,328 @@ export default function App() {
       return;
     }
     loadPortalData();
+  };
+
+  const findRentalTariff = (province: string, vehicleType: string) => {
+    const p = String(province || '').trim().toLocaleLowerCase('tr-TR');
+    const t = normalizePlateVehicleType(vehicleType);
+    if (!p || !t) return null;
+    return (dbRentalTariffs || []).find((row: any) =>
+      String(row.province || '').trim().toLocaleLowerCase('tr-TR') === p &&
+      normalizePlateVehicleType(row.vehicle_type) === t
+    ) || null;
+  };
+
+  const applyTariffToSettlementForm = (province: string, vehicleType: string, current = rentalSettlementForm) => {
+    const hit = findRentalTariff(province, vehicleType);
+    if (!hit) return current;
+    return {
+      ...current,
+      province,
+      vehicle_type: (normalizePlateVehicleType(vehicleType) as typeof current.vehicle_type) || current.vehicle_type,
+      rent_amount: String(hit.rent_amount ?? current.rent_amount),
+      fuel_rate: String(hit.fuel_rate ?? current.fuel_rate)
+    };
+  };
+
+  const handleSaveRentalSettlement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    if (!rentalSettlementForm.plate.trim() || !rentalSettlementForm.contractor_name.trim() || !rentalSettlementForm.year_month) {
+      alert('Dönem, plaka ve fatura kesen zorunludur. Yeni unvanı buraya yazmanız yeter.');
+      return;
+    }
+    const plate = rentalSettlementForm.plate.trim().toUpperCase();
+    const month = rentalSettlementForm.year_month;
+    const dup = (dbRentalSettlements || []).some((r: any) =>
+      r.id !== editingRentalSettlementId &&
+      String(r.year_month) === month &&
+      rentalRowGroup(r) === rentalWorkGroup &&
+      String(r.plate || '').toUpperCase() === plate
+    );
+    if (dup) {
+      alert('Bu plaka bu ay ve grupta zaten var. Plaka değiştirmek için satırı açıp “Plaka / unvan” kullanın.');
+      return;
+    }
+    const payload: any = {
+      year_month: month,
+      province: rentalSettlementForm.province.trim() || null,
+      region: rentalSettlementForm.region.trim() || rentalSettlementForm.province.trim() || null,
+      plate,
+      contractor_name: rentalSettlementForm.contractor_name.trim(),
+      vehicle_type: rentalSettlementForm.vehicle_type || null,
+      rent_amount: cleanNumber(rentalSettlementForm.rent_amount),
+      fuel_rate: cleanNumber(rentalSettlementForm.fuel_rate),
+      fuel_unit_price: 0,
+      total_km: 0,
+      work_days: 0,
+      stop_count: 0,
+      visit_prime: 0,
+      extra_work: 0,
+      hgs: 0,
+      fuel_charge: 0,
+      notes: rentalSettlementForm.notes.trim() || null,
+      work_group: rentalWorkGroup,
+      status: 'draft'
+    };
+    try {
+      let { error } = editingRentalSettlementId
+        ? await supabase.from('rental_settlements').update(payload).eq('id', editingRentalSettlementId)
+        : await supabase.from('rental_settlements').insert([payload]);
+      if (error && /work_group|status/i.test(error.message || '')) {
+        const { work_group: _g, status: _s, ...rest } = payload;
+        const retry = editingRentalSettlementId
+          ? await supabase.from('rental_settlements').update(rest).eq('id', editingRentalSettlementId)
+          : await supabase.from('rental_settlements').insert([rest]);
+        error = retry.error;
+      }
+      if (error) throw error;
+      setIsRentalSettlementModalOpen(false);
+      setEditingRentalSettlementId(null);
+      setRentalSettlementForm(emptyRentalSettlementForm);
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Kayıt hatası: ' + (err.message || 'Önce setup_rental_settlements.sql çalıştırın.'));
+    }
+  };
+
+  const handleSaveRentalIdentity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin || !rentalEditRow) return;
+    if (rentalRowLockedForUser(rentalEditRow, currentUserRole)) {
+      alert(isAdmin
+        ? `Bu ayın düzeltme süresi doldu (${yearMonthTrLabel(rentalAdminGraceUntilMonth(rentalEditRow.year_month))} sonu). Plaka veya unvan değişmez.`
+        : 'Bu satır sizin için kilitli.');
+      return;
+    }
+    const plate = rentalSettlementForm.plate.trim().toUpperCase();
+    const contractor = rentalSettlementForm.contractor_name.trim();
+    if (!plate || !contractor) {
+      alert('Plaka ve fatura kesen zorunludur.');
+      return;
+    }
+    const payload: any = {
+      plate,
+      contractor_name: contractor,
+      province: rentalSettlementForm.province.trim() || null,
+      region: rentalSettlementForm.region.trim() || rentalSettlementForm.province.trim() || null,
+      vehicle_type: rentalSettlementForm.vehicle_type || null,
+      rent_amount: cleanNumber(rentalSettlementForm.rent_amount),
+      fuel_rate: cleanNumber(rentalSettlementForm.fuel_rate)
+    };
+    const { error } = await supabase.from('rental_settlements').update(payload).eq('id', rentalEditRow.id);
+    if (error) {
+      alert('Güncellenemedi: ' + error.message);
+      return;
+    }
+    setDbRentalSettlements(prev => prev.map((r: any) => r.id === rentalEditRow.id ? { ...r, ...payload } : r));
+    setRentalEditRow((prev: any) => prev ? { ...prev, ...payload } : prev);
+    setIsRentalSettlementModalOpen(false);
+  };
+
+  const handleDeleteRentalSettlement = async (id: string) => {
+    if (!isAdmin) return;
+    if (!window.confirm('Bu mutabakat satırı silinsin mi? Fatura ve cariye bağlı değildir.')) return;
+    const { error } = await supabase.from('rental_settlements').delete().eq('id', id);
+    if (error) {
+      alert('Silinemedi: ' + error.message);
+      return;
+    }
+    setRentalEditRow(null);
+    loadPortalData();
+  };
+
+  const handleSaveRentalTariff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin) return;
+    if (!rentalTariffForm.province.trim() || !rentalTariffForm.vehicle_type) {
+      alert('İl ve araç tipi zorunludur.');
+      return;
+    }
+    try {
+      const { error } = await supabase.from('rental_settlement_tariffs').insert([{
+        province: rentalTariffForm.province.trim(),
+        vehicle_type: rentalTariffForm.vehicle_type,
+        rent_amount: cleanNumber(rentalTariffForm.rent_amount),
+        fuel_rate: cleanNumber(rentalTariffForm.fuel_rate)
+      }]);
+      if (error) throw error;
+      setIsRentalTariffModalOpen(false);
+      setRentalTariffForm({ province: '', vehicle_type: '', rent_amount: '', fuel_rate: '' });
+      await loadPortalData();
+    } catch (err: any) {
+      alert('Tarife kaydı hatası: ' + (err.message || 'Önce setup_rental_settlements.sql çalıştırın.'));
+    }
+  };
+
+  const handleDeleteRentalTariff = async (id: string) => {
+    if (!isAdmin) return;
+    if (!window.confirm('Bu il / araç tipi tarifesi silinsin mi?')) return;
+    const { error } = await supabase.from('rental_settlement_tariffs').delete().eq('id', id);
+    if (error) {
+      alert('Silinemedi: ' + error.message);
+      return;
+    }
+    loadPortalData();
+  };
+
+  const handleImportRentalSettlements = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !isAdmin) return;
+    const monthFromName = (name: string) => {
+      const n = foldHeader(name);
+      const year = n.match(/20(\d{2})/) ? `20${n.match(/20(\d{2})/)![1]}` : '';
+      const months = ['ocak','subat','mart','nisan','mayis','haziran','temmuz','agustos','eylul','ekim','kasim','aralik'];
+      const mi = months.findIndex(m => n.includes(m));
+      if (mi >= 0) return `${year || '2026'}-${String(mi + 1).padStart(2, '0')}`;
+      return '';
+    };
+    try {
+      const allRows: any[] = [];
+      const debug: string[] = [];
+      for (const file of files) {
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: 'array' });
+        const parsed = rentalListeFromWorkbook(workbook);
+        const fallbackMonth = rentalSettlementMonth || monthFromName(file.name) || getPreviousYearMonth();
+        debug.push(`${file.name} / ${parsed.sheetName}: ${parsed.headers.filter(Boolean).slice(0, 8).join(', ')}`);
+        parsed.rows.forEach((row: any) => {
+          const plate = String(excelColFuzzy(row, ['plaka', 'plak']) || '').trim().toUpperCase();
+          const contractor = String(excelColFuzzy(row, ['fatura kesen', 'yuklenici', 'yuklen', 'alt yuklenici']) || '').trim();
+          if (!plate || !contractor) return;
+          if (!/[A-Z0-9]{5,}/.test(plate.replace(/\s/g, ''))) return;
+          if (/genel toplam|toplam/i.test(foldHeader(contractor))) return;
+          const province = String(excelColFuzzy(row, ['bolge', 'il']) || '').trim();
+          const workGroup = inferRentalWorkGroup(`${file.name} ${province}`) || rentalWorkGroup || null;
+          const meta = rentalGroupMeta(workGroup);
+          const vehicleType = normalizePlateVehicleType(excelColFuzzy(row, ['arac tipi', 'cekici', 'dorse', 'kamyonet', 'kamyon']));
+          const tariff = findRentalTariff(province, vehicleType);
+          const dailyRent = excelColExact(row, ['kira']);
+          const monthlyRentCol = excelColExact(row, ['aylik kira', 'kira bedeli']);
+          const workDays = parseLocaleNumber(excelColExact(row, ['clsm gun', 'calisma gun', 'calisma gunu']));
+          const rent_amount = meta.rentMode === 'daily'
+            ? (dailyRent !== '' ? parseLocaleNumber(dailyRent) : (workDays ? parseLocaleNumber(monthlyRentCol) / workDays : parseLocaleNumber(tariff?.rent_amount)))
+            : parseLocaleNumber(monthlyRentCol !== '' ? monthlyRentCol : (dailyRent !== '' ? dailyRent : tariff?.rent_amount));
+          const rateRaw = excelColExact(row, ['yakit oran']) || excelColFuzzy(row, ['yakit oran']);
+          const stopCount = parseLocaleNumber(excelColExact(row, ['ugrm gun', 'nokta sayisi']) || excelColFuzzy(row, ['nokta sayisi', 'ugrm gun', 'nokta']));
+          const visitImported = parseLocaleNumber(excelColExact(row, ['ugrama primi']));
+          const visitAuto = stopCount * (meta.visitUnit || 0);
+          allRows.push({
+            year_month: String(excelColFuzzy(row, ['donem', 'ay']) || fallbackMonth).slice(0, 7),
+            province: province || null,
+            region: province || null,
+            plate,
+            contractor_name: contractor,
+            vehicle_type: vehicleType || null,
+            rent_amount,
+            fuel_rate: rateRaw !== '' ? parseLocaleNumber(rateRaw) : parseLocaleNumber(tariff?.fuel_rate),
+            fuel_unit_price: parseLocaleNumber(excelColExact(row, ['yakit aylik birim']) || excelColFuzzy(row, ['yakit aylik birim', 'aylik birim'])),
+            total_km: parseLocaleNumber(excelColExact(row, ['yapilan km']) || excelColFuzzy(row, ['yapilan km', 'toplam km'])),
+            work_days: workDays,
+            stop_count: stopCount,
+            visit_prime: visitImported || visitAuto,
+            extra_work: parseLocaleNumber(excelColExact(row, ['ek/is', 'ek is', 'ek is / diger'])) + parseLocaleNumber(excelColExact(row, ['arac yani calisan'])),
+            hgs: meta.hasHgs ? parseLocaleNumber(excelColExact(row, ['hgs'])) : 0,
+            fuel_charge: parseLocaleNumber(excelColFuzzy(row, ['yakit kesintisi'])),
+            notes: file.name.replace(/\.xlsx?$/i, ''),
+            work_group: workGroup,
+            status: 'draft'
+          });
+        });
+      }
+      if (!allRows.length) {
+        alert('Plaka + fatura kesen satırı okunamadı.\n' + debug.join('\n'));
+        return;
+      }
+      let { error } = await supabase.from('rental_settlements').insert(allRows);
+      if (error && /work_group|status/i.test(error.message || '')) {
+        const slim = allRows.map(({ work_group: _g, status: _s, ...rest }) => rest);
+        ({ error } = await supabase.from('rental_settlements').insert(slim));
+      }
+      if (error) throw error;
+      alert(`${allRows.length} mutabakat satırı yüklendi (${files.length} dosya). Fatura ve cariye yazılmadı.`);
+      loadPortalData();
+    } catch (err: any) {
+      alert('Mutabakat Excel hatası: ' + (err.message || 'Önce setup_rental_settlements.sql çalıştırın.'));
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handlePatchRentalField = async (id: string, field: string, raw: string) => {
+    const numeric = !['plate', 'contractor_name', 'status', 'work_group', 'notes', 'year_month', 'province', 'region'].includes(field);
+    const value = numeric ? cleanNumber(raw) : raw;
+    const payload: any = { [field]: value };
+    let { error } = await supabase.from('rental_settlements').update(payload).eq('id', id);
+    if (error && /status|work_group/i.test(error.message || '')) {
+      alert('Durum sütunu yok. setup_rental_settlements.sql dosyasını bir kez daha Run edin.');
+      return;
+    }
+    if (error) {
+      alert('Kayıt yazılamadı: ' + error.message);
+      return;
+    }
+    setDbRentalSettlements(prev => prev.map((r: any) => r.id === id ? { ...r, ...payload } : r));
+    if (rentalEditRow?.id === id) setRentalEditRow((prev: any) => prev ? { ...prev, ...payload } : prev);
+  };
+
+  const openRentalEdit = (r: any) => {
+    setRentalEditRow(r);
+    setRentalSettlementForm({
+      year_month: r.year_month || '',
+      province: r.province || '',
+      region: r.region || '',
+      plate: r.plate || '',
+      contractor_name: r.contractor_name || '',
+      vehicle_type: (normalizePlateVehicleType(r.vehicle_type) as typeof rentalSettlementForm.vehicle_type) || '',
+      rent_amount: String(r.rent_amount ?? ''),
+      fuel_rate: String(r.fuel_rate ?? ''),
+      fuel_unit_price: String(r.fuel_unit_price ?? ''),
+      total_km: String(r.total_km ?? ''),
+      work_days: String(r.work_days ?? ''),
+      stop_count: String(r.stop_count ?? ''),
+      visit_prime: String(r.visit_prime ?? ''),
+      extra_work: String(r.extra_work ?? ''),
+      hgs: String(r.hgs ?? ''),
+      fuel_charge: String(r.fuel_charge ?? ''),
+      notes: r.notes || ''
+    });
+  };
+
+  const handleSaveRentalEntry = async () => {
+    if (!rentalEditRow) return;
+    if (rentalRowLockedForUser(rentalEditRow, currentUserRole)) {
+      alert(isAdmin
+        ? `Bu ay kilitli. Yönetici düzeltmesi ${yearMonthTrLabel(rentalAdminGraceUntilMonth(rentalEditRow.year_month))} sonuna kadardı.`
+        : currentUserRole === 'reporter'
+          ? 'Rapor kullanıcısı işlem yapamaz; yalnız görüntüleme.'
+          : 'Yönetici onayından sonra bu satır kilitlidir.');
+      return;
+    }
+    const meta = rentalGroupMeta(rentalRowGroup(rentalEditRow));
+    const stopCount = parseLocaleNumber(rentalSettlementForm.stop_count);
+    const visitOverride = parseLocaleNumber(rentalSettlementForm.visit_prime);
+    const payload: any = {
+      rent_amount: isAdmin ? parseLocaleNumber(rentalSettlementForm.rent_amount) : undefined,
+      fuel_rate: isAdmin ? parseLocaleNumber(rentalSettlementForm.fuel_rate) : undefined,
+      fuel_unit_price: isAdmin ? parseLocaleNumber(rentalSettlementForm.fuel_unit_price) : undefined,
+      total_km: parseLocaleNumber(rentalSettlementForm.total_km),
+      work_days: meta.hasWorkDays ? parseLocaleNumber(rentalSettlementForm.work_days) : (rentalEditRow.work_days || 0),
+      stop_count: stopCount,
+      visit_prime: isAdmin && visitOverride > 0 ? visitOverride : stopCount * (meta.visitUnit || 0),
+      extra_work: parseLocaleNumber(rentalSettlementForm.extra_work),
+      hgs: meta.hasHgs ? parseLocaleNumber(rentalSettlementForm.hgs) : 0,
+      fuel_charge: isAdmin ? parseLocaleNumber(rentalSettlementForm.fuel_charge) : undefined,
+      status: rentalEditRow.status === 'approved' ? 'approved' : (rentalEditRow.status === 'draft' ? 'submitted' : rentalEditRow.status)
+    };
+    Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+    const { error } = await supabase.from('rental_settlements').update(payload).eq('id', rentalEditRow.id);
+    if (error) {
+      alert('Kaydedilemedi: ' + error.message);
+      return;
+    }
+    setDbRentalSettlements(prev => prev.map((r: any) => r.id === rentalEditRow.id ? { ...r, ...payload } : r));
+    setRentalEditRow(null);
   };
 
   const handleImportPlateRentals = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -418,12 +1151,23 @@ export default function App() {
   };
 
   const isAdmin = currentUserRole === 'admin';
+  const isReporter = currentUserRole === 'reporter';
+  const isSaha = currentUserRole === 'saha';
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'plate_rentals'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'plate_rentals' | 'rental_settlements' | 'users'
   >('overview');
+
+  useEffect(() => {
+    if (currentUserRole === 'saha') setActiveTab('rental_settlements');
+  }, [currentUserRole]);
+
+  useEffect(() => {
+    if (activeTab === 'users' && currentUserRole === 'admin') void loadPortalUsers();
+  }, [activeTab, currentUserRole]);
+
   const [subSearchTerm, setSubSearchTerm] = useState('');
   const [ledgerSearchTerm, setLedgerSearchTerm] = useState('');
   const [ledgerSortField, setLedgerSortField] = useState<'name' | 'tax' | 'balance'>('name');
@@ -501,6 +1245,55 @@ export default function App() {
   const [plateRentalSearch, setPlateRentalSearch] = useState('');
   const [plateRentalSort, setPlateRentalSort] = useState<'renewal' | 'plate' | 'owner' | 'type' | 'amount'>('renewal');
   const [plateRentalTypeFilter, setPlateRentalTypeFilter] = useState<'all' | 'Çekici' | 'Dorse' | 'Kamyon' | 'Kamyonet'>('all');
+  const emptyRentalSettlementForm = {
+    year_month: getPreviousYearMonth(),
+    province: '',
+    region: '',
+    plate: '',
+    contractor_name: '',
+    vehicle_type: '' as '' | 'Çekici' | 'Dorse' | 'Kamyon' | 'Kamyonet',
+    rent_amount: '',
+    fuel_rate: '',
+    fuel_unit_price: '',
+    total_km: '',
+    work_days: '',
+    stop_count: '',
+    visit_prime: '',
+    extra_work: '',
+    hgs: '',
+    fuel_charge: '',
+    notes: ''
+  };
+  const [rentalSettlementForm, setRentalSettlementForm] = useState(emptyRentalSettlementForm);
+  const [editingRentalSettlementId, setEditingRentalSettlementId] = useState<string | null>(null);
+  const [isRentalSettlementModalOpen, setIsRentalSettlementModalOpen] = useState(false);
+  const [rentalFleetMode, setRentalFleetMode] = useState<'add' | 'identity'>('add');
+  const [dbRentalSettlements, setDbRentalSettlements] = useState<any[]>([]);
+  const [dbRentalTariffs, setDbRentalTariffs] = useState<any[]>([]);
+  const [rentalSettlementSearch, setRentalSettlementSearch] = useState('');
+  const [rentalSettlementMonth, setRentalSettlementMonth] = useState(getPreviousYearMonth);
+  const [rentalReportRow, setRentalReportRow] = useState<any | null>(null);
+  const [isRentalTariffModalOpen, setIsRentalTariffModalOpen] = useState(false);
+  const [rentalTariffForm, setRentalTariffForm] = useState({
+    province: '',
+    vehicle_type: '' as '' | 'Çekici' | 'Dorse' | 'Kamyon' | 'Kamyonet',
+    rent_amount: '',
+    fuel_rate: ''
+  });
+  const [rentalWorkGroup, setRentalWorkGroup] = useState<(typeof RENTAL_WORK_GROUPS)[number]['id']>('magazalar');
+  useEffect(() => {
+    if (!rentalAssignedGroup) return;
+    if (RENTAL_WORK_GROUPS.some(g => g.id === rentalAssignedGroup)) {
+      setRentalWorkGroup(rentalAssignedGroup as (typeof RENTAL_WORK_GROUPS)[number]['id']);
+    }
+  }, [rentalAssignedGroup]);
+  const [isRentalMenuOpen, setIsRentalMenuOpen] = useState(true);
+  const [rentalDownloadContractor, setRentalDownloadContractor] = useState('');
+  const [rentalEditRow, setRentalEditRow] = useState<any | null>(null);
+  const [rentalListSort, setRentalListSort] = useState<'plate' | 'contractor' | 'status' | 'amount'>('contractor');
+  const [rentalStatusFilter, setRentalStatusFilter] = useState<'all' | 'draft' | 'submitted' | 'approved'>('all');
+  const [rentalContractorFilter, setRentalContractorFilter] = useState('');
+  const rentalMonthSeedRef = useRef('');
   const [cashOpening, setCashOpening] = useState(1784169);
   const [cashOpeningAsOf, setCashOpeningAsOf] = useState('2026-11-06');
   const [cashOpeningBase, setCashOpeningBase] = useState<number | null>(null);
@@ -553,7 +1346,9 @@ export default function App() {
         customerData,
         settingsData,
         monthlyInputData,
-        plateRentalData
+        plateRentalData,
+        rentalSettlementData,
+        rentalTariffData
       ] = await Promise.all([
         load('payment_batches'),
         load('advance_installments'),
@@ -568,7 +1363,9 @@ export default function App() {
         load('customers', { column: 'name', ascending: true }),
         load('app_settings'),
         load('vehicle_monthly_inputs'),
-        load('plate_rentals', { column: 'renewal_date', ascending: true })
+        load('plate_rentals', { column: 'renewal_date', ascending: true }),
+        load('rental_settlements', { column: 'year_month', ascending: false }),
+        load('rental_settlement_tariffs', { column: 'province', ascending: true })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -584,6 +1381,8 @@ export default function App() {
       setDbCustomers(customerData as Customer[]);
       setMonthlyInputRows(monthlyInputData);
       setDbPlateRentals(plateRentalData);
+      setDbRentalSettlements(rentalSettlementData);
+      setDbRentalTariffs(rentalTariffData);
 
       const crcCard = findCrcCustomer(customerData as Customer[]);
       if (crcCard) {
@@ -654,22 +1453,7 @@ export default function App() {
   }, [isAuthenticated]);
 
   // 4. GELİŞMİŞ VE EXCEL SERİ TARİH DESTEKLİ DÖNÜŞTÜRÜCÜLER
-  const cleanNumber = (val: any): number => {
-    if (val === null || val === undefined) return 0;
-    if (typeof val === 'number') return val;
-    let str = String(val).trim().replace('₺', '').replace('TL', '').trim();
-    if (str.includes(',') && str.includes('.')) {
-      if (str.indexOf('.') < str.indexOf(',')) {
-        str = str.replace(/\./g, '').replace(',', '.');
-      } else {
-        str = str.replace(/,/g, '');
-      }
-    } else if (str.includes(',')) {
-      str = str.replace(',', '.');
-    }
-    const parsed = parseFloat(str);
-    return isNaN(parsed) ? 0 : parsed;
-  };
+  const cleanNumber = (val: any): number => parseLocaleNumber(val);
 // 1. ARKA PLAN İÇİN HESAPLAMA DOSTU TARİH FORMATI (YYYY-MM-DD)
   const sanitizeDate = (d: any): string => {
     if (!d) return '';
@@ -4270,6 +5054,283 @@ export default function App() {
       .sort((a: any, b: any) => (a.days ?? 999) - (b.days ?? 999));
   }, [dbPlateRentals]);
 
+  const rentalSettlementRows = useMemo(() => {
+    const term = rentalSettlementSearch.toLocaleLowerCase('tr-TR').trim();
+    return (dbRentalSettlements || [])
+      .map((r: any) => ({ ...r, totals: rentalSettlementTotals(r) }))
+      .filter((r: any) => {
+        if (rentalWorkGroup && rentalRowGroup(r) !== rentalWorkGroup) return false;
+        if (rentalSettlementMonth && String(r.year_month || '') !== rentalSettlementMonth) return false;
+        if (rentalStatusFilter !== 'all' && String(r.status || 'draft') !== rentalStatusFilter) return false;
+        if (rentalContractorFilter && r.contractor_name !== rentalContractorFilter) return false;
+        if (!term) return true;
+        return `${r.plate} ${r.contractor_name} ${r.province || ''} ${r.region || ''} ${r.vehicle_type || ''}`.toLocaleLowerCase('tr-TR').includes(term);
+      })
+      .sort((a: any, b: any) => {
+        if (rentalListSort === 'plate') return String(a.plate || '').localeCompare(String(b.plate || ''), 'tr');
+        if (rentalListSort === 'status') return String(a.status || 'draft').localeCompare(String(b.status || 'draft'));
+        if (rentalListSort === 'amount') return (b.totals?.payable || 0) - (a.totals?.payable || 0);
+        return String(a.contractor_name || '').localeCompare(String(b.contractor_name || ''), 'tr') || String(a.plate || '').localeCompare(String(b.plate || ''), 'tr');
+      });
+  }, [dbRentalSettlements, rentalSettlementSearch, rentalSettlementMonth, rentalWorkGroup, rentalStatusFilter, rentalContractorFilter, rentalListSort]);
+
+  const rentalGroupMonthRows = useMemo(() => {
+    return (dbRentalSettlements || [])
+      .filter((r: any) => {
+        if (rentalWorkGroup && rentalRowGroup(r) !== rentalWorkGroup) return false;
+        if (rentalSettlementMonth && String(r.year_month || '') !== rentalSettlementMonth) return false;
+        return true;
+      })
+      .map((r: any) => ({ ...r, totals: rentalSettlementTotals(r) }));
+  }, [dbRentalSettlements, rentalWorkGroup, rentalSettlementMonth]);
+
+  const rentalGroupSummary = useMemo(() => {
+    return rentalGroupMonthRows.reduce((acc: any, r: any) => {
+      const t = r.totals || rentalSettlementTotals(r);
+      acc.payable += t.payable || 0;
+      acc.term1 += t.term1 || 0;
+      acc.term2 += t.term2 || 0;
+      acc.count += 1;
+      return acc;
+    }, { payable: 0, term1: 0, term2: 0, count: 0 });
+  }, [rentalGroupMonthRows]);
+
+  const rentalPrevMonth = addYearMonth(rentalSettlementMonth, -1);
+  const rentalPrevMonthCount = (dbRentalSettlements || []).filter((r: any) => rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalPrevMonth).length;
+
+  const rentalGroupLabel = RENTAL_WORK_GROUPS.find(g => g.id === rentalWorkGroup)?.label || 'Kiralık Araçlar';
+  const rentalContractorNames = [...new Set([
+    ...(dbRentalSettlements || []).map((r: any) => r.contractor_name),
+    ...(dbSubcontractors || []).map((s: any) => s.name || s.full_name || s.title)
+  ].filter(Boolean))].sort((a: string, b: string) => a.localeCompare(b, 'tr'));
+  const rentalVisibleGroups = isSaha && rentalAssignedGroup
+    ? RENTAL_WORK_GROUPS.filter(g => g.id === rentalAssignedGroup)
+    : RENTAL_WORK_GROUPS;
+  const rentalContractorsInGroup = [...new Set(
+    (dbRentalSettlements || [])
+      .filter((r: any) => (!rentalWorkGroup || rentalRowGroup(r) === rentalWorkGroup) && (!rentalSettlementMonth || String(r.year_month || '') === rentalSettlementMonth))
+      .map((r: any) => r.contractor_name)
+      .filter(Boolean)
+  )].sort((a: string, b: string) => a.localeCompare(b, 'tr'));
+
+  const handleAdminSaveAllRental = async () => {
+    if (!isAdmin) return;
+    const monthOpen = rentalAdminCanEditMonth(rentalSettlementMonth);
+    const openRows = (rentalGroupMonthRows || []).filter((r: any) => (r.status || 'draft') !== 'approved');
+    const selectedEditable = rentalEditRow && !rentalRowLockedForUser(rentalEditRow, 'admin');
+    if (!openRows.length && !selectedEditable) {
+      alert(monthOpen
+        ? 'Kaydedilecek değişiklik yok. Soldan bir kilitli satır açıp düzeltin, sonra kaydedin.'
+        : `Bu ay kilitli. Yönetici düzeltmesi ${yearMonthTrLabel(rentalAdminGraceUntilMonth(rentalSettlementMonth))} sonuna kadardı.`);
+      return;
+    }
+    if (!window.confirm(openRows.length
+      ? `${rentalGroupLabel} · ${rentalSettlementMonth}\n${openRows.length} araç kaydedilip onaya alınacak. Saha göndermese de olur.${monthOpen ? ' Onaylı satırları da sonraki ay boyunca düzeltebilirsiniz.' : ''}`
+      : `${rentalGroupLabel} · ${rentalSettlementMonth}\nAçık satırdaki düzeltme kaydedilecek. Durum kilitli kalır.`)) return;
+    let selectedPayload: any = null;
+    if (selectedEditable) {
+      const meta = rentalGroupMeta(rentalRowGroup(rentalEditRow));
+      const stopCount = parseLocaleNumber(rentalSettlementForm.stop_count);
+      const visitOverride = parseLocaleNumber(rentalSettlementForm.visit_prime);
+      selectedPayload = {
+        rent_amount: parseLocaleNumber(rentalSettlementForm.rent_amount),
+        fuel_rate: parseLocaleNumber(rentalSettlementForm.fuel_rate),
+        fuel_unit_price: parseLocaleNumber(rentalSettlementForm.fuel_unit_price),
+        total_km: parseLocaleNumber(rentalSettlementForm.total_km),
+        work_days: meta.hasWorkDays ? parseLocaleNumber(rentalSettlementForm.work_days) : (rentalEditRow.work_days || 0),
+        stop_count: stopCount,
+        visit_prime: visitOverride > 0 ? visitOverride : stopCount * (meta.visitUnit || 0),
+        extra_work: parseLocaleNumber(rentalSettlementForm.extra_work),
+        hgs: meta.hasHgs ? parseLocaleNumber(rentalSettlementForm.hgs) : 0,
+        fuel_charge: parseLocaleNumber(rentalSettlementForm.fuel_charge),
+        status: rentalEditRow.status === 'approved' ? 'approved' : 'submitted'
+      };
+    }
+    const ids = openRows.map((r: any) => r.id);
+    const { error } = ids.length
+      ? await supabase.from('rental_settlements').update({ status: 'submitted' }).in('id', ids)
+      : { error: null } as any;
+    if (error) {
+      alert('Toplu kayıt yazılamadı: ' + error.message);
+      return;
+    }
+    if (selectedPayload && rentalEditRow) {
+      const { error: e2 } = await supabase.from('rental_settlements').update(selectedPayload).eq('id', rentalEditRow.id);
+      if (e2) {
+        alert('Açık satır kaydedilemedi: ' + e2.message);
+        return;
+      }
+    }
+    setDbRentalSettlements(prev => prev.map((r: any) => {
+      if (selectedPayload && rentalEditRow && r.id === rentalEditRow.id) return { ...r, ...selectedPayload };
+      if (ids.includes(r.id)) return { ...r, status: 'submitted' };
+      return r;
+    }));
+    if (selectedPayload && rentalEditRow) setRentalEditRow((prev: any) => prev ? { ...prev, ...selectedPayload } : prev);
+    alert(openRows.length
+      ? `${openRows.length} araç kaydedildi. Onay bekliyor.`
+      : 'Düzeltme kaydedildi. Satır kilitli kaldı.');
+  };
+
+  const handleAdminApproveAllRental = async () => {
+    if (!isAdmin) return;
+    const openRows = (rentalGroupMonthRows || []).filter((r: any) => (r.status || 'draft') !== 'approved');
+    if (!openRows.length) {
+      alert('Bu grup ve ayda onaylanacak açık araç yok.');
+      return;
+    }
+    if (!window.confirm(`${rentalGroupLabel} · ${rentalSettlementMonth}\n${openRows.length} araç onaylanıp kilitlenecek. Saha göndermese de olur. Sonra mutabakat indirilebilir.`)) return;
+    if (rentalEditRow && rentalEditRow.status !== 'approved') {
+      const meta = rentalGroupMeta(rentalRowGroup(rentalEditRow));
+      const stopCount = parseLocaleNumber(rentalSettlementForm.stop_count);
+      const visitOverride = parseLocaleNumber(rentalSettlementForm.visit_prime);
+      const selectedPayload: any = {
+        rent_amount: parseLocaleNumber(rentalSettlementForm.rent_amount),
+        fuel_rate: parseLocaleNumber(rentalSettlementForm.fuel_rate),
+        fuel_unit_price: parseLocaleNumber(rentalSettlementForm.fuel_unit_price),
+        total_km: parseLocaleNumber(rentalSettlementForm.total_km),
+        work_days: meta.hasWorkDays ? parseLocaleNumber(rentalSettlementForm.work_days) : (rentalEditRow.work_days || 0),
+        stop_count: stopCount,
+        visit_prime: visitOverride > 0 ? visitOverride : stopCount * (meta.visitUnit || 0),
+        extra_work: parseLocaleNumber(rentalSettlementForm.extra_work),
+        hgs: meta.hasHgs ? parseLocaleNumber(rentalSettlementForm.hgs) : 0,
+        fuel_charge: parseLocaleNumber(rentalSettlementForm.fuel_charge),
+        status: 'approved'
+      };
+      const { error: e2 } = await supabase.from('rental_settlements').update(selectedPayload).eq('id', rentalEditRow.id);
+      if (e2) {
+        alert('Açık satır kaydedilemedi: ' + e2.message);
+        return;
+      }
+    }
+    const ids = openRows.map((r: any) => r.id);
+    const { error } = await supabase.from('rental_settlements').update({ status: 'approved' }).in('id', ids);
+    if (error) {
+      alert('Toplu onay yazılamadı: ' + error.message);
+      return;
+    }
+    setDbRentalSettlements(prev => prev.map((r: any) => ids.includes(r.id) ? { ...r, status: 'approved' } : r));
+    if (rentalEditRow && ids.includes(rentalEditRow.id)) setRentalEditRow((prev: any) => prev ? { ...prev, status: 'approved' } : prev);
+    alert(`${openRows.length} araç onaylandı ve kilitlendi.`);
+  };
+
+  const handleDownloadAllRentalFis = async () => {
+    if (!isAdmin) return;
+    const rows = rentalGroupMonthRows || [];
+    if (!rows.length) {
+      alert('Bu grup ve ayda fiş indirilecek araç yok.');
+      return;
+    }
+    const zip = new JSZip();
+    const used = new Set<string>();
+    for (const r of rows) {
+      let name = rentalFisFileName(r);
+      if (used.has(name)) name = name.replace(/\.pdf$/i, `_${used.size}.pdf`);
+      used.add(name);
+      zip.file(name, await buildRentalFisPdf({ ...r, totals: r.totals || rentalSettlementTotals(r) }));
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const folder = `Mutabakat_fisleri_${rentalGroupLabel.replace(/\s+/g, '_')}_${rentalSettlementMonth || 'ay'}.zip`;
+    downloadBlob(blob, folder);
+  };
+
+  const handleOpenRentalMonth = async () => {
+    if (!isAdmin) return;
+    if (!rentalSettlementMonth) {
+      alert('Önce ay seçin.');
+      return;
+    }
+    const prev = addYearMonth(rentalSettlementMonth, -1);
+    const existing = new Set(
+      (dbRentalSettlements || [])
+        .filter((r: any) => rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalSettlementMonth)
+        .map((r: any) => `${String(r.plate || '').toUpperCase()}|${r.contractor_name}`)
+    );
+    const source = (dbRentalSettlements || []).filter((r: any) =>
+      rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === prev
+    );
+    const rows = source
+      .filter((r: any) => !existing.has(`${String(r.plate || '').toUpperCase()}|${r.contractor_name}`))
+      .map((r: any) => ({
+        year_month: rentalSettlementMonth,
+        province: r.province || null,
+        region: r.region || null,
+        plate: r.plate,
+        contractor_name: r.contractor_name,
+        vehicle_type: r.vehicle_type || null,
+        rent_amount: cleanNumber(r.rent_amount),
+        fuel_rate: cleanNumber(r.fuel_rate),
+        fuel_unit_price: 0,
+        total_km: 0,
+        work_days: 0,
+        stop_count: 0,
+        visit_prime: 0,
+        extra_work: 0,
+        hgs: 0,
+        fuel_charge: 0,
+        notes: r.notes || null,
+        work_group: rentalWorkGroup,
+        status: 'draft'
+      }));
+    if (!rows.length) {
+      alert(source.length ? 'Bu ay için plakalar zaten açık.' : `${prev} ayında kopyalanacak plaka yok.`);
+      return;
+    }
+    let { error } = await supabase.from('rental_settlements').insert(rows);
+    if (error && /work_group|status/i.test(error.message || '')) {
+      const slim = rows.map(({ work_group: _g, status: _s, ...rest }) => rest);
+      ({ error } = await supabase.from('rental_settlements').insert(slim));
+    }
+    if (error) {
+      alert('Yeni ay açılamadı: ' + error.message);
+      return;
+    }
+    setRentalEditRow(null);
+    await loadPortalData();
+  };
+
+  useEffect(() => {
+    if (!isAdmin || loading || !rentalSettlementMonth) return;
+    const key = `${rentalWorkGroup}|${rentalSettlementMonth}`;
+    if (rentalMonthSeedRef.current === key) return;
+    const hasCurrent = (dbRentalSettlements || []).some((r: any) =>
+      rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalSettlementMonth
+    );
+    if (hasCurrent) {
+      rentalMonthSeedRef.current = key;
+      return;
+    }
+    const prev = addYearMonth(rentalSettlementMonth, -1);
+    const hasPrev = (dbRentalSettlements || []).some((r: any) =>
+      rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === prev
+    );
+    if (!hasPrev) return;
+    rentalMonthSeedRef.current = key;
+    handleOpenRentalMonth();
+  }, [isAdmin, loading, dbRentalSettlements, rentalWorkGroup, rentalSettlementMonth]);
+
+  const handleDownloadRentalMutabakat = (contractorName: string) => {
+    const rows = rentalSettlementRows.filter((r: any) => r.contractor_name === contractorName);
+    const useRows = rows.filter((r: any) => r.status === 'approved');
+    if (!useRows.length) {
+      alert('Bu alt yüklenicide onaylı satır yok. Yönetici onayından sonra mutabakat kilitlenir ve indirilir.');
+      return;
+    }
+    const header = [['ARAÇ MUTABAKAT RAPORU', rentalGroupLabel, useRows[0].year_month], []];
+    const body = useRows.map((r: any) => {
+      const t = r.totals || rentalSettlementTotals(r);
+      return [r.plate, r.contractor_name, r.province || r.region, cleanNumber(r.rent_amount), cleanNumber(r.fuel_rate), cleanNumber(r.total_km), t.fuelIncome, cleanNumber(r.visit_prime), cleanNumber(r.extra_work), cleanNumber(r.hgs), cleanNumber(r.fuel_charge), t.brut, t.kdv, t.stoppage, t.payable, t.term1, t.term2];
+    });
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ...header,
+      ['Plaka', 'Fatura kesen', 'Bölge', 'Kira', 'Yakıt oran', 'KM', 'Yakıt geliri', 'Uğrama primi', 'Ek iş', 'HGS', 'Yakıt kesintisi', 'Brüt', 'KDV', 'Tevkifat', 'Ödenecek', '1. Ödeme', '2. Ödeme'],
+      ...body
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheet, 'Mutabakat');
+    XLSX.writeFile(wb, `Mutabakat_${contractorName}_${useRows[0].year_month || ''}.xlsx`);
+  };
+
   // GİRİŞ EKRANI (AUTH)
   if (!authReady) {
     return (
@@ -4353,15 +5414,21 @@ export default function App() {
     { id: 'profitability', label: 'Öz Mal Karlılık & Maliyet', badge: dbProfitability.length, icon: BarChart3 },
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
+    { id: 'rental_settlements', label: 'Kiralık Araçlar', badge: dbRentalSettlements.length, icon: FileSpreadsheet },
     { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
+    { id: 'users', label: 'Kullanıcılar', badge: portalUsers.length, icon: ShieldCheck },
   ];
-  const sidebarItems = [
-    ...menuItems.filter((item) => item.id === 'overview'),
-    ...menuItems
-      .filter((item) => item.id !== 'overview' && item.id !== 'plate_rentals')
-      .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
-    ...menuItems.filter((item) => item.id === 'plate_rentals'),
-  ];
+  const sidebarItems = isSaha
+    ? menuItems.filter((item) => item.id === 'rental_settlements')
+    : [
+        ...menuItems.filter((item) => item.id === 'overview'),
+        ...menuItems
+          .filter((item) => item.id !== 'overview' && item.id !== 'plate_rentals' && item.id !== 'rental_settlements' && item.id !== 'users')
+          .sort((a, b) => a.label.localeCompare(b.label, 'tr')),
+        ...menuItems.filter((item) => item.id === 'rental_settlements'),
+        ...menuItems.filter((item) => item.id === 'plate_rentals'),
+        ...(isAdmin ? menuItems.filter((item) => item.id === 'users') : []),
+      ];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
@@ -4377,13 +5444,13 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('overview')}
+              onClick={() => setActiveTab(isSaha ? 'rental_settlements' : 'overview')}
               className="border-l border-slate-200 pl-3 text-left hover:opacity-80 transition"
               title="Ana ekran"
             >
               <TazeyolBrand />
             </button>
-            {activeTab !== 'overview' && (
+            {!isSaha && activeTab !== 'overview' && (
               <button
                 type="button"
                 onClick={() => setActiveTab('overview')}
@@ -4395,8 +5462,8 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-3">
-            <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${isAdmin ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-              {isAdmin ? 'Yönetici (Admin)' : 'Raporör (Sadece Okuma)'}
+            <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${isAdmin ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : isReporter ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+              {isAdmin ? 'Yönetici' : isReporter ? 'Rapor · salt okuma' : (rentalAssignedGroup ? `Saha · ${RENTAL_WORK_GROUPS.find(g => g.id === rentalAssignedGroup)?.label || 'Grup'}` : 'Saha')}
             </span>
             <button onClick={loadPortalData} title="Verileri Yenile" className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -4414,7 +5481,7 @@ export default function App() {
           <div onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" />
           <div className="relative w-80 bg-white h-full shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-200">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <button type="button" onClick={() => { setActiveTab('overview'); setIsSidebarOpen(false); }} className="text-left" title="Ana ekran">
+              <button type="button" onClick={() => { setActiveTab(isSaha ? 'rental_settlements' : 'overview'); setIsSidebarOpen(false); }} className="text-left" title="Ana ekran">
                 <TazeyolBrand />
               </button>
               <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700">
@@ -4427,6 +5494,46 @@ export default function App() {
               {sidebarItems.map(item => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
+                if (item.id === 'rental_settlements') {
+                  return (
+                    <div key={item.id} className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsRentalMenuOpen(!isRentalMenuOpen)}
+                        className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold transition ${
+                          isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                          <span>Kiralık Araçlar</span>
+                        </div>
+                        <ChevronRight className={`w-4 h-4 transition ${isRentalMenuOpen ? 'rotate-90' : ''}`} />
+                      </button>
+                      {isRentalMenuOpen && rentalVisibleGroups.map(g => {
+                        const count = (dbRentalSettlements || []).filter((r: any) => rentalRowGroup(r) === g.id).length;
+                        const on = isActive && rentalWorkGroup === g.id;
+                        return (
+                          <button
+                            key={g.id}
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('rental_settlements');
+                              setRentalWorkGroup(g.id);
+                              setRentalContractorFilter('');
+                              setRentalDownloadContractor('');
+                              setIsSidebarOpen(false);
+                            }}
+                            className={`w-full text-left ml-4 px-3 py-2 rounded-lg font-semibold ${on ? 'bg-[#009fe3] text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                          >
+                            {g.label}
+                            <span className={`float-right text-[10px] ${on ? 'text-white/80' : 'text-slate-400'}`}>{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                }
                 return (
                   <button
                     key={item.id}
@@ -8379,6 +9486,267 @@ export default function App() {
     </div>
  )}
 
+        {activeTab === 'rental_settlements' && (() => {
+          const meta = rentalGroupMeta(rentalWorkGroup);
+          const approved = rentalEditRow?.status === 'approved';
+          const adminGrace = isAdmin && rentalAdminCanEditMonth(rentalEditRow?.year_month || rentalSettlementMonth);
+          const locked = rentalRowLockedForUser(rentalEditRow, currentUserRole);
+          const stopCount = parseLocaleNumber(rentalSettlementForm.stop_count);
+          const live = rentalEditRow ? rentalSettlementTotals({
+            ...rentalEditRow,
+            work_group: rentalWorkGroup,
+            rent_amount: parseLocaleNumber(rentalSettlementForm.rent_amount || rentalEditRow.rent_amount),
+            fuel_rate: parseLocaleNumber(rentalSettlementForm.fuel_rate || rentalEditRow.fuel_rate),
+            fuel_unit_price: parseLocaleNumber(rentalSettlementForm.fuel_unit_price),
+            total_km: parseLocaleNumber(rentalSettlementForm.total_km),
+            work_days: parseLocaleNumber(rentalSettlementForm.work_days),
+            stop_count: stopCount,
+            visit_prime: isAdmin ? (parseLocaleNumber(rentalSettlementForm.visit_prime) || stopCount * meta.visitUnit) : stopCount * meta.visitUnit,
+            extra_work: parseLocaleNumber(rentalSettlementForm.extra_work),
+            hgs: parseLocaleNumber(rentalSettlementForm.hgs),
+            fuel_charge: parseLocaleNumber(rentalSettlementForm.fuel_charge)
+          }) : null;
+          const money = (n: number) => `${(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
+          const kmTxt = (n: any) => parseLocaleNumber(n).toLocaleString('tr-TR', { maximumFractionDigits: 0 });
+          const entryCls = 'w-full px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-sm font-semibold text-right tabular-nums disabled:bg-slate-100 disabled:border-slate-200';
+          const adminCls = 'w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-right tabular-nums disabled:bg-slate-100';
+          return (
+          <div className="space-y-3">
+            <div className="bg-white rounded-2xl border border-slate-200 p-3 flex flex-wrap gap-2 items-center">
+              {rentalVisibleGroups.map(g => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => { setRentalWorkGroup(g.id); setRentalEditRow(null); setRentalContractorFilter(''); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold ${rentalWorkGroup === g.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                >
+                  {g.label}
+                </button>
+              ))}
+              <div className="flex-1" />
+              {isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingRentalSettlementId(null);
+                      setRentalFleetMode('add');
+                      setRentalSettlementForm({
+                        ...emptyRentalSettlementForm,
+                        year_month: rentalSettlementMonth || getPreviousYearMonth()
+                      });
+                      setIsRentalSettlementModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-[#009fe3] text-white text-xs font-bold"
+                  >
+                    Yeni araç / unvan
+                  </button>
+                  <button type="button" onClick={() => setIsRentalTariffModalOpen(true)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">Tarife</button>
+                </>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="bg-white rounded-xl border border-slate-200 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">KDV dahil toplam</div>
+                <div className="text-lg font-black tabular-nums text-slate-900">{money(rentalGroupSummary.payable)}</div>
+                <div className="text-[10px] text-slate-400">{rentalGroupLabel} · {rentalSettlementMonth || 'ay'} · {rentalGroupSummary.count} araç</div>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-200 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">1. ödeme</div>
+                <div className="text-lg font-black tabular-nums text-slate-900">{money(rentalGroupSummary.term1)}</div>
+                <div className="text-[10px] text-slate-400">Mutabakatın yarısı</div>
+              </div>
+              <div className="bg-white rounded-xl border border-slate-200 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">2. ödeme</div>
+                <div className="text-lg font-black tabular-nums text-slate-900">{money(rentalGroupSummary.term2)}</div>
+                <div className="text-[10px] text-slate-400">Müşteri mutabakatı ile burayı kıyaslayın</div>
+              </div>
+            </div>
+            {isAdmin && (
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-xl border border-slate-200 px-4 py-2.5">
+                <p className="text-[11px] text-slate-500">Tablodaki tutarlar bu grubun açık ayıdır. Kaydet: onaya alır. Onayla: kilitler. Yönetici, kilitli olsa da mutabakat ayının sonraki takvim ayı boyunca (Ekim → Kasım sonu) düzeltme yapabilir. Saha kilitli kalır.</p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleAdminSaveAllRental} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold whitespace-nowrap">
+                    Tümünü kaydet
+                  </button>
+                  <button type="button" onClick={handleAdminApproveAllRental} className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold whitespace-nowrap">
+                    Tümünü onayla
+                  </button>
+                  <button type="button" onClick={handleDownloadAllRentalFis} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-800 text-xs font-bold whitespace-nowrap">
+                    Tüm fişler (PDF)
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-3 items-start">
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center">
+                  <input type="month" value={rentalSettlementMonth} onChange={e => setRentalSettlementMonth(e.target.value)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold" />
+                  <div className="relative flex-1 min-w-[140px]">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2" />
+                    <input value={rentalSettlementSearch} onChange={e => setRentalSettlementSearch(e.target.value)} placeholder="Plaka / fatura kesen" className="w-full pl-7 pr-2 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                  </div>
+                  <select value={rentalContractorFilter} onChange={e => setRentalContractorFilter(e.target.value)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white max-w-[180px]">
+                    <option value="">Fatura kesen</option>
+                    {rentalContractorsInGroup.map((n: string) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  <select value={rentalStatusFilter} onChange={e => setRentalStatusFilter(e.target.value as any)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white">
+                    <option value="all">Durum</option>
+                    <option value="draft">Giriş açık</option>
+                    <option value="submitted">Onay bekler</option>
+                    <option value="approved">Kilitli</option>
+                  </select>
+                  {isAdmin && (
+                    <>
+                      <select value={rentalDownloadContractor} onChange={e => setRentalDownloadContractor(e.target.value)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white max-w-[160px]">
+                        <option value="">İndirilecek unvan</option>
+                        {rentalContractorsInGroup.map((n: string) => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                      <button type="button" onClick={() => rentalDownloadContractor && handleDownloadRentalMutabakat(rentalDownloadContractor)} className="px-2 py-1.5 rounded-lg bg-emerald-700 text-white text-[11px] font-bold">Mutabakat</button>
+                    </>
+                  )}
+                </div>
+                <div className="overflow-auto max-h-[70vh]">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-slate-50 text-slate-500 font-bold">
+                      <tr>
+                        <th className="py-2 px-3 cursor-pointer" onClick={() => setRentalListSort('plate')}>Plaka</th>
+                        <th className="py-2 px-3 cursor-pointer" onClick={() => setRentalListSort('contractor')}>Fatura kesen</th>
+                        <th className="py-2 px-3 text-right">KM</th>
+                        {meta.hasWorkDays && <th className="py-2 px-3 text-right">Gün</th>}
+                        <th className="py-2 px-3 text-right">{meta.stopLabel}</th>
+                        <th className="py-2 px-3">Durum</th>
+                        <th className="py-2 px-3 text-right cursor-pointer" onClick={() => setRentalListSort('amount')}>Fatura toplamı</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rentalSettlementRows.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="py-10 text-center text-slate-500">
+                            <div>Bu ayda {rentalGroupLabel} satırı yok. KM, gün, uğrama boş açılır; plaka ve kira önceki aydan gelir.</div>
+                            {isAdmin && rentalPrevMonthCount > 0 && (
+                              <button type="button" onClick={handleOpenRentalMonth} className="mt-3 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold">
+                                {rentalPrevMonth} plakalarını {rentalSettlementMonth} ayına boş aç
+                              </button>
+                            )}
+                            {(!isAdmin || rentalPrevMonthCount === 0) && (
+                              <div className="text-[11px] text-slate-400 mt-2">Yönetici Excel yükler veya önceki aydan ay açar.</div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      {rentalSettlementRows.map((r: any, idx: number) => {
+                        const t = r.totals || rentalSettlementTotals(r);
+                        const st = r.status || 'draft';
+                        const on = rentalEditRow?.id === r.id;
+                        const showGroup = rentalListSort === 'contractor' && (idx === 0 || r.contractor_name !== rentalSettlementRows[idx - 1].contractor_name);
+                        return (
+                          <React.Fragment key={r.id}>
+                            {showGroup && (
+                              <tr className="bg-slate-50"><td colSpan={7} className="py-1 px-3 text-[10px] font-bold tracking-wide text-slate-500">{r.contractor_name}</td></tr>
+                            )}
+                            <tr onClick={() => openRentalEdit(r)} className={`cursor-pointer ${on ? 'bg-blue-50' : st === 'approved' ? 'bg-emerald-50/40' : 'hover:bg-slate-50'}`}>
+                              <td className="py-2 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">{r.plate}</td>
+                              <td className="py-2 px-3 font-semibold text-slate-800">{r.contractor_name}<span className="block text-[10px] font-medium text-slate-400">{r.province || r.region}</span></td>
+                              <td className="py-2 px-3 text-right tabular-nums">{kmTxt(r.total_km)}</td>
+                              {meta.hasWorkDays && <td className="py-2 px-3 text-right tabular-nums">{parseLocaleNumber(r.work_days)}</td>}
+                              <td className="py-2 px-3 text-right tabular-nums">{parseLocaleNumber(r.stop_count)}</td>
+                              <td className="py-2 px-3"><span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${st === 'approved' ? 'bg-emerald-100 text-emerald-800' : st === 'submitted' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{st === 'approved' ? 'Kilitli' : st === 'submitted' ? 'Onay bekler' : 'Giriş açık'}</span></td>
+                              <td className="py-2 px-3 text-right font-bold tabular-nums whitespace-nowrap">{money(t.payable)}</td>
+                            </tr>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 min-h-[420px]">
+                {!rentalEditRow && (
+                  <div className="h-full flex items-center justify-center text-sm text-slate-400 px-6 text-center">Soldan plaka veya fatura kesen satırına tıklayın. Google tablodaki ARAC_RAPOR gibi giriş burada açılır; menü kapanmaz.</div>
+                )}
+                {rentalEditRow && (
+                  <div className="space-y-4">
+                    <div className="flex justify-between gap-3">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{rentalGroupLabel}</div>
+                        <div className="font-mono font-black text-lg">{rentalEditRow.plate}</div>
+                        <div className="text-sm font-semibold text-slate-700">{rentalEditRow.contractor_name}</div>
+                        <div className="text-[11px] text-slate-500 mt-1">
+                          {meta.rentMode === 'daily'
+                            ? `Günlük kira ${money(parseLocaleNumber(rentalSettlementForm.rent_amount || rentalEditRow.rent_amount))} · aylık ${money(rentalMonthlyRent({ ...rentalEditRow, rent_amount: parseLocaleNumber(rentalSettlementForm.rent_amount || rentalEditRow.rent_amount), work_days: parseLocaleNumber(rentalSettlementForm.work_days), work_group: rentalWorkGroup }))}`
+                            : `Aylık kira ${money(parseLocaleNumber(rentalSettlementForm.rent_amount || rentalEditRow.rent_amount))}`}
+                          {' · '}yakıt oran {parseLocaleNumber(rentalSettlementForm.fuel_rate || rentalEditRow.fuel_rate)}
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => setRentalEditRow(null)} className="text-slate-400 h-7"><X className="w-4 h-4" /></button>
+                    </div>
+                    {isReporter && <div className="text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">Rapor hesabı: her şeyi görürsünüz, kayıt / onay / silme yok.</div>}
+                    {approved && !adminGrace && !isReporter && <div className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">Yönetici onayladı. Mutabakat kilitli.</div>}
+                    {approved && adminGrace && <div className="text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">Saha kilitli. Yönetici {yearMonthTrLabel(rentalAdminGraceUntilMonth(rentalEditRow.year_month))} sonuna kadar düzeltme yapabilir.</div>}
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-amber-800 mb-2">Saha girişi</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block"><span className="text-[10px] font-bold text-slate-500">Yapılan KM</span><input value={rentalSettlementForm.total_km} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, total_km: e.target.value })} className={entryCls} inputMode="numeric" /></label>
+                        {meta.hasWorkDays && <label className="block"><span className="text-[10px] font-bold text-slate-500">Çalışma gün</span><input value={rentalSettlementForm.work_days} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, work_days: e.target.value })} className={entryCls} inputMode="numeric" /></label>}
+                        <label className="block"><span className="text-[10px] font-bold text-slate-500">{meta.stopLabel}</span><input value={rentalSettlementForm.stop_count} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, stop_count: e.target.value, visit_prime: String(parseLocaleNumber(e.target.value) * meta.visitUnit) })} className={entryCls} inputMode="numeric" /></label>
+                        {meta.hasHgs && <label className="block"><span className="text-[10px] font-bold text-slate-500">HGS ₺</span><input value={rentalSettlementForm.hgs} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, hgs: e.target.value })} className={entryCls} inputMode="decimal" /></label>}
+                        <label className="block"><span className="text-[10px] font-bold text-slate-500">Ek iş ₺</span><input value={rentalSettlementForm.extra_work} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, extra_work: e.target.value })} className={entryCls} inputMode="decimal" /></label>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1">{meta.stopLabel} × {meta.visitUnit.toLocaleString('tr-TR')} ₺ = {money(stopCount * meta.visitUnit)} uğrama (otomatik)</p>
+                    </div>
+                    {isAdmin && (
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-2">Yönetici · zam / tarife</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="text-[10px] font-bold text-slate-500">{meta.rentMode === 'daily' ? 'Günlük kira ₺' : 'Aylık kira ₺'}</span>
+                            <input value={rentalSettlementForm.rent_amount} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, rent_amount: e.target.value })} className={adminCls} inputMode="decimal" />
+                            {meta.rentMode === 'daily' && (
+                              <span className="block text-[10px] text-slate-400 mt-0.5">Aylık = günlük × çalışma gün</span>
+                            )}
+                          </label>
+                          <label className="block"><span className="text-[10px] font-bold text-slate-500">Yakıt oranı</span><input value={rentalSettlementForm.fuel_rate} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, fuel_rate: e.target.value })} className={adminCls} inputMode="decimal" /></label>
+                          <label className="block"><span className="text-[10px] font-bold text-slate-500">Yakıt birim ₺</span><input value={rentalSettlementForm.fuel_unit_price} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, fuel_unit_price: e.target.value })} className={adminCls} inputMode="decimal" /></label>
+                          <label className="block"><span className="text-[10px] font-bold text-slate-500">Yakıt kesintisi ₺</span><input value={rentalSettlementForm.fuel_charge} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, fuel_charge: e.target.value })} className={adminCls} inputMode="decimal" /></label>
+                          <label className="block col-span-2"><span className="text-[10px] font-bold text-slate-500">Uğrama primi override ₺</span><input value={rentalSettlementForm.visit_prime} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, visit_prime: e.target.value })} className={adminCls} inputMode="decimal" /></label>
+                        </div>
+                      </div>
+                    )}
+                    {live && (
+                      <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-3">
+                        <div className="text-[10px] font-bold uppercase text-slate-400">Ödenecek mutabakat</div>
+                        <div className="text-xl font-black tabular-nums">{money(live.payable)}</div>
+                        <div className="text-[11px] text-slate-500 mt-1">Yakıt geliri {money(live.fuelIncome)} · brüt {money(live.brut)} · KDV {money(live.kdv)} · tevkifat {money(live.stoppage)}</div>
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {!locked && <button type="button" onClick={handleSaveRentalEntry} className="flex-1 py-2 rounded-lg bg-[#009fe3] text-white text-sm font-bold">{approved ? 'Düzeltmeyi kaydet' : 'Kaydet ve onaya gönder'}</button>}
+                      {isAdmin && rentalEditRow.status === 'submitted' && (
+                        <button type="button" onClick={() => { handlePatchRentalField(rentalEditRow.id, 'status', 'approved'); }} className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-sm font-bold">Onayla ve kilitle</button>
+                      )}
+                      {isAdmin && !locked && (
+                        <button
+                          type="button"
+                          onClick={() => { setRentalFleetMode('identity'); setIsRentalSettlementModalOpen(true); }}
+                          className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold"
+                        >
+                          Plaka / unvan
+                        </button>
+                      )}
+                      {isAdmin && !locked && (
+                        <button type="button" onClick={() => handleDeleteRentalSettlement(rentalEditRow.id)} className="px-3 py-2 rounded-lg border border-rose-200 text-rose-700 text-xs font-bold">Bu aydan çıkar</button>
+                      )}
+                      <button type="button" onClick={() => setRentalReportRow({ ...rentalEditRow, totals: live })} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold">Fiş</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+
         {activeTab === 'plate_rentals' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
@@ -8545,6 +9913,134 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {isRentalTariffModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <form onSubmit={handleSaveRentalTariff} className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm">
+              <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                <h3 className="font-bold text-slate-900">İl ve araç tipi tarife</h3>
+                <button type="button" onClick={() => setIsRentalTariffModalOpen(false)} className="text-slate-400"><X className="w-5 h-5" /></button>
+              </div>
+              <p className="text-[11px] text-slate-500">Aynı ilde tüm araçlar aynı olabilir; başka ilde veya çekici/kamyonda kira ve yakıt oranı ayrı girilir. Satıra özel tutar yine satırda değiştirilebilir.</p>
+              <input value={rentalTariffForm.province} onChange={e => setRentalTariffForm({ ...rentalTariffForm, province: e.target.value })} placeholder="İl / bölge (ör. Batı Marmara, Bursa)" className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+              <select value={rentalTariffForm.vehicle_type} onChange={e => setRentalTariffForm({ ...rentalTariffForm, vehicle_type: e.target.value as any })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required>
+                <option value="">Araç tipi</option>
+                {PLATE_VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <input value={rentalTariffForm.rent_amount} onChange={e => setRentalTariffForm({ ...rentalTariffForm, rent_amount: e.target.value })} placeholder="Kira bedeli" className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              <input value={rentalTariffForm.fuel_rate} onChange={e => setRentalTariffForm({ ...rentalTariffForm, fuel_rate: e.target.value })} placeholder="Yakıt oranı (100 km/lt)" className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setIsRentalTariffModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-[#009fe3] text-white font-bold">Kaydet</button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {isRentalSettlementModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <form
+              onSubmit={rentalFleetMode === 'identity' ? handleSaveRentalIdentity : handleSaveRentalSettlement}
+              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm"
+            >
+              <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                <h3 className="font-bold text-slate-900">{rentalFleetMode === 'identity' ? 'Plaka / fatura kesen' : `Yeni araç · ${rentalGroupLabel}`}</h3>
+                <button type="button" onClick={() => setIsRentalSettlementModalOpen(false)} className="text-slate-400"><X className="w-5 h-5" /></button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {rentalFleetMode === 'identity'
+                  ? 'Bu ayın satırında plaka veya fatura kesen değişir. Yeni unvanı yazmanız yeter; ayrı cari açılmaz.'
+                  : 'KM ve gün boş açılır. Mevcut unvanı listeden seçin veya yeni alt yüklenici adını yazın.'}
+              </p>
+              <datalist id="rental-contractor-names">
+                {rentalContractorNames.map((n: string) => <option key={n} value={n} />)}
+              </datalist>
+              <div className="grid grid-cols-2 gap-2">
+                {rentalFleetMode === 'add' && (
+                  <input type="month" value={rentalSettlementForm.year_month} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, year_month: e.target.value })} className="px-3 py-2 border border-slate-200 rounded-lg col-span-2" required />
+                )}
+                <input value={rentalSettlementForm.plate} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, plate: e.target.value })} placeholder="Plaka" className="px-3 py-2 border border-slate-200 rounded-lg uppercase font-mono" required />
+                <input value={rentalSettlementForm.contractor_name} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, contractor_name: e.target.value })} list="rental-contractor-names" placeholder="Fatura kesen / yeni unvan" className="px-3 py-2 border border-slate-200 rounded-lg" required />
+                <input value={rentalSettlementForm.province} onChange={e => setRentalSettlementForm(applyTariffToSettlementForm(e.target.value, rentalSettlementForm.vehicle_type, { ...rentalSettlementForm, province: e.target.value }))} placeholder="Bölge / il" className="px-3 py-2 border border-slate-200 rounded-lg col-span-2" />
+                <select
+                  value={rentalSettlementForm.vehicle_type}
+                  onChange={e => setRentalSettlementForm(applyTariffToSettlementForm(rentalSettlementForm.province, e.target.value, { ...rentalSettlementForm, vehicle_type: e.target.value as any }))}
+                  className="px-3 py-2 border border-slate-200 rounded-lg col-span-2"
+                >
+                  <option value="">Araç tipi (tarifeden kira/oran)</option>
+                  {PLATE_VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input value={rentalSettlementForm.rent_amount} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, rent_amount: e.target.value })} placeholder={rentalGroupMeta(rentalWorkGroup).rentMode === 'daily' ? 'Günlük kira' : 'Aylık kira'} className="px-3 py-2 border border-slate-200 rounded-lg" />
+                <input value={rentalSettlementForm.fuel_rate} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, fuel_rate: e.target.value })} placeholder="Yakıt oranı" className="px-3 py-2 border border-slate-200 rounded-lg" />
+              </div>
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setIsRentalSettlementModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-[#009fe3] text-white font-bold">{rentalFleetMode === 'identity' ? 'Değiştir' : 'Ekle'}</button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {rentalReportRow && (() => {
+          const r = rentalReportRow;
+          const t = r.totals || rentalSettlementTotals(r);
+          const money = (n: number) => `${n.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`;
+          return (
+            <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 space-y-4">
+                <div className="relative pb-3 border-b-2 border-[#009fe3]">
+                  <button type="button" onClick={() => setRentalReportRow(null)} className="absolute -top-1 -right-1 text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+                  <div className="flex items-center justify-between gap-4 pr-8">
+                    <img src={COMPANY_IDENTITY.tazeyolLogo} alt="Tazeyol" className="h-10 object-contain" />
+                    <img src={COMPANY_IDENTITY.alkanLogo} alt="Alkan Nakliyat" className="h-10 object-contain" />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-2">{COMPANY_IDENTITY.tagline}</p>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs font-black tracking-wider text-[#009fe3]">ARAÇ MUTABAKAT RAPORU</div>
+                  <div className="text-sm font-bold">{r.year_month} · {r.plate}</div>
+                </div>
+                <div className="text-xs overflow-hidden rounded-lg border border-slate-100">
+                  {[
+                    ['Fatura kesen', r.contractor_name],
+                    ['İl / bölge', r.province || r.region || '—'],
+                    ['Kira', money(cleanNumber(r.rent_amount))],
+                    ['Yakıt oranı / birim', `${cleanNumber(r.fuel_rate)} · ${money(cleanNumber(r.fuel_unit_price))}`],
+                    ['KM / gün / nokta', `${cleanNumber(r.total_km).toLocaleString('tr-TR')} · ${cleanNumber(r.work_days)} · ${cleanNumber(r.stop_count)}`],
+                    ['Yakıt geliri', money(t.fuelIncome)],
+                    ['Uğraş / ek / HGS', money(cleanNumber(r.visit_prime) + cleanNumber(r.extra_work) + cleanNumber(r.hgs))],
+                    ['Yakıt kesintisi', money(cleanNumber(r.fuel_charge))],
+                    ['Brüt / KDV / tevkifat', `${money(t.brut)} · ${money(t.kdv)} · ${money(t.stoppage)}`]
+                  ].map(([k, v], i) => (
+                    <div key={k} className={`flex justify-between px-3 py-1.5 ${i % 2 ? 'bg-slate-100' : 'bg-white'}`}>
+                      <span className="text-slate-500">{k}</span><b>{v}</b>
+                    </div>
+                  ))}
+                </div>
+                <div className="bg-[#0f2744] text-white rounded-xl px-4 py-3">
+                  <div className="text-[10px] tracking-widest text-white/70">ÖDENECEK MUTABAKAT</div>
+                  <div className="text-xl font-black">{money(t.payable)}</div>
+                  <div className="text-[11px] text-white/80 mt-1">1. ödeme {money(t.term1)} · 2. ödeme {money(t.term2)}</div>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  <b className="text-slate-800">{COMPANY_IDENTITY.legalName}</b><br />
+                  {COMPANY_IDENTITY.address}<br />
+                  {COMPANY_IDENTITY.district} · {COMPANY_IDENTITY.phone}<br />
+                  PDF eki: {rentalFisFileName(r)}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => downloadBlob(await buildRentalFisPdf(r), rentalFisFileName(r))}
+                    className="flex-1 py-2 rounded-lg bg-slate-800 text-white text-xs font-bold"
+                  >
+                    PDF indir
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {isPlateRentalModalOpen && (
           <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -8778,7 +10274,126 @@ export default function App() {
       </div>
     </div>
   )}
+
+        {activeTab === 'users' && isAdmin && (
+          <div className="space-y-3">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+              <div>
+                <h3 className="font-bold text-slate-900">Kullanıcı tanımları</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  <b>Yönetici</b> her şeyi görür ve işlem yapar.
+                  <b>Rapor</b> her şeyi görür, hiçbir kaydı değiştirmez (`rapor@` bu roldedir).
+                  <b>Saha</b> yalnız kendi kiralık grubuna KM / gün girer.
+                </p>
+              </div>
+              <form onSubmit={handleCreatePortalUser} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2 items-end">
+                <label className="block lg:col-span-2">
+                  <span className="text-[10px] font-bold text-slate-500">E-posta</span>
+                  <input value={newPortalUser.email} onChange={e => setNewPortalUser({ ...newPortalUser, email: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" type="email" required />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] font-bold text-slate-500">Şifre (min 8)</span>
+                  <input value={newPortalUser.password} onChange={e => setNewPortalUser({ ...newPortalUser, password: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" type="text" minLength={8} required />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] font-bold text-slate-500">Ad</span>
+                  <input value={newPortalUser.full_name} onChange={e => setNewPortalUser({ ...newPortalUser, full_name: e.target.value })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] font-bold text-slate-500">Rol</span>
+                  <select value={newPortalUser.role} onChange={e => setNewPortalUser({ ...newPortalUser, role: e.target.value as 'admin' | 'reporter' | 'saha' })} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white">
+                    <option value="saha">Saha</option>
+                    <option value="reporter">Rapor (salt okuma)</option>
+                    <option value="admin">Yönetici</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-[10px] font-bold text-slate-500">Grup</span>
+                  <select value={newPortalUser.rental_work_group} onChange={e => setNewPortalUser({ ...newPortalUser, rental_work_group: e.target.value })} disabled={newPortalUser.role !== 'saha'} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white disabled:bg-slate-100">
+                    {RENTAL_WORK_GROUPS.map(g => <option key={g.id} value={g.id}>{g.label}</option>)}
+                  </select>
+                </label>
+                <button type="submit" disabled={newPortalUserBusy} className="sm:col-span-2 lg:col-span-6 px-4 py-2 rounded-lg bg-[#009fe3] text-white text-sm font-bold disabled:opacity-60">
+                  {newPortalUserBusy ? 'Açılıyor…' : 'Kullanıcı aç'}
+                </button>
+              </form>
+              <button type="button" onClick={() => void loadPortalUsers()} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold">
+                Listeyi yenile
+              </button>
+            </div>
+            {portalUsersError && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-xl px-4 py-3">{portalUsersError}</div>
+            )}
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-[11px] font-bold text-slate-500">
+                  <tr>
+                    <th className="py-2 px-3">E-posta</th>
+                    <th className="py-2 px-3">Ad</th>
+                    <th className="py-2 px-3">Rol</th>
+                    <th className="py-2 px-3">Kiralık grup</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {portalUsersBusy && (
+                    <tr><td colSpan={4} className="py-8 text-center text-slate-400 text-sm">Yükleniyor…</td></tr>
+                  )}
+                  {!portalUsersBusy && !portalUsers.length && !portalUsersError && (
+                    <tr><td colSpan={4} className="py-8 text-center text-slate-400 text-sm">Kullanıcı yok. Önce Auth’da hesap açın, sonra bu sayfayı yenileyin.</td></tr>
+                  )}
+                  {portalUsers.map((u: any) => (
+                    <tr key={u.id} className={u.id === currentUserId ? 'bg-blue-50/40' : ''}>
+                      <td className="py-2 px-3 font-semibold text-slate-800">
+                        {u.email}
+                        {u.id === currentUserId && <span className="ml-2 text-[10px] font-bold text-[#009fe3]">Siz</span>}
+                      </td>
+                      <td className="py-2 px-3">
+                        <input
+                          defaultValue={u.full_name || ''}
+                          onBlur={e => {
+                            const v = e.target.value.trim();
+                            if (v !== (u.full_name || '')) void handleSavePortalUser(u, { full_name: v });
+                          }}
+                          className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"
+                        />
+                      </td>
+                      <td className="py-2 px-3">
+                        <select
+                          value={u.role}
+                          onChange={e => void handleSavePortalUser(u, { role: e.target.value as 'admin' | 'reporter' | 'saha' })}
+                          className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white"
+                        >
+                          <option value="admin">Yönetici</option>
+                          <option value="reporter">Rapor (salt okuma)</option>
+                          <option value="saha">Saha</option>
+                        </select>
+                      </td>
+                      <td className="py-2 px-3">
+                        <select
+                          value={u.rental_work_group || ''}
+                          onChange={e => void handleSavePortalUser(u, { rental_work_group: e.target.value || null })}
+                          className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white max-w-[220px]"
+                        >
+                          <option value="">{u.role === 'saha' ? 'Grup seçin' : 'Tüm gruplar'}</option>
+                          {RENTAL_WORK_GROUPS.map(g => (
+                            <option key={g.id} value={g.id}>{g.label}</option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
   </main>
+      <footer className="bg-white border-t border-slate-200 px-4 py-3 text-[10px] text-slate-500 leading-relaxed">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+          <span><b className="text-slate-700">{COMPANY_IDENTITY.legalName}</b> · {COMPANY_IDENTITY.address}</span>
+          <span>{COMPANY_IDENTITY.district} · {COMPANY_IDENTITY.phone} · {COMPANY_IDENTITY.tagline}</span>
+        </div>
+      </footer>
 </div>
   );
 } 

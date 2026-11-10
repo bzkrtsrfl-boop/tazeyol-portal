@@ -13,8 +13,11 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   role text not null check (role in ('admin', 'reporter')),
   full_name text,
+  rental_work_group text,
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles add column if not exists rental_work_group text;
 
 alter table public.profiles enable row level security;
 
@@ -89,7 +92,9 @@ declare
     'subcontractor_ledger',
     'employee_transactions',
     'general_expenses',
-    'plate_rentals'
+    'plate_rentals',
+    'rental_settlement_tariffs',
+    'rental_settlements'
   ];
 begin
   foreach t in array tables
