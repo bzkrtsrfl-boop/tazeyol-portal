@@ -47,6 +47,21 @@ import {
 import { supabase } from './supabase';
 import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, type AccessLevel } from './auth';
 import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, type Customer } from './db';
+import {
+  normalizeContractorKey,
+  extractContractorName,
+  extractAdvanceContractorName,
+  contractorRecordsMatch
+} from './contractorIdentity';
+import {
+  amountsClose,
+  paymentLooksFull,
+  termPayLabel,
+  payTermFromDesc,
+  isBankTalimatDesc,
+  inSeptPayWave,
+  normalizeSeptWavePays
+} from './contractorPays';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
@@ -67,51 +82,6 @@ function TazeyolBrand() {
       </span>
     </div>
   );
-}
-
-function normalizeContractorKey(str: string) {
-  return (str || '')
-    .replace(/İ/g, 'i')
-    .replace(/I/g, 'i')
-    .toLocaleLowerCase('tr-TR')
-    .replace(/ı/g, 'i')
-    .replace(/ğ/g, 'g')
-    .replace(/ü/g, 'u')
-    .replace(/ş/g, 's')
-    .replace(/ö/g, 'o')
-    .replace(/ç/g, 'c')
-    .replace(/[^a-z0-9]/g, '');
-}
-
-function extractContractorName(invoiceNo: string) {
-  const full = String(invoiceNo || '').trim();
-  const parts = full.split(' - ').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 2) return parts[parts.length - 1].replace(/\([^)]*\)/g, '').trim();
-  return full;
-}
-
-function extractAdvanceContractorName(invoiceNo: string) {
-  return extractContractorName(String(invoiceNo || '').replace(/^AVANS\s*-?\s*/i, ''))
-    .replace(/\([^)]*\)/g, '')
-    .trim();
-}
-
-function contractorKeysLooselyMatch(a: string, b: string) {
-  const ka = normalizeContractorKey(a);
-  const kb = normalizeContractorKey(b);
-  if (!ka || !kb) return false;
-  if (ka === kb) return true;
-  if (ka.length >= 4 && kb.includes(ka)) return true;
-  if (kb.length >= 4 && ka.includes(kb)) return true;
-  return false;
-}
-
-function amountsClose(a: number, b: number, tol = 0.05) {
-  return Math.abs(Number(a) - Number(b)) <= tol;
-}
-
-function termPayLabel(term: 'term1' | 'term2' | string) {
-  return term === 'term2' || term === '2' ? '2 nci ödeme' : '1 nci ödeme';
 }
 
 function turkishMonthName(dateStr: string) {
@@ -589,7 +559,7 @@ function defaultContractorTermDates(issueDate: string) {
   const y = Number(d.slice(0, 4));
   const m = Number(d.slice(5, 7));
   if (!y || !m) return { term1: '', term2: '' };
-  if (d.startsWith('2026-09')) return { term1: '2026-10-23', term2: '2026-11-05' };
+  if (d.startsWith('2026-09')) return { term1: '2026-10-26', term2: '2026-11-05' };
   const n1 = shiftYearMonth(y, m, 1);
   const n2 = shiftYearMonth(y, m, 2);
   return { term1: lastDateOfMonth(n1.y, n1.m), term2: `${n2.y}-${pad2(n2.m)}-05` };
@@ -597,7 +567,7 @@ function defaultContractorTermDates(issueDate: string) {
 
 function contractorTermPayDate(issueDate: string, term: 'term1' | 'term2', fallback: string) {
   const d = String(issueDate || '').slice(0, 10);
-  if (d.startsWith('2026-09')) return term === 'term1' ? '2026-10-23' : '2026-11-05';
+  if (d.startsWith('2026-09')) return term === 'term1' ? '2026-10-26' : '2026-11-05';
   const dates = defaultContractorTermDates(d);
   return (term === 'term1' ? dates.term1 : dates.term2) || fallback;
 }
@@ -1335,11 +1305,11 @@ export default function App() {
   const [ledgerSearchTerm, setLedgerSearchTerm] = useState('');
   const [ledgerSortField, setLedgerSortField] = useState<'name' | 'tax' | 'balance'>('name');
   const [ledgerSortOrder, setLedgerSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('all');
+  const [subStatusFilter, setSubStatusFilter] = useState<'all' | 'pending' | 'paid'>('pending');
   const [subSortField, setSubSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
   const [subSortOrder, setSubSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [bankSortField, setBankSortField] = useState<'contractorName' | 'iban' | 'dueDate' | 'amount'>('dueDate');
-  const [bankSortOrder, setBankSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [bankSortField, setBankSortField] = useState<'contractorName' | 'iban' | 'dueDate' | 'amount'>('contractorName');
+  const [bankSortOrder, setBankSortOrder] = useState<'asc' | 'desc'>('asc');
   const [empSearchTerm, setEmpSearchTerm] = useState('');
   const [empSortField, setEmpSortField] = useState<'name' | 'salary' | 'netPayable'>('name');
   const [empSortOrder, setEmpSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -1636,9 +1606,9 @@ export default function App() {
       if (str.startsWith('200') && str.length >= 10) {
         str = str.replace(/^200/, '20');
       }
-      // Eğer GG.AA.YYYY girilmişse YYYY-MM-DD'ye çevir
-      if (str.includes('.')) {
-        const parts = str.split('.');
+      // Eğer GG.AA.YYYY / GG/AA/YYYY / GG-AA-YYYY girilmişse YYYY-MM-DD'ye çevir
+      if (str.includes('.') || str.includes('/') || /^\d{1,2}-\d{1,2}-\d{4}$/.test(str)) {
+        const parts = str.split(/[./-]/);
         if (parts.length === 3 && parts[2].length === 4) {
           return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
         }
@@ -2052,12 +2022,14 @@ export default function App() {
   const [subIbanFormData, setSubIbanFormData] = useState({
     name: '',
     iban: '',
-    phone: ''
+    phone: '',
+    tax_no: ''
   });
+  const [subInfoSearchTerm, setSubInfoSearchTerm] = useState('');
 
   // BANKA TALİMATI: fatura + vade satırı seçimi
   const [bankSelectedLines, setBankSelectedLines] = useState<{ [key: string]: boolean }>({});
-  const [bankWaveFilter, setBankWaveFilter] = useState<'all' | 'term1' | 'term2'>('all');
+  const [bankPayMode, setBankPayMode] = useState<Record<string, 'term1' | 'term2' | 'both'>>({});
 
   // MANUEL TAŞERON FATURA EKLEME MODALI
   const [isManualSubInvoiceModalOpen, setIsManualSubInvoiceModalOpen] = useState(false);
@@ -2174,9 +2146,12 @@ export default function App() {
   const subIbanMap = useMemo(() => {
     const map = new Map<string, string>();
     dbSubcontractors.forEach(s => {
-      if (s.name && s.iban) {
-        map.set(normalizeContractorKey(s.name), s.iban.trim());
-      }
+      const iban = String(s.iban || '').trim();
+      if (!iban) return;
+      [s.name, s.company_name].forEach(n => {
+        const k = normalizeContractorKey(n || '');
+        if (k) map.set(k, iban);
+      });
     });
     return map;
   }, [dbSubcontractors]);
@@ -2760,39 +2735,17 @@ export default function App() {
   ]);
 
   const pickUniqueContractorOutflows = (rows: any[]) => {
-    const rank = (inv: any) => {
-      const no = String(inv.invoice_no || '');
-      if (/tamam|1 ve 2/i.test(no)) return 0;
-      if (/banka talimat/i.test(no)) return 1;
-      return 2;
-    };
-    const sorted = [...rows].sort((a, b) =>
-      rank(a) - rank(b) ||
-      sanitizeDate(a.issue_date || a.created_at).localeCompare(sanitizeDate(b.issue_date || b.created_at))
-    );
     const kept: any[] = [];
-    sorted.forEach(inv => {
-      const name = extractContractorName(inv.invoice_no || '');
+    rows.forEach(inv => {
+      const no = String(inv.invoice_no || '');
+      const name = extractContractorName(no);
       const d = sanitizeDate(inv.issue_date || inv.created_at);
       const amt = cleanNumber(inv.total_amount);
-      const exact = kept.some(k =>
-        contractorKeysLooselyMatch(name, extractContractorName(k.invoice_no || '')) &&
+      if (kept.some(k =>
+        contractorRecordsMatch(name, extractContractorName(k.invoice_no || '')) &&
         sanitizeDate(k.issue_date || k.created_at) === d &&
         amountsClose(cleanNumber(k.total_amount), amt, 0.05)
-      );
-      if (exact) return;
-      const swallowed = kept.some(k => {
-        const kn = extractContractorName(k.invoice_no || '');
-        if (!contractorKeysLooselyMatch(name, kn)) return false;
-        const kd = sanitizeDate(k.issue_date || k.created_at);
-        const ka = cleanNumber(k.total_amount);
-        const days = Math.abs(Date.parse(d) - Date.parse(kd)) / 86400000;
-        if (!Number.isFinite(days) || days > 20) return false;
-        const kFull = /tamam|1 ve 2/i.test(String(k.invoice_no || ''));
-        if (kFull && (amountsClose(ka, amt * 2, 1) || amountsClose(ka, amt, 0.51))) return true;
-        return false;
-      });
-      if (swallowed) return;
+      )) return;
       kept.push(inv);
     });
     return kept;
@@ -3330,69 +3283,113 @@ export default function App() {
 
   const findContractorIban = (contractorName: string, inv?: any) => {
     const key = normalizeContractorKey(contractorName);
-    let foundIban = subIbanMap.get(key) || '';
+    let foundIban = (key && subIbanMap.get(key)) || '';
     if ((!foundIban || foundIban === 'IBAN Eksik') && inv) {
       if (inv.iban && String(inv.iban).trim().length > 10) foundIban = String(inv.iban).trim();
       else if (inv.contractor_iban && String(inv.contractor_iban).trim().length > 10) foundIban = String(inv.contractor_iban).trim();
     }
     if (!foundIban || foundIban === 'IBAN Eksik') {
       const found = dbSubcontractors.find(sub => {
-        const pSub = normalizeContractorKey(sub.name);
-        if (!pSub || !key) return false;
-        if (pSub === key || (key.length >= 4 && pSub.includes(key)) || (pSub.length >= 4 && key.includes(pSub))) return true;
-        const subWords = pSub.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
-        const keyWords = key.split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !['limited', 'sirketi', 'anonim', 'nakliyat', 'lojistik'].includes(w));
-        return subWords.some(sw => key.includes(sw)) || keyWords.some(kw => pSub.includes(kw));
+        const names = [sub.name, sub.company_name].filter(Boolean);
+        return names.some(n => contractorRecordsMatch(contractorName, n));
       });
-      if (found?.iban) foundIban = found.iban;
+      if (found?.iban) foundIban = String(found.iban).trim();
     }
     return foundIban || 'IBAN Eksik';
   };
 
   const matchesContractor = (sub: any, ...texts: any[]) => {
-    const nameKey = normalizeContractorKey(sub?.company_name || sub?.name || '');
+    const display = String(sub?.company_name || sub?.name || '');
     const id = String(sub?.id || '');
-    if (!nameKey && !id) return false;
+    if (!display && !id) return false;
     return texts.some(t => {
       if (t === undefined || t === null || t === '') return false;
-      const s = String(t);
+      const s = String(t).trim();
       if (id && s === id) return true;
-      return contractorKeysLooselyMatch(nameKey, s) || contractorKeysLooselyMatch(sub?.company_name || sub?.name || '', s);
+      const who = extractAdvanceContractorName(s) || extractContractorName(s) || s;
+      return (
+        contractorRecordsMatch(display, who) ||
+        contractorRecordsMatch(String(sub?.name || ''), who) ||
+        contractorRecordsMatch(String(sub?.company_name || ''), who)
+      );
     });
   };
 
-  const buildSubcontractorLedger = (sub: any) => {
+  const buildContractorAccount = (sub: any) => {
     const lines: { id: string; date: string; type: string; desc: string; debit: number; credit: number; isManual?: boolean; rawId?: any }[] = [];
-    if (!sub) return [] as (typeof lines[number] & { balance: number })[];
+    const empty = {
+      lines: [] as (typeof lines[number] & { balance: number })[],
+      openTerms: [] as {
+        lineId: string;
+        invoiceId: any;
+        invoiceNo: string;
+        contractorName: string;
+        term: 'term1' | 'term2';
+        termLabel: string;
+        dueDate: string;
+        issueDate: string;
+        amount: number;
+        advanceCut: number;
+        netAmount: number;
+        iban: string;
+      }[],
+      invoiceIds: new Set<string>(),
+      totalInvoice: 0,
+      totalOut: 0,
+      balance: 0,
+      leftoverAdvance: 0,
+      listInvoice: 0,
+      listOut: 0,
+      listBalance: 0
+    };
+    if (!sub) return empty;
+    const contractorName = String(sub.company_name || sub.name || '');
 
     const invoices: any[] = [];
+    const seenInv = new Set<string>();
     (dbInvoices || []).forEach((inv: any) => {
       if (inv.category !== 'subcontractor_invoice') return;
       const no = String(inv.invoice_no || '');
       if (no.toUpperCase().includes('AVANS')) return;
-      if (!matchesContractor(sub, extractContractorName(no), inv.supplier_name, inv.description, no)) return;
+      const who = extractContractorName(no);
+      if (!matchesContractor(sub, who) && !matchesContractor(sub, inv.supplier_name)) return;
+      const amt = cleanNumber(inv.total_amount);
+      const dupKey = `${normalizeContractorKey(who)}|${sanitizeDate(inv.issue_date)}|${Math.round(amt * 100)}`;
+      if (seenInv.has(dupKey)) return;
+      seenInv.add(dupKey);
       invoices.push(inv);
       lines.push({
         id: 'inv_' + inv.id,
         date: sanitizeDate(inv.issue_date || inv.created_at),
         type: 'Hakediş faturası',
         desc: no,
-        debit: cleanNumber(inv.total_amount),
+        debit: amt,
         credit: 0
       });
     });
+    const septTotal = Math.round(
+      invoices
+        .filter((inv: any) => sanitizeDate(inv.issue_date || inv.created_at).startsWith('2026-09'))
+        .reduce((s: number, inv: any) => s + cleanNumber(inv.total_amount), 0) * 100
+    ) / 100;
+    const divertedPays: { date: string; desc: string; amount: number; type: string }[] = [];
 
     const advAmounts: number[] = [];
     (dbAdvances || []).forEach((adv: any, idx: number) => {
       if (adv.target_type && adv.target_type !== 'contractor') return;
-      if (!matchesContractor(sub, adv.target_name, adv.target_id, adv.notes)) return;
+      if (!matchesContractor(sub, adv.target_name, adv.target_id)) return;
       const amt = cleanNumber(adv.total_amount);
-      if (amt <= 0 || advAmounts.some(x => amountsClose(x, amt))) return;
-      advAmounts.push(amt);
       const inst = Math.max(1, Number(adv.total_installments) || 1);
+      if (amt <= 0 || advAmounts.some(x => amountsClose(x, amt))) return;
+      const date = sanitizeDate(adv.issue_date || adv.created_at);
+      if (inst <= 1 && septTotal > 0.01 && amt > septTotal * 0.5 + 1) {
+        divertedPays.push({ date, desc: adv.notes || adv.description || 'ÖDEME', amount: amt, type: 'pay' });
+        return;
+      }
+      advAmounts.push(amt);
       lines.push({
         id: 'adv_' + (adv.id || idx),
-        date: sanitizeDate(adv.issue_date || adv.created_at),
+        date,
         type: inst > 1 ? `Taksitli avans (${inst} taksit)` : 'Peşin avans',
         desc: (adv.notes || adv.description || 'Verilen avans').replace(/\(\s*1\s*Taksit\s*\)/i, '').trim(),
         debit: 0,
@@ -3402,58 +3399,26 @@ export default function App() {
     (dbInvoices || []).forEach((inv: any) => {
       if (inv.category !== 'subcontractor_advance_paid') return;
       const no = String(inv.invoice_no || '');
-      if (!matchesContractor(sub, extractAdvanceContractorName(no), no)) return;
+      if (!matchesContractor(sub, extractAdvanceContractorName(no))) return;
       const amt = cleanNumber(inv.total_amount);
-      if (amt <= 0 || advAmounts.some(x => amountsClose(x, amt))) return;
-      advAmounts.push(amt);
       const instMatch = no.match(/(\d+)\s*Taksit/i);
       const inst = instMatch ? Number(instMatch[1]) : 1;
+      if (amt <= 0 || advAmounts.some(x => amountsClose(x, amt))) return;
+      const date = sanitizeDate(inv.issue_date || inv.created_at);
+      if (inst <= 1 && septTotal > 0.01 && amt > septTotal * 0.5 + 1) {
+        divertedPays.push({ date, desc: no, amount: amt, type: 'pay' });
+        return;
+      }
+      advAmounts.push(amt);
       lines.push({
         id: 'advinv_' + inv.id,
-        date: sanitizeDate(inv.issue_date || inv.created_at),
+        date,
         type: inst > 1 ? `Taksitli avans (${inst} taksit)` : 'Peşin avans',
         desc: no.replace(/\(\s*1\s*Taksit\s*\)/i, '').trim(),
         debit: 0,
         credit: amt
       });
     });
-    const advanceTotal = advAmounts.reduce((s, n) => s + n, 0);
-    let pesinPool = 0;
-    let instMonthly = 0;
-    let instRemaining = 0;
-    (dbAdvances || []).forEach((adv: any) => {
-      if (adv.target_type && adv.target_type !== 'contractor') return;
-      if (!matchesContractor(sub, adv.target_name, adv.target_id, adv.notes)) return;
-      const amt = cleanNumber(adv.total_amount);
-      if (amt <= 0) return;
-      const inst = Math.max(1, Number(adv.total_installments) || 1);
-      if (inst > 1) {
-        instMonthly += amt / inst;
-        instRemaining += amt;
-      } else {
-        pesinPool += amt;
-      }
-    });
-    (dbInvoices || []).forEach((inv: any) => {
-      if (inv.category !== 'subcontractor_advance_paid') return;
-      const no = String(inv.invoice_no || '');
-      if (!matchesContractor(sub, extractAdvanceContractorName(no), no)) return;
-      const amt = cleanNumber(inv.total_amount);
-      if (amt <= 0 || advAmounts.filter(x => amountsClose(x, amt)).length > 1) return;
-      if (advAmounts.some(x => amountsClose(x, amt)) && (dbAdvances || []).some((a: any) =>
-        matchesContractor(sub, a.target_name, a.target_id) && amountsClose(cleanNumber(a.total_amount), amt)
-      )) return;
-      const instMatch = no.match(/(\d+)\s*Taksit/i);
-      const inst = instMatch ? Number(instMatch[1]) : 1;
-      if (inst > 1) {
-        instMonthly += amt / inst;
-        instRemaining += amt;
-      } else {
-        pesinPool += amt;
-      }
-    });
-    instMonthly = Math.round(instMonthly * 100) / 100;
-
     type Slot = {
       key: string;
       invoiceId: any;
@@ -3464,7 +3429,7 @@ export default function App() {
       gross: number;
       net: number;
       paid: boolean;
-      payDate: string;
+      remain?: number;
     };
     const slots: Slot[] = [];
     invoices.forEach((inv: any) => {
@@ -3483,37 +3448,79 @@ export default function App() {
           dueDate: contractorTermPayDate(issueDate, term, sanitizeDate(term === 'term1' ? inv.term1_due_date : inv.term2_due_date)),
           gross,
           net: gross,
-          paid: inv[term === 'term1' ? 'term1_status' : 'term2_status'] === 'paid',
-          payDate: ''
+          paid: false
         });
       };
       add('term1', t1);
       add('term2', t2);
     });
-    slots.sort((a, b) => {
-      if (a.term !== b.term) return a.term === 'term1' ? -1 : 1;
-      return (a.issueDate || '').localeCompare(b.issueDate || '') || a.key.localeCompare(b.key);
+    slots.sort((a, b) => (a.issueDate || '').localeCompare(b.issueDate || '') || (a.term === b.term ? 0 : a.term === 'term1' ? -1 : 1));
+
+    const advanceRows: { date: string; amount: number; inst: number }[] = [];
+    (dbAdvances || []).forEach((adv: any) => {
+      if (adv.target_type && adv.target_type !== 'contractor') return;
+      if (!matchesContractor(sub, adv.target_name, adv.target_id)) return;
+      const amt = cleanNumber(adv.total_amount);
+      if (amt <= 0) return;
+      const inst = Math.max(1, Number(adv.total_installments) || 1);
+      if (inst <= 1 && septTotal > 0.01 && amt > septTotal * 0.5 + 1) return;
+      advanceRows.push({ date: sanitizeDate(adv.issue_date || adv.created_at), amount: amt, inst });
     });
-    const invoiceMonths = [...new Set(slots.map(s => (s.issueDate || '').slice(0, 7)).filter(Boolean))].sort();
-    invoiceMonths.forEach(ym => {
-      let monthInst = Math.round(Math.min(instMonthly, instRemaining) * 100) / 100;
-      slots.filter(s => (s.issueDate || '').startsWith(ym) && s.term === 'term1').forEach(s => {
-        const instCut = Math.round(Math.min(s.gross, monthInst) * 100) / 100;
-        monthInst = Math.round((monthInst - instCut) * 100) / 100;
-        instRemaining = Math.round((instRemaining - instCut) * 100) / 100;
-        const pesinCut = Math.round(Math.min(s.gross - instCut, pesinPool) * 100) / 100;
-        pesinPool = Math.round((pesinPool - pesinCut) * 100) / 100;
-        s.net = Math.round((s.gross - instCut - pesinCut) * 100) / 100;
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'subcontractor_advance_paid') return;
+      const no = String(inv.invoice_no || '');
+      if (!matchesContractor(sub, extractAdvanceContractorName(no))) return;
+      const amt = cleanNumber(inv.total_amount);
+      const instMatch = no.match(/(\d+)\s*Taksit/i);
+      const inst = instMatch ? Number(instMatch[1]) : 1;
+      if (amt <= 0) return;
+      if (advanceRows.some(x => amountsClose(x.amount, amt))) return;
+      if (inst <= 1 && septTotal > 0.01 && amt > septTotal * 0.5 + 1) return;
+      advanceRows.push({ date: sanitizeDate(inv.issue_date || inv.created_at), amount: amt, inst });
+    });
+
+    const instMonthOk = (advYm: string, invYm: string, inst: number) => {
+      if (!advYm || !invYm) return false;
+      if (invYm === advYm) return true;
+      if (invYm < advYm) {
+        const first = addYearMonth(advYm, 1 - inst);
+        return !!first && invYm >= first;
+      }
+      const last = addYearMonth(advYm, inst - 1);
+      return !!last && invYm <= last;
+    };
+    advanceRows.filter(a => a.inst > 1).forEach(a => {
+      const slice = Math.round((a.amount / a.inst) * 100) / 100;
+      const months = [...new Set(invoices.map((inv: any) => sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7)).filter(Boolean))];
+      months.forEach(ym => {
+        if (!instMonthOk((a.date || '').slice(0, 7), ym, a.inst)) return;
+        let left = slice;
+        slots.filter(s => s.term === 'term1' && s.issueDate.startsWith(ym)).forEach(s => {
+          if (left <= 0.009 || s.net <= 0.009) return;
+          const cut = Math.round(Math.min(s.net, left) * 100) / 100;
+          s.net = Math.round((s.net - cut) * 100) / 100;
+          left = Math.round((left - cut) * 100) / 100;
+        });
       });
-      slots.filter(s => (s.issueDate || '').startsWith(ym) && s.term === 'term2').forEach(s => {
-        const pesinCut = Math.round(Math.min(s.gross, pesinPool) * 100) / 100;
-        pesinPool = Math.round((pesinPool - pesinCut) * 100) / 100;
-        s.net = Math.round((s.gross - pesinCut) * 100) / 100;
-      });
+    });
+    advanceRows.filter(a => a.inst <= 1).forEach(a => {
+      let left = Math.round(a.amount * 100) / 100;
+      const apply = (term: 'term1' | 'term2') => {
+        slots.forEach(s => {
+          if (left <= 0.009 || s.net <= 0.009 || s.term !== term) return;
+          if (!s.issueDate || !a.date || s.issueDate > a.date) return;
+          if ((s.issueDate || '').slice(0, 7) > (a.date || '').slice(0, 7)) return;
+          const cut = Math.round(Math.min(s.net, left) * 100) / 100;
+          s.net = Math.round((s.net - cut) * 100) / 100;
+          left = Math.round((left - cut) * 100) / 100;
+        });
+      };
+      apply('term1');
+      apply('term2');
     });
 
     type Pay = { date: string; desc: string; amount: number; type: string };
-    const pays: Pay[] = [];
+    const pays: Pay[] = [...divertedPays];
     (dbSubcontractorsLedger || []).forEach((l: any) => {
       if (String(l.subcontractor_id) !== String(sub.id)) return;
       const amt = cleanNumber(l.amount);
@@ -3532,138 +3539,209 @@ export default function App() {
         return;
       }
       if (l.transaction_type === 'advance' && advAmounts.some(x => amountsClose(x, amt))) return;
-      pays.push({ date: sanitizeDate(l.created_at), desc: l.description || '', amount: amt, type: String(l.transaction_type || '') });
+      const desc = l.description || '';
+      pays.push({
+        date: sanitizeDate(l.created_at),
+        desc,
+        amount: amt,
+        type: String(l.transaction_type || '')
+      });
     });
     (dbInvoices || []).forEach((inv: any) => {
       if (inv.category !== 'subcontractor_paid_outflow') return;
       const no = String(inv.invoice_no || '');
-      if (!matchesContractor(sub, extractContractorName(no), extractAdvanceContractorName(no), no)) return;
+      if (!matchesContractor(sub, extractContractorName(no), extractAdvanceContractorName(no))) return;
       const amt = cleanNumber(inv.total_amount);
       if (amt <= 0) return;
-      pays.push({ date: sanitizeDate(inv.issue_date || inv.created_at), desc: no, amount: amt, type: /banka|talimat/i.test(no) ? 'bank' : 'pay' });
+      const date = sanitizeDate(inv.issue_date || inv.created_at);
+      if (pays.some(p => amountsClose(p.amount, amt, 0.51) && p.date === date)) return;
+      pays.push({ date, desc: no, amount: amt, type: /banka|talimat/i.test(no) ? 'bank' : 'pay' });
     });
-
-    const markPaid = (list: Slot[], date: string) => {
-      list.forEach(s => {
-        s.paid = true;
-        if (date && (!s.payDate || date < s.payDate)) s.payDate = date;
+    const batchPays: Pay[] = [];
+    (dbPaymentBatches || []).forEach((b: any) => {
+      if (String(b.status) !== 'paid') return;
+      const date = sanitizeDate(b.pay_date);
+      if (!date) return;
+      const payload = b.payload || {};
+      let amt = 0;
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      rows.forEach((r: any) => {
+        if (!contractorRecordsMatch(contractorName, r.contractorName || '')) return;
+        amt += cleanNumber(r.amount);
       });
-    };
-    const findSubset = (cands: Slot[], amount: number) => {
-      const n = Math.min(cands.length, 12);
-      let best: Slot[] | null = null;
-      for (let mask = 1; mask < (1 << n); mask++) {
-        const picked: Slot[] = [];
-        let netS = 0;
-        let grossS = 0;
-        for (let i = 0; i < n; i++) {
-          if (!(mask & (1 << i))) continue;
-          picked.push(cands[i]);
-          netS += cands[i].net;
-          grossS += cands[i].gross;
-        }
-        if (amountsClose(netS, amount, 0.51) || amountsClose(grossS, amount, 0.51)) {
-          if (!best || picked.length < best.length) best = picked;
-        }
-      }
-      return best;
-    };
-    const nearerWave = (issueDate: string, payDate: string): 'term1' | 'term2' | null => {
-      const issue = String(issueDate || '').slice(0, 10);
-      const pay = String(payDate || '').slice(0, 10);
-      if (!issue || !pay) return null;
-      const y = Number(issue.slice(0, 4));
-      const m = Number(issue.slice(5, 7));
-      if (!y || !m) return null;
-      const n1 = shiftYearMonth(y, m, 1);
-      const n2 = shiftYearMonth(y, m, 2);
-      const payYm = pay.slice(0, 7);
-      const payDay = Number(pay.slice(8, 10));
-      const ym1 = `${n1.y}-${pad2(n1.m)}`;
-      const ym2 = `${n2.y}-${pad2(n2.m)}`;
-      if (payYm === ym1) return 'term1';
-      if (payYm === ym2 && payDay <= 12) return 'term2';
-      return null;
-    };
-
-    pays.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    pays.forEach(p => {
-      const txt = `${p.desc} ${p.type}`.toLocaleLowerCase('tr-TR');
-      const unpaid = slots.filter(s => !s.paid);
-      if (!unpaid.length) return;
-      if (/tamam|1 ve 2/.test(txt) || amountsClose(p.amount, invoices.reduce((s, inv) => s + cleanNumber(inv.total_amount), 0), 0.51)) {
-        markPaid(unpaid, p.date);
-        return;
-      }
-      const dateWaves = unpaid.map(s => nearerWave(s.issueDate, p.date)).filter(Boolean) as ('term1' | 'term2')[];
-      const dateWave = dateWaves[0] && dateWaves.every(w => w === dateWaves[0]) ? dateWaves[0] : null;
-      const labelWave: 'term1' | 'term2' | null = /2\s*\.?\s*vade|2 nci/.test(txt) ? 'term2' : (/1\s*\.?\s*vade|1 nci/.test(txt) ? 'term1' : null);
-      const wave = dateWave || labelWave;
-      const primary = wave ? unpaid.filter(s => s.term === wave) : unpaid;
-      const hit = findSubset(primary, p.amount);
-      if (hit && hit.length) {
-        markPaid(hit, p.date);
-        return;
-      }
-      if (wave === 'term2' && primary.length) {
-        const term2Gross = primary.reduce((s, x) => s + x.gross, 0);
-        if (advanceTotal > 0.05 && amountsClose(p.amount + advanceTotal, term2Gross, 0.51)) {
-          markPaid(primary, p.date);
-          return;
-        }
-        const asFirst = findSubset(unpaid.filter(s => s.term === 'term1'), p.amount);
-        if (asFirst && asFirst.length) {
-          const invIds = new Set(asFirst.map(s => s.invoiceId));
-          markPaid(unpaid.filter(s => invIds.has(s.invoiceId)), p.date);
-          return;
-        }
-        if (invoices.length <= 2) markPaid(unpaid, p.date);
-      }
-    });
-
-    const pushGroup = (term: 'term1' | 'term2') => {
-      const group = slots.filter(s => s.term === term && s.paid && s.net > 0.009);
-      if (!group.length) return;
-      const date = contractorTermPayDate(group[0].issueDate, term, group[0].dueDate);
-      const amount = Math.round(group.reduce((s, x) => s + x.net, 0) * 100) / 100;
-      lines.push({
-        id: 'wave_' + term,
-        date,
-        type: termPayLabel(term),
-        desc: group.length === 1 ? group[0].invoiceNo : `${group.length} fatura ${termPayLabel(term)}`,
-        debit: 0,
-        credit: amount
-      });
-    };
-    const invoiceTotal = invoices.reduce((s, inv) => s + cleanNumber(inv.total_amount), 0);
-    const oneShot = pays.some(p => /tamam|1 ve 2/.test(`${p.desc} ${p.type}`.toLocaleLowerCase('tr-TR')) || amountsClose(p.amount, invoiceTotal, 0.51));
-    if (oneShot && slots.length > 0 && slots.every(s => s.paid)) {
-      const amount = Math.round(slots.reduce((s, x) => s + x.net, 0) * 100) / 100;
-      if (amount > 0.009) {
-        const p = pays.find(x => /tamam|1 ve 2/.test(`${x.desc} ${x.type}`.toLocaleLowerCase('tr-TR')) || amountsClose(x.amount, invoiceTotal, 0.51));
-        lines.push({
-          id: 'wave_full',
-          date: contractorTermPayDate(slots[0].issueDate, 'term1', p?.date || slots[0].payDate),
-          type: 'Tamamı ödeme',
-          desc: p?.desc || 'Fatura tamamı ödendi',
-          debit: 0,
-          credit: amount
+      if (amt <= 0.009 && Array.isArray(payload.lines)) {
+        payload.lines.forEach((l: any) => {
+          if (!contractorRecordsMatch(contractorName, l.contractorName || '')) return;
+          amt += cleanNumber(l.netAmount != null ? l.netAmount : l.amount);
         });
       }
-    } else {
-      pushGroup('term1');
-      pushGroup('term2');
+      amt = Math.round(amt * 100) / 100;
+      if (amt <= 0.009) return;
+      if (batchPays.some(p => p.date === date && amountsClose(p.amount, amt, 0.51))) return;
+      batchPays.push({
+        date,
+        desc: `ÖDEME - Banka talimatı - ${contractorName}`,
+        amount: amt,
+        type: 'bank'
+      });
+    });
+    batchPays.forEach(bp => {
+      if (inSeptPayWave(bp.date) && pays.some(p => paymentLooksFull(p.desc, p.type) || amountsClose(p.amount, septTotal, 1))) return;
+      const already = pays.some(p =>
+        p.date === bp.date && (
+          isBankTalimatDesc(p.desc, p.type) ||
+          amountsClose(p.amount, bp.amount, 0.51)
+        )
+      );
+      if (!already) pays.push(bp);
+    });
+    const pesinAdvanceTotal = Math.round(
+      lines.filter(l => /pe[sş]in avans/i.test(l.type)).reduce((s, l) => s + l.credit, 0) * 100
+    ) / 100;
+    const septInstCut = Math.round(
+      lines.filter(l => /taksitli avans/i.test(l.type)).reduce((s, l) => {
+        const m = String(l.type).match(/(\d+)\s*taksit/i);
+        const n = m ? Number(m[1]) : 0;
+        return s + (n > 1 ? l.credit / n : 0);
+      }, 0) * 100
+    ) / 100;
+    const visiblePays = normalizeSeptWavePays(pays, septTotal, pesinAdvanceTotal, septInstCut);
+
+    const septSlots = slots.filter(s => (s.issueDate || '').startsWith('2026-09'));
+    const septHalfNow = Math.round(septSlots.reduce((s, x) => s + x.gross, 0) / 2 * 100) / 100;
+    const paidSeptTerm1Full = visiblePays.some(p =>
+      String(p.date).slice(0, 10) <= '2026-10-31' && amountsClose(p.amount, septHalfNow, 0.51)
+    );
+    if (paidSeptTerm1Full && pesinAdvanceTotal > 0.01) {
+      septSlots.filter(s => s.term === 'term1').forEach(s => { s.net = s.gross; });
+      let avLeft = pesinAdvanceTotal;
+      septSlots.filter(s => s.term === 'term2').forEach(s => {
+        if (avLeft <= 0.009) return;
+        const cut = Math.round(Math.min(s.net, avLeft) * 100) / 100;
+        s.net = Math.round((s.net - cut) * 100) / 100;
+        avLeft = Math.round((avLeft - cut) * 100) / 100;
+      });
     }
 
-    lines.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.type.localeCompare(b.type, 'tr'));
+    slots.forEach(s => { s.remain = s.net; });
+    visiblePays.forEach(p => {
+      let left = Math.round(p.amount * 100) / 100;
+      const payD = String(p.date || '').slice(0, 10);
+      const septWave = inSeptPayWave(payD);
+      slots.forEach(s => {
+        const remain = s.remain || 0;
+        if (left <= 0.009 || remain <= 0.009) return;
+        if (septWave) {
+          if (!(s.issueDate || '').startsWith('2026-09')) return;
+        } else {
+          if (s.dueDate && payD && s.dueDate > payD) return;
+          if (!s.dueDate && s.issueDate && payD && s.issueDate > payD) return;
+        }
+        const take = Math.round(Math.min(remain, left) * 100) / 100;
+        s.remain = Math.round((remain - take) * 100) / 100;
+        left = Math.round((left - take) * 100) / 100;
+        if ((s.remain || 0) <= 0.009) s.paid = true;
+      });
+    });
+
+    visiblePays.forEach((p, idx) => {
+      const term = payTermFromDesc(p.desc, p.type);
+      const type = term === 'both' || paymentLooksFull(p.desc, p.type)
+        ? 'Tamamı ödeme'
+        : (term === 'term2' ? '2 nci ödeme' : (term === 'term1' ? '1 nci ödeme' : (p.type === 'bank' || /banka|talimat/i.test(p.desc) ? 'Banka ödemesi' : 'Ödeme')));
+      lines.push({
+        id: 'wave_pay_' + idx,
+        date: p.date,
+        type,
+        desc: p.desc || 'Ödeme',
+        debit: 0,
+        credit: Math.round(p.amount * 100) / 100
+      });
+    });
+
+    lines.sort((a, b) =>
+      (a.date || '').localeCompare(b.date || '') ||
+      (Number(b.debit > 0) - Number(a.debit > 0)) ||
+      a.type.localeCompare(b.type, 'tr')
+    );
     let running = 0;
-    return lines.map(line => {
+    const withBal = lines.map(line => {
       running += line.debit - line.credit;
       return { ...line, balance: running };
     });
+    const totalInvoice = Math.round(withBal.reduce((s, l) => s + l.debit, 0) * 100) / 100;
+    const totalOut = Math.round(withBal.reduce((s, l) => s + l.credit, 0) * 100) / 100;
+    const iban = findContractorIban(contractorName);
+    const invoiceIds = new Set(invoices.map((inv: any) => String(inv.id)));
+    const openTerms = slots
+      .filter(s => ((s as Slot & { remain?: number }).remain ?? s.net) > 0.009)
+      .map(s => {
+        const remain = (s as Slot & { remain?: number }).remain ?? s.net;
+        return {
+          lineId: s.key,
+          invoiceId: s.invoiceId,
+          invoiceNo: s.invoiceNo,
+          contractorName,
+          term: s.term,
+          termLabel: s.term === 'term2' ? '2 nci ödeme' : '1 nci ödeme',
+          dueDate: s.dueDate,
+          issueDate: s.issueDate,
+          amount: remain,
+          advanceCut: Math.round(Math.max(0, s.gross - s.net) * 100) / 100,
+          netAmount: remain,
+          iban
+        };
+      });
+    const balance = Math.round((totalInvoice - totalOut) * 100) / 100;
+    const advTotal = Math.round(advanceRows.reduce((s, a) => s + a.amount, 0) * 100) / 100;
+    const advUsedOnTerms = Math.round(slots.reduce((s, sl) => s + Math.max(0, sl.gross - sl.net), 0) * 100) / 100;
+    const leftoverAdvance = Math.round(Math.max(0, advTotal - advUsedOnTerms) * 100) / 100;
+    return {
+      lines: withBal,
+      openTerms,
+      invoiceIds,
+      totalInvoice,
+      totalOut,
+      balance,
+      leftoverAdvance,
+      listInvoice: totalInvoice,
+      listOut: totalOut,
+      listBalance: balance
+    };
   };
 
+  const buildSubcontractorLedger = (sub: any) => buildContractorAccount(sub).lines;
+
+  const contractorAccountsBySubId = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof buildContractorAccount>>();
+    (dbSubcontractors || []).forEach((sub: any) => {
+      m.set(String(sub.id), buildContractorAccount(sub));
+    });
+    return m;
+  }, [dbSubcontractors, dbInvoices, dbAdvances, dbSubcontractorsLedger, dbPaymentBatches, subIbanMap]);
+
+  const subcontractorCariRows = useMemo(() => {
+    return (dbSubcontractors || []).map((sub: any) => {
+      const acc = contractorAccountsBySubId.get(String(sub.id)) || buildContractorAccount(sub);
+      return {
+        ...sub,
+        computedTax: sub.tax_no || sub.tax_number || '',
+        totalInvoice: acc.totalInvoice,
+        totalOut: acc.totalOut,
+        balance: acc.balance
+      };
+    });
+  }, [dbSubcontractors, contractorAccountsBySubId]);
+
+  const selectedSubcontractorLedger = useMemo(
+    () => selectedSubcontractorForDetail
+      ? (contractorAccountsBySubId.get(String(selectedSubcontractorForDetail.id)) || buildContractorAccount(selectedSubcontractorForDetail)).lines
+      : [],
+    [selectedSubcontractorForDetail, contractorAccountsBySubId]
+  );
+
   const bankTermLines = useMemo(() => {
+    const seen = new Set<string>();
     const lines: {
       lineId: string;
       invoiceId: any;
@@ -3674,63 +3752,32 @@ export default function App() {
       dueDate: string;
       issueDate: string;
       amount: number;
+      advanceCut: number;
+      netAmount: number;
       iban: string;
     }[] = [];
-
-    dbInvoices
-      .filter(i => i.category === 'subcontractor_invoice')
-      .forEach(inv => {
-        const fullTitle = String(inv.invoice_no || '');
-        if (fullTitle.toUpperCase().includes('AVANS')) return;
-        const contractorName = extractContractorName(fullTitle);
-        const iban = findContractorIban(contractorName, inv);
-        const t1 = inv.term1_status !== 'paid' ? cleanNumber(inv.term1_amount || (inv.total_amount / 2)) : 0;
-        const t2 = inv.term2_status !== 'paid' ? cleanNumber(inv.term2_amount || (inv.total_amount / 2)) : 0;
-        if (t1 > 0) {
-          lines.push({
-            lineId: `${inv.id}-term1`,
-            invoiceId: inv.id,
-            invoiceNo: fullTitle,
-            contractorName,
-            term: 'term1',
-            termLabel: '1 nci ödeme',
-            dueDate: contractorTermPayDate(sanitizeDate(inv.issue_date), 'term1', sanitizeDate(inv.term1_due_date || inv.due_date || inv.issue_date)),
-            issueDate: sanitizeDate(inv.issue_date),
-            amount: t1,
-            iban
-          });
-        }
-        if (t2 > 0) {
-          lines.push({
-            lineId: `${inv.id}-term2`,
-            invoiceId: inv.id,
-            invoiceNo: fullTitle,
-            contractorName,
-            term: 'term2',
-            termLabel: '2 nci ödeme',
-            dueDate: contractorTermPayDate(sanitizeDate(inv.issue_date), 'term2', sanitizeDate(inv.term2_due_date || inv.due_date || inv.issue_date)),
-            issueDate: sanitizeDate(inv.issue_date),
-            amount: t2,
-            iban
-          });
-        }
+    const pushAcc = (acc: ReturnType<typeof buildContractorAccount>) => {
+      acc.openTerms.forEach(t => {
+        if (seen.has(t.lineId)) return;
+        seen.add(t.lineId);
+        lines.push(t);
       });
-
-    return lines.sort((a, b) => {
-      let comparison = 0;
-      if (bankSortField === 'contractorName') {
-        comparison = (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' });
-      } else if (bankSortField === 'iban') {
-        comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
-      } else if (bankSortField === 'amount') {
-        comparison = a.amount - b.amount;
-      } else {
-        comparison = (a.dueDate || '').localeCompare(b.dueDate || '');
-      }
-      if (comparison === 0) comparison = (a.invoiceNo || '').localeCompare(b.invoiceNo || '', 'tr-TR');
-      return bankSortOrder === 'asc' ? comparison : -comparison;
+    };
+    contractorAccountsBySubId.forEach(pushAcc);
+    (dbInvoices || []).forEach((inv: any) => {
+      if (inv.category !== 'subcontractor_invoice') return;
+      const no = String(inv.invoice_no || '');
+      if (no.toUpperCase().includes('AVANS')) return;
+      if ([...contractorAccountsBySubId.values()].some(a => a.invoiceIds.has(String(inv.id)))) return;
+      const name = extractContractorName(no);
+      pushAcc(buildContractorAccount({ id: 'loose_' + normalizeContractorKey(name), name, company_name: name }));
     });
-  }, [dbInvoices, dbSubcontractors, subIbanMap, bankSortField, bankSortOrder]);
+    return lines.sort((a, b) =>
+      (a.issueDate || '').localeCompare(b.issueDate || '') ||
+      (a.term === b.term ? 0 : a.term === 'term1' ? -1 : 1) ||
+      (a.contractorName || '').localeCompare(b.contractorName || '', 'tr-TR', { sensitivity: 'base' })
+    );
+  }, [contractorAccountsBySubId, dbInvoices, dbSubcontractors, dbAdvances, dbSubcontractorsLedger, subIbanMap]);
 
   const selectedBankTermLines = useMemo(
     () => bankTermLines.filter(line => bankSelectedLines[line.lineId]),
@@ -3770,7 +3817,13 @@ export default function App() {
       if (!isAdvCat && !isAdvTitle) return;
       if (inv.category === 'subcontractor_invoice') return;
       const name = extractAdvanceContractorName(no);
-      const already = [...byKey.keys()].some(ak => contractorKeysLooselyMatch(ak, name));
+      const hasRow = (dbAdvances || []).some((a: any) => {
+        const t = String(a.target_type || '');
+        if (t && t !== 'contractor' && t !== 'subcontractor') return false;
+        return contractorRecordsMatch(name, a.target_name || '') || contractorRecordsMatch(name, String(a.target_id || ''));
+      });
+      if (hasRow) return;
+      const already = [...byKey.keys()].some(ak => contractorRecordsMatch(ak, name));
       if (already) return;
       const amt = cleanNumber(inv.total_amount);
       if (amt <= 0) return;
@@ -3788,8 +3841,8 @@ export default function App() {
     if (direct) return { mapKey: k, ...direct };
     let best: AdvInfo | undefined;
     contractorAdvanceCuts.forEach((val, ak) => {
-      if (!ak || ak.length < 4) return;
-      if (!contractorKeysLooselyMatch(k, ak)) return;
+      if (!ak || ak.length < 6) return;
+      if (!contractorRecordsMatch(contractorName, ak)) return;
       if (!best || ak.length > best.mapKey.length) best = { mapKey: ak, cut: val.cut, applies: val.applies };
     });
     return best;
@@ -3803,56 +3856,16 @@ export default function App() {
     return normalizeContractorKey(contractorName);
   };
 
-  const decorateBankLinesWithAdvance = (lines: typeof bankTermLines) => {
-    const leftover = new Map<string, number>();
-    const decorated = new Map<string, (typeof bankTermLines)[number] & { advanceCut: number; netAmount: number }>();
-    const selectedIds = new Set(lines.map(l => l.lineId));
-    [...lines]
-      .sort((a, b) => {
-        if (a.term !== b.term) return a.term === 'term1' ? -1 : 1;
-        return (a.dueDate || '').localeCompare(b.dueDate || '') || a.lineId.localeCompare(b.lineId);
-      })
-      .forEach(l => {
-        const k = canonicalContractorKey(l.contractorName);
-        const info = findContractorAdvanceInfo(l.contractorName);
-        if (k && !leftover.has(k + ':p')) {
-          const inst = (info?.applies || []).filter(a => a.isInst).reduce((s, a) => s + a.apply, 0);
-          const pesin = (info?.applies || []).filter(a => !a.isInst).reduce((s, a) => s + a.apply, 0);
-          leftover.set(k + ':i', inst);
-          leftover.set(k + ':p', pesin);
-        }
-        let instPool = leftover.get(k + ':i') || 0;
-        let pesinPool = leftover.get(k + ':p') || 0;
-        const unpaidTerm1Held = l.term === 'term2' && bankTermLines.some(x =>
-          canonicalContractorKey(x.contractorName) === k &&
-          x.term === 'term1' &&
-          !selectedIds.has(x.lineId)
-        );
-        let cut = 0;
-        if (!unpaidTerm1Held) {
-          if (l.term === 'term1' && instPool > 0) {
-            const instCut = Math.round(Math.min(l.amount, instPool) * 100) / 100;
-            cut += instCut;
-            instPool = Math.round((instPool - instCut) * 100) / 100;
-          }
-          const pesinCut = Math.round(Math.min(l.amount - cut, pesinPool) * 100) / 100;
-          cut += pesinCut;
-          pesinPool = Math.round((pesinPool - pesinCut) * 100) / 100;
-        }
-        leftover.set(k + ':i', instPool);
-        leftover.set(k + ':p', pesinPool);
-        decorated.set(l.lineId, {
-          ...l,
-          advanceCut: cut,
-          netAmount: Math.round(Math.max(0, l.amount - cut) * 100) / 100
-        });
-      });
-    return lines.map(l => decorated.get(l.lineId) || { ...l, advanceCut: 0, netAmount: l.amount });
-  };
+  const decorateBankLinesWithAdvance = (lines: typeof bankTermLines) =>
+    lines.map(l => ({
+      ...l,
+      advanceCut: l.advanceCut || 0,
+      netAmount: l.netAmount ?? l.amount
+    }));
 
   const allDecoratedBankLines = useMemo(
     () => decorateBankLinesWithAdvance(bankTermLines),
-    [bankTermLines, contractorAdvanceCuts, dbSubcontractors]
+    [bankTermLines]
   );
 
   const decoratedBankByLineId = useMemo(() => {
@@ -3860,6 +3873,132 @@ export default function App() {
     allDecoratedBankLines.forEach(l => m.set(l.lineId, l));
     return m;
   }, [allDecoratedBankLines]);
+
+  const installmentCutForHakedis = (inv: any) => {
+    const who = extractContractorName(String(inv.invoice_no || ''));
+    const invYm = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
+    if (!invYm || !who) return 0;
+    const inWindow = (advYm: string, inst: number) => {
+      if (!advYm) return false;
+      if (invYm === advYm) return true;
+      if (invYm < advYm) {
+        const first = addYearMonth(advYm, 1 - inst);
+        return !!first && invYm >= first;
+      }
+      const last = addYearMonth(advYm, inst - 1);
+      return !!last && invYm <= last;
+    };
+    let cut = 0;
+    (dbAdvances || []).forEach((adv: any) => {
+      if (adv.target_type && adv.target_type !== 'contractor') return;
+      if (!contractorRecordsMatch(who, adv.target_name || '') && !contractorRecordsMatch(who, String(adv.target_id || ''))) return;
+      const inst = Math.max(1, Number(adv.total_installments) || 1);
+      if (inst <= 1) return;
+      const date = sanitizeDate(adv.issue_date || adv.created_at);
+      if (!inWindow((date || '').slice(0, 7), inst)) return;
+      cut += cleanNumber(adv.total_amount) / inst;
+    });
+    (dbInvoices || []).forEach((row: any) => {
+      if (row.category !== 'subcontractor_advance_paid') return;
+      const no = String(row.invoice_no || '');
+      if (!contractorRecordsMatch(who, extractAdvanceContractorName(no))) return;
+      const instMatch = no.match(/(\d+)\s*Taksit/i);
+      const inst = instMatch ? Number(instMatch[1]) : 1;
+      if (inst <= 1) return;
+      const date = sanitizeDate(row.issue_date || row.created_at);
+      if (!inWindow((date || '').slice(0, 7), inst)) return;
+      if ((dbAdvances || []).some((a: any) => amountsClose(cleanNumber(a.total_amount), cleanNumber(row.total_amount)))) return;
+      cut += cleanNumber(row.total_amount) / inst;
+    });
+    return Math.round(cut * 100) / 100;
+  };
+
+  const visibleHakedisRows = useMemo(() => {
+    const term = subSearchTerm.toLocaleLowerCase('tr-TR').trim();
+    const parseDate = (d: any) => {
+      if (!d) return 0;
+      const str = String(d).trim();
+      if (str.includes('.')) {
+        const [day, month, year] = str.split('.');
+        return new Date(`${year}-${month}-${day}`).getTime() || 0;
+      }
+      return new Date(str).getTime() || 0;
+    };
+    const list = (dbInvoices || [])
+      .filter((i: any) => i.category === 'subcontractor_invoice')
+      .filter((inv: any) => {
+        const invTitle = (inv.invoice_no || '').toLocaleLowerCase('tr-TR');
+        const matchesSearch = !term || invTitle.includes(term);
+        const isFullyPaid = inv.term1_status === 'paid' && inv.term2_status === 'paid';
+        let matchesStatus = true;
+        if (subStatusFilter === 'pending') matchesStatus = !isFullyPaid;
+        else if (subStatusFilter === 'paid') matchesStatus = isFullyPaid;
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a: any, b: any) => {
+        let comparison = 0;
+        if (subSortField === 'invoice_no') {
+          const nameA = (a.invoice_no || '').split(' - ')[1] || a.invoice_no || '';
+          const nameB = (b.invoice_no || '').split(' - ')[1] || b.invoice_no || '';
+          comparison = nameA.trim().localeCompare(nameB.trim(), 'tr-TR', { sensitivity: 'base' });
+        } else if (subSortField === 'issue_date') {
+          comparison = parseDate(a.issue_date) - parseDate(b.issue_date);
+        } else {
+          comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
+        }
+        return subSortOrder === 'asc' ? comparison : -comparison;
+      });
+    const instPool = new Map<string, number>();
+    list.forEach((inv: any) => {
+      const whoKey = normalizeContractorKey(extractContractorName(String(inv.invoice_no || '')));
+      const ym = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
+      const poolKey = `${whoKey}|${ym}`;
+      if (!instPool.has(poolKey)) instPool.set(poolKey, installmentCutForHakedis(inv));
+    });
+    const rows = list.map((inv: any) => {
+        const total = cleanNumber(inv.total_amount);
+        const t1Gross = Math.round((total / 2) * 100) / 100;
+        const t2Gross = Math.round((total - t1Gross) * 100) / 100;
+        const whoKey = normalizeContractorKey(extractContractorName(String(inv.invoice_no || '')));
+        const ym = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
+        const poolKey = `${whoKey}|${ym}`;
+        const pool = instPool.get(poolKey) || 0;
+        const instCut = Math.round(Math.min(t1Gross, pool) * 100) / 100;
+        if (instCut > 0) instPool.set(poolKey, Math.round((pool - instCut) * 100) / 100);
+        const isT1Paid = inv.term1_status === 'paid';
+        const isT2Paid = inv.term2_status === 'paid';
+        const dynamicT1 = isT1Paid ? 0 : Math.round((t1Gross - instCut) * 100) / 100;
+        const dynamicT2 = isT2Paid ? 0 : t2Gross;
+        return {
+          inv,
+          t1: t1Gross,
+          t2: t2Gross,
+          isT1Paid,
+          isT2Paid,
+          deductedAdvAmt: instCut,
+          deductedAdvForT2: 0,
+          dynamicT1,
+          dynamicT2,
+          total
+        };
+      });
+    const totals = rows.reduce(
+      (s, r) => ({
+        total: s.total + r.total,
+        term1: s.term1 + r.dynamicT1,
+        term2: s.term2 + r.dynamicT2
+      }),
+      { total: 0, term1: 0, term2: 0 }
+    );
+    return {
+      rows,
+      totals: {
+        total: Math.round(totals.total * 100) / 100,
+        term1: Math.round(totals.term1 * 100) / 100,
+        term2: Math.round(totals.term2 * 100) / 100
+      }
+    };
+  }, [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder]);
 
   const displayBankTermLines = allDecoratedBankLines;
 
@@ -3879,59 +4018,86 @@ export default function App() {
     [displayBankTermLines, sentBatchLineIds]
   );
 
-  const waveBankTermLines = useMemo(() => {
-    if (bankWaveFilter === 'all') return payableBankTermLines;
-    return payableBankTermLines.filter(l => l.term === bankWaveFilter);
-  }, [payableBankTermLines, bankWaveFilter]);
-
   const bankContractorRows = useMemo(() => {
     const map = new Map<string, {
       groupKey: string;
       contractorName: string;
       iban: string;
-      netAmount: number;
-      advanceCut: number;
-      lineIds: string[];
       invoiceNos: string[];
       dueDate: string;
+      term1Ids: string[];
+      term2Ids: string[];
+      term1Amount: number;
+      term2Amount: number;
+      term1Cut: number;
+      term2Cut: number;
     }>();
-    waveBankTermLines.forEach(l => {
+    payableBankTermLines.forEach(l => {
       const groupKey = canonicalContractorKey(l.contractorName) || l.contractorName;
       const cur = map.get(groupKey) || {
         groupKey,
         contractorName: l.contractorName,
         iban: l.iban,
-        netAmount: 0,
-        advanceCut: 0,
-        lineIds: [] as string[],
         invoiceNos: [] as string[],
-        dueDate: l.dueDate || ''
+        dueDate: l.dueDate || '',
+        term1Ids: [] as string[],
+        term2Ids: [] as string[],
+        term1Amount: 0,
+        term2Amount: 0,
+        term1Cut: 0,
+        term2Cut: 0
       };
-      cur.netAmount += l.netAmount;
-      cur.advanceCut += l.advanceCut || 0;
-      cur.lineIds.push(l.lineId);
+      if (l.term === 'term2') {
+        cur.term2Ids.push(l.lineId);
+        cur.term2Amount += l.netAmount;
+        cur.term2Cut += l.advanceCut || 0;
+      } else {
+        cur.term1Ids.push(l.lineId);
+        cur.term1Amount += l.netAmount;
+        cur.term1Cut += l.advanceCut || 0;
+      }
       if (l.invoiceNo && !cur.invoiceNos.includes(l.invoiceNo)) cur.invoiceNos.push(l.invoiceNo);
       if (l.iban && l.iban !== 'IBAN Eksik' && (cur.iban === 'IBAN Eksik' || !cur.iban)) cur.iban = l.iban;
       if (l.dueDate && (!cur.dueDate || l.dueDate < cur.dueDate)) cur.dueDate = l.dueDate;
       if ((l.contractorName || '').length > (cur.contractorName || '').length) cur.contractorName = l.contractorName;
       map.set(groupKey, cur);
     });
-    const rows = Array.from(map.values());
+    const rows = Array.from(map.values()).map(cur => {
+      const has1 = cur.term1Amount > 0.009;
+      const has2 = cur.term2Amount > 0.009;
+      let mode: 'term1' | 'term2' | 'both' = bankPayMode[cur.groupKey] || (has1 ? 'term1' : 'term2');
+      if (mode === 'term1' && !has1) mode = has2 ? 'term2' : 'term1';
+      if (mode === 'term2' && !has2) mode = has1 ? 'term1' : 'term2';
+      if (mode === 'both' && !(has1 && has2)) mode = has1 ? 'term1' : 'term2';
+      const lineIds = mode === 'both' ? [...cur.term1Ids, ...cur.term2Ids] : (mode === 'term2' ? cur.term2Ids : cur.term1Ids);
+      const netAmount = mode === 'both' ? cur.term1Amount + cur.term2Amount : (mode === 'term2' ? cur.term2Amount : cur.term1Amount);
+      const advanceCut = mode === 'both' ? cur.term1Cut + cur.term2Cut : (mode === 'term2' ? cur.term2Cut : cur.term1Cut);
+      let leftoverAdvance = 0;
+      for (const sub of dbSubcontractors || []) {
+        if (!contractorRecordsMatch(cur.contractorName, sub.company_name || sub.name || '')) continue;
+        leftoverAdvance = contractorAccountsBySubId.get(String(sub.id))?.leftoverAdvance || 0;
+        break;
+      }
+      return { ...cur, mode, has1, has2, lineIds, netAmount, advanceCut, leftoverAdvance };
+    });
     rows.sort((a, b) => {
       let comparison = 0;
       if (bankSortField === 'contractorName') {
         comparison = a.contractorName.localeCompare(b.contractorName, 'tr-TR', { sensitivity: 'base' });
       } else if (bankSortField === 'iban') {
-        comparison = (a.iban || '').localeCompare(b.iban || '', 'tr-TR');
+        const ia = !a.iban || a.iban === 'IBAN Eksik' ? '0' : '1' + a.iban;
+        const ib = !b.iban || b.iban === 'IBAN Eksik' ? '0' : '1' + b.iban;
+        comparison = ia.localeCompare(ib, 'tr-TR');
       } else if (bankSortField === 'amount') {
         comparison = a.netAmount - b.netAmount;
       } else {
         comparison = (a.dueDate || '').localeCompare(b.dueDate || '');
       }
+      if (!comparison) comparison = a.contractorName.localeCompare(b.contractorName, 'tr-TR', { sensitivity: 'base' });
       return bankSortOrder === 'asc' ? comparison : -comparison;
     });
     return rows;
-  }, [waveBankTermLines, bankSortField, bankSortOrder]);
+  }, [payableBankTermLines, bankPayMode, bankSortField, bankSortOrder, contractorAccountsBySubId, dbSubcontractors]);
   // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
   const processedEmployees = useMemo(() => {
     const ym = currentPayYearMonth();
@@ -4032,21 +4198,49 @@ export default function App() {
   };
 
   const handleToggleSelectAllBank = () => {
-    const allSelected = waveBankTermLines.length > 0 && waveBankTermLines.every(l => bankSelectedLines[l.lineId]);
+    const allIds = bankContractorRows.flatMap(r => r.lineIds);
+    const allSelected = allIds.length > 0 && allIds.every(id => bankSelectedLines[id]);
     const next: { [key: string]: boolean } = {};
-    waveBankTermLines.forEach(l => {
-      next[l.lineId] = !allSelected;
+    bankContractorRows.forEach(r => {
+      [...r.term1Ids, ...r.term2Ids].forEach(id => { next[id] = false; });
+      r.lineIds.forEach(id => { next[id] = !allSelected; });
     });
     setBankSelectedLines(next);
   };
 
-  const handleToggleBankContractor = (lineIds: string[]) => {
+  const handleToggleBankContractor = (lineIds: string[], allIds?: string[]) => {
     const allOn = lineIds.length > 0 && lineIds.every(id => bankSelectedLines[id]);
     const next = { ...bankSelectedLines };
-    lineIds.forEach(id => {
-      next[id] = !allOn;
-    });
+    (allIds || lineIds).forEach(id => { next[id] = false; });
+    lineIds.forEach(id => { next[id] = !allOn; });
     setBankSelectedLines(next);
+  };
+
+  const handleSetBankPayMode = (groupKey: string, mode: 'term1' | 'term2' | 'both', row: { term1Ids: string[]; term2Ids: string[]; lineIds: string[] }) => {
+    setBankPayMode(prev => ({ ...prev, [groupKey]: mode }));
+    const nextIds = mode === 'both' ? [...row.term1Ids, ...row.term2Ids] : (mode === 'term2' ? row.term2Ids : row.term1Ids);
+    const wasOn = row.lineIds.length > 0 && row.lineIds.every(id => bankSelectedLines[id]);
+    if (!wasOn) return;
+    const next = { ...bankSelectedLines };
+    [...row.term1Ids, ...row.term2Ids].forEach(id => { next[id] = false; });
+    nextIds.forEach(id => { next[id] = true; });
+    setBankSelectedLines(next);
+  };
+
+  const handleBulkBankPayMode = (mode: 'term1' | 'term2' | 'both') => {
+    const nextMode: Record<string, 'term1' | 'term2' | 'both'> = { ...bankPayMode };
+    const nextSel = { ...bankSelectedLines };
+    bankContractorRows.forEach(r => {
+      const ok = mode === 'both' ? (r.has1 && r.has2) : (mode === 'term2' ? r.has2 : r.has1);
+      if (!ok) return;
+      nextMode[r.groupKey] = mode;
+      const nextIds = mode === 'both' ? [...r.term1Ids, ...r.term2Ids] : (mode === 'term2' ? r.term2Ids : r.term1Ids);
+      const wasOn = r.lineIds.length > 0 && r.lineIds.every(id => bankSelectedLines[id]);
+      [...r.term1Ids, ...r.term2Ids].forEach(id => { nextSel[id] = false; });
+      if (wasOn) nextIds.forEach(id => { nextSel[id] = true; });
+    });
+    setBankPayMode(nextMode);
+    setBankSelectedLines(nextSel);
   };
 
   const handleDownloadBankExcel = () => {
@@ -4100,13 +4294,14 @@ export default function App() {
       lines: decoratedSelected.map(l => ({
         lineId: l.lineId,
         invoiceId: l.invoiceId,
+        invoiceNo: l.invoiceNo,
         term: l.term,
         contractorName: l.contractorName,
         netAmount: l.netAmount,
         advanceCut: l.advanceCut || 0
       }))
     };
-    const waveLabel = bankWaveFilter === 'term1' ? '1 nci ödeme' : bankWaveFilter === 'term2' ? '2 nci ödeme' : 'karışık / kalan';
+    const waveLabel = 'kişisel 1 nci / 2 nci / Tamamı';
     supabase.from('payment_batches').insert([{
       pay_date: todayStr,
       status: 'sent',
@@ -4138,8 +4333,17 @@ export default function App() {
     const payDate = sanitizeDate(batch.pay_date) || new Date().toISOString().split('T')[0];
     if (!window.confirm(`Banka bu partiyi ödedi mi?\n${formatDateTR(payDate)} · ${rows.length} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır.`)) return;
     try {
+      const activeLines = (lines as any[]).length
+        ? (lines as any[])
+        : (rows as any[]).map((r: any) => ({
+            contractorName: r.contractorName,
+            netAmount: r.amount,
+            invoiceNo: `Banka talimatı - ${r.contractorName}`,
+            term: ''
+          }));
       const byInvoice = new Map<any, { term1?: boolean; term2?: boolean }>();
-      lines.forEach((line: any) => {
+      activeLines.forEach((line: any) => {
+        if (!line.invoiceId) return;
         const cur = byInvoice.get(line.invoiceId) || {};
         if (line.term === 'term1') cur.term1 = true;
         if (line.term === 'term2') cur.term2 = true;
@@ -4157,27 +4361,37 @@ export default function App() {
         await supabase.from('invoices').update(updates).eq('id', invoiceId);
       }
       const existing = (dbInvoices || []).filter((i: any) => i.category === 'subcontractor_paid_outflow');
-      const cashRows = rows
-        .filter((r: any) => cleanNumber(r.amount) > 0.009)
-        .filter((r: any) => !existing.some((i: any) =>
-          sanitizeDate(i.issue_date) === payDate &&
-          Math.abs(cleanNumber(i.total_amount) - cleanNumber(r.amount)) < 0.05 &&
-          contractorKeysLooselyMatch(r.contractorName, extractContractorName(i.invoice_no || ''))
-        ))
-        .map((r: any) => ({
-          invoice_no: `ÖDEME - Banka talimatı - ${r.contractorName}`,
-          direction: 'incoming',
-          category: 'subcontractor_paid_outflow',
-          total_amount: Math.round(cleanNumber(r.amount) * 100) / 100,
-          issue_date: payDate,
-          due_date: payDate,
-          status: 'paid'
-        }));
+      const cashRows = activeLines
+        .map((line: any) => {
+          const inv = dbInvoices.find(i => String(i.id) === String(line.invoiceId));
+          const title = String(line.invoiceNo || inv?.invoice_no || line.contractorName);
+          const amt = Math.round(cleanNumber(line.netAmount) * 100) / 100;
+          if (amt <= 0.009) return null;
+          const invoiceNo = line.term
+            ? `ÖDEME - ${title} (${termPayLabel(line.term)})`
+            : `ÖDEME - Banka talimatı - ${line.contractorName || title}`;
+          const dup = existing.some((i: any) =>
+            sanitizeDate(i.issue_date) === payDate &&
+            Math.abs(cleanNumber(i.total_amount) - amt) < 0.05 &&
+            String(i.invoice_no || '') === invoiceNo
+          );
+          if (dup) return null;
+          return {
+            invoice_no: invoiceNo,
+            direction: 'incoming',
+            category: 'subcontractor_paid_outflow',
+            total_amount: amt,
+            issue_date: payDate,
+            due_date: payDate,
+            status: 'paid'
+          };
+        })
+        .filter(Boolean);
       if (cashRows.length > 0) {
         const { error: cashErr } = await supabase.from('invoices').insert(cashRows);
         if (cashErr) throw cashErr;
       }
-      await applyAdvanceUsageToDb(lines.map((l: any) => ({ contractorName: l.contractorName, advanceCut: cleanNumber(l.advanceCut) })));
+      await applyAdvanceUsageToDb(activeLines.map((l: any) => ({ contractorName: l.contractorName, advanceCut: cleanNumber(l.advanceCut) })));
       const { error: stErr } = await supabase.from('payment_batches').update({ status: 'paid', pay_date: payDate }).eq('id', batch.id);
       if (stErr) throw stErr;
       alert(`Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ düşüldü.`);
@@ -4206,52 +4420,85 @@ export default function App() {
     if (!isAdmin) return;
     const file = e.target.files?.[0];
     if (!file) return;
-    const payDate = window.prompt('Bu Excel hangi günde ödendi? (YYYY-AA-GG)', new Date().toISOString().split('T')[0]);
+    const payDate = window.prompt(
+      'Bu Excel hangi günde ödendi?\n26 Ekim talimatı: 2026-10-26\n5 Kasım talimatı: 2026-11-05\n\nBugünün tarihini yazmayın.',
+      ''
+    );
     if (!payDate) {
       e.target.value = '';
       return;
     }
     const date = sanitizeDate(payDate);
-    if (!date) {
-      alert('Geçerli bir tarih girin.');
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      alert('Geçerli bir tarih girin. Örn. 2026-10-26 veya 26.10.2026');
       e.target.value = '';
       return;
     }
-    const invYmRaw = window.prompt('Bu tutarlar hangi ayın faturaları? (YYYY-AA)\nÖrn. 26.10 ve 05.11 ödemeleri için 2026-09', date.slice(0, 7));
+    if (date === new Date().toISOString().split('T')[0] && date !== '2026-10-26' && date !== '2026-11-05') {
+      if (!window.confirm(`Dikkat: tarih ${date} (bugün). Eski 26-10 / 5-11 Excel’i ise iptal edip doğru günü yazın.\nYine de bugüne yazayım mı?`)) {
+        e.target.value = '';
+        return;
+      }
+    }
+    const invYmRaw = window.prompt('Bu tutarlar hangi ayın faturaları? (YYYY-AA)\n26.10 ve 05.11 ödemeleri için 2026-09 yazın', '2026-09');
     const invYm = /^\d{4}-\d{2}$/.test(String(invYmRaw || '').trim()) ? String(invYmRaw).trim() : '';
-    const waveRaw = window.prompt('1 nci ödeme mi 2 nci mi? (1 veya 2, boş = yalnızca cariye ödeme yaz)', '1');
+    const waveRaw = window.prompt('1 nci ödeme mi 2 nci mi?\n26-10 Excel için 1\n5-11 Excel için 2', date === '2026-11-05' ? '2' : '1');
     const closeTerm: 'term1' | 'term2' | null = String(waveRaw || '').trim() === '2' ? 'term2' : (String(waveRaw || '').trim() === '1' ? 'term1' : null);
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const parseBankExcelRow = (row: any) => {
+        const name = String(excelColFuzzy(row, ['alici unvani', 'alıcı unvanı', 'unvan', 'ad soyad', 'alt yuklenici', 'alt yüklenici', 'name']) || '').trim();
+        const amt = Math.round(cleanNumber(excelColFuzzy(row, ['odeme tutari', 'ödeme tutarı', 'tutar tl', 'tutar (tl)', 'tutar', 'net', 'amount'])) * 100) / 100;
+        return { name, amt };
+      };
+      const parsed = rows.map(parseBankExcelRow).filter(r => r.name && r.amt > 0);
+      if (parsed.length === 0) {
+        const headers = rows[0] ? Object.keys(rows[0]).join(', ') : 'boş';
+        alert(`Excel’den ödeme satırı okunamadı.\nİlk satır sütunları: ${headers}\nDosya banka talimatı Excel’i olmalı (Alıcı Unvanı + Ödeme Tutarı).`);
+        e.target.value = '';
+        return;
+      }
+      if (!window.confirm(`${date} tarihine ${parsed.length} kişi yazılacak.\nToplam ${parsed.reduce((s, r) => s + r.amt, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\nÖrnek: ${parsed[0].name} ${parsed[0].amt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\n\nDevam edeyim mi?`)) {
+        e.target.value = '';
+        return;
+      }
       const existing = (dbInvoices || []).filter((i: any) => i.category === 'subcontractor_paid_outflow');
       const toInsert: any[] = [];
       let skipped = 0;
-      rows.forEach((row: any) => {
-        const name = String(row['Alıcı Unvanı'] || row['Unvan'] || row['Ad Soyad'] || row['Alt Yüklenici'] || '').trim();
-        const amt = cleanNumber(row['Ödeme Tutarı (TL)'] || row['Tutar'] || row['Tutar (TL)'] || row['Net']);
-        if (!name || amt <= 0) return;
-        const dup = existing.some((i: any) => {
-          if (Math.abs(cleanNumber(i.total_amount) - amt) > 0.05) return false;
-          if (sanitizeDate(i.issue_date) !== date) return false;
-          return contractorKeysLooselyMatch(name, extractContractorName(i.invoice_no || ''));
-        });
-        if (dup || toInsert.some(x => contractorKeysLooselyMatch(name, extractContractorName(x.invoice_no)) && Math.abs(x.total_amount - amt) < 0.05)) {
+      let updated = 0;
+      for (const { name, amt } of parsed) {
+        const sameDay = existing.filter((i: any) =>
+          sanitizeDate(i.issue_date) === date &&
+          contractorRecordsMatch(name, extractContractorName(i.invoice_no || ''))
+        );
+        const exact = sameDay.find((i: any) => amountsClose(cleanNumber(i.total_amount), amt, 0.05));
+        if (exact || toInsert.some(x => contractorRecordsMatch(name, extractContractorName(x.invoice_no)) && amountsClose(x.total_amount, amt, 0.05))) {
           skipped += 1;
-          return;
+          continue;
+        }
+        const wrongAmt = sameDay.find((i: any) => /banka\s*talimat/i.test(String(i.invoice_no || '')));
+        if (wrongAmt) {
+          const { error } = await supabase.from('invoices').update({
+            total_amount: amt,
+            invoice_no: `ÖDEME - Banka talimatı - ${name}`
+          }).eq('id', wrongAmt.id);
+          if (error) throw error;
+          updated += 1;
+          continue;
         }
         toInsert.push({
           invoice_no: `ÖDEME - Banka talimatı - ${name}`,
           direction: 'incoming',
           category: 'subcontractor_paid_outflow',
-          total_amount: Math.round(amt * 100) / 100,
+          total_amount: amt,
           issue_date: date,
           due_date: date,
           status: 'paid'
         });
-      });
+      }
       if (toInsert.length) {
         const { error } = await supabase.from('invoices').insert(toInsert);
         if (error) throw error;
@@ -4259,14 +4506,14 @@ export default function App() {
       let closed = 0;
       if (closeTerm && invYm) {
         const names = toInsert.map(x => extractContractorName(x.invoice_no));
-        const extraNames = rows.map((row: any) => String(row['Alıcı Unvanı'] || row['Unvan'] || row['Ad Soyad'] || row['Alt Yüklenici'] || '').trim()).filter(Boolean);
+        const extraNames = parsed.map(r => r.name);
         const allNames = [...names, ...extraNames];
         for (const inv of dbInvoices || []) {
           if (inv.category !== 'subcontractor_invoice') continue;
           const issueYm = sanitizeDate(inv.issue_date || '').slice(0, 7);
           if (issueYm !== invYm) continue;
           const contractor = extractContractorName(inv.invoice_no || '');
-          if (!allNames.some(n => contractorKeysLooselyMatch(n, contractor))) continue;
+          if (!allNames.some(n => contractorRecordsMatch(n, contractor))) continue;
           const updates: any = {};
           if (closeTerm === 'term1' && inv.term1_status !== 'paid') updates.term1_status = 'paid';
           if (closeTerm === 'term2' && inv.term2_status !== 'paid') updates.term2_status = 'paid';
@@ -4278,7 +4525,24 @@ export default function App() {
           if (!error) closed += 1;
         }
       }
-      alert(`${date} tarihli ${toInsert.length} ödeme carilere işlendi.${skipped ? `\n${skipped} satır zaten vardı, atlandı.` : ''}${closed ? `\n${invYm} faturalarında ${closed} vade kapatıldı.` : ''}`);
+      const batchRows = parsed.map(r => ({ contractorName: r.name, amount: r.amt }));
+      const batchPayload = {
+        pay_date: date,
+        status: 'paid',
+        title: `${date} yüklenen banka Excel${closeTerm ? ` (${closeTerm === 'term2' ? '2 nci' : '1 nci'})` : ''}`,
+        total_amount: Math.round(batchRows.reduce((s: number, r: any) => s + r.amount, 0) * 100) / 100,
+        contractor_count: batchRows.length,
+        payload: { rows: batchRows, lines: [] }
+      };
+      const existingBatch = (dbPaymentBatches || []).find((b: any) =>
+        String(b.status) === 'paid' && sanitizeDate(b.pay_date) === date
+      );
+      if (batchRows.length && existingBatch?.id) {
+        await supabase.from('payment_batches').update(batchPayload).eq('id', existingBatch.id);
+      } else if (batchRows.length) {
+        await supabase.from('payment_batches').insert([batchPayload]);
+      }
+      alert(`${date} tarihli ${toInsert.length} ödeme yazıldı.${updated ? `\n${updated} satır Excel netine güncellendi.` : ''}${skipped ? `\n${skipped} satır zaten doğruydu.` : ''}${closed ? `\n${invYm} faturalarında ${closed} vade kapatıldı.` : ''}`);
       loadPortalData();
     } catch (err: any) {
       alert('Ödeme Excel yükleme hatası: ' + err.message);
@@ -4329,7 +4593,7 @@ export default function App() {
         const contractor = extractContractorName(inv.invoice_no || '');
         const already = (dbInvoices || []).some((i: any) => {
           if (i.category !== 'subcontractor_paid_outflow' || i.status !== 'paid') return false;
-          if (!contractorKeysLooselyMatch(contractor, extractContractorName(i.invoice_no || ''))) return false;
+          if (!contractorRecordsMatch(contractor, extractContractorName(i.invoice_no || ''))) return false;
           const ia = cleanNumber(i.total_amount);
           const idate = sanitizeDate(i.issue_date);
           if (idate === todayStr && amountsClose(ia, payAmt, 0.05)) return true;
@@ -4424,6 +4688,20 @@ export default function App() {
     }
   };
 
+  const openContractorAdvance = (sub?: any) => {
+    const name = sub ? String(sub.company_name || sub.name || '') : '';
+    setSubPaymentFormData({
+      subcontractorName: name,
+      actionType: 'advance',
+      amount: '',
+      installmentCount: '2',
+      targetAccount: 'bank',
+      date: new Date().toISOString().split('T')[0],
+      note: ''
+    });
+    setIsSubPaymentModalOpen(true);
+  };
+
   // 13. MANUEL TAŞERON HAKEDİŞ FATURASI EKLEME
   const handleSaveManualSubInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -4479,36 +4757,6 @@ export default function App() {
       let tot = cleanNumber(subEditFormData.totalAmount);
       let t1 = cleanNumber(subEditFormData.term1Amount);
       let t2 = cleanNumber(subEditFormData.term2Amount);
-      const adv = cleanNumber(subEditFormData.advanceAmount);
-      const instCount = Math.max(1, parseInt(subEditFormData.advanceInstallmentCount) || 1);
-
-      if (adv > 0) {
-        const singleTermDeduction = adv / instCount;
-        const remainingAdvanceDebt = adv - singleTermDeduction;
-        const todayStr = new Date().toISOString().split('T')[0];
-
-        await supabase.from('invoices').insert([{
-          invoice_no: 'AVANS - ' + subEditFormData.invoiceNo + ' (' + instCount + ' Taksit)',
-          direction: 'incoming',
-          category: 'subcontractor_advance_paid',
-          total_amount: adv,
-          issue_date: todayStr,
-          due_date: todayStr,
-          status: 'paid'
-        }]);
-
-        await supabase.from('advance_payments').insert([{
-          target_type: 'contractor',
-          target_id: subEditFormData.invoiceNo,
-          target_name: subEditFormData.invoiceNo,
-          payment_type: 'contractor_installment_advance',
-          total_amount: adv,
-          total_installments: instCount,
-          remaining_amount: remainingAdvanceDebt,
-          issue_date: todayStr,
-          notes: 'Taksit basi dusum: ' + singleTermDeduction.toLocaleString('tr-TR') + ' TL (Kalan: ' + (instCount - 1) + ' Taksit / ' + remainingAdvanceDebt.toLocaleString('tr-TR') + ' TL)'
-        }]);
-      }
 
       if (t1 === 0 && t2 === 0 && tot > 0) {
         t1 = tot / 2;
@@ -4531,7 +4779,7 @@ export default function App() {
         .eq('id', editingSubInvoice.id);
 
       if (error) throw error;
-      alert(adv > 0 ? 'Taksitli avans (' + adv.toLocaleString('tr-TR') + ' ₺ / ' + instCount + ' Taksit) başarıyla mahsup edildi ve kaydedildi!' : 'Hakediş başarıyla güncellendi!');
+      alert('Hakediş faturası güncellendi.');
       setIsEditSubModalOpen(false);
       setEditingSubInvoice(null);
       loadPortalData();
@@ -5035,30 +5283,41 @@ export default function App() {
   // 19. TAŞERON IBAN EKLEME & DÜZENLEME
   const handleSaveSubIban = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!subIbanFormData.name || !subIbanFormData.iban) return;
-
+    if (!canEditMod('sub_ibans')) return;
+    const name = subIbanFormData.name.trim();
+    if (!name) {
+      alert('Unvan zorunludur.');
+      return;
+    }
+    const payload: Record<string, any> = {
+      name,
+      iban: formatIBAN(subIbanFormData.iban || ''),
+      phone: (subIbanFormData.phone || '').trim() || null,
+      tax_no: (subIbanFormData.tax_no || '').trim() || null
+    };
     try {
-      const payload = {
-        name: subIbanFormData.name.trim(),
-        iban: formatIBAN(subIbanFormData.iban)
+      const save = async (data: Record<string, any>) => {
+        if (editingSubIbanId) return supabase.from('subcontractors').update(data).eq('id', editingSubIbanId);
+        return supabase.from('subcontractors').upsert([data], { onConflict: 'name' });
       };
-
-      if (editingSubIbanId) {
-        const { error } = await supabase.from('subcontractors').update(payload).eq('id', editingSubIbanId);
-        if (error) throw error;
-        alert('Taşeron IBAN bilgisi güncellendi!');
-      } else {
-        const { error } = await supabase.from('subcontractors').upsert([payload], { onConflict: 'name' });
-        if (error) throw error;
-        alert('Taşeron IBAN bilgisi kaydedildi!');
+      let { error } = await save(payload);
+      if (error && /could not find the/i.test(error.message)) {
+        const fallback = { ...payload };
+        if (error.message.includes('tax_no')) delete fallback.tax_no;
+        if (error.message.includes('phone')) delete fallback.phone;
+        const retry = await save(fallback);
+        error = retry.error;
+        if (!error && payload.tax_no) {
+          alert('Kart kaydedildi. Vergi no’nun kalması için supabase/setup_subcontractors.sql dosyasını SQL Editor’da bir kez Run deyin.');
+        }
       }
-
+      if (error) throw error;
       setIsSubIbanModalOpen(false);
       setEditingSubIbanId(null);
-      setSubIbanFormData({ name: '', iban: '', phone: '' });
+      setSubIbanFormData({ name: '', iban: '', phone: '', tax_no: '' });
       loadPortalData();
     } catch (err: any) {
-      alert('IBAN kaydetme hatası: ' + err.message);
+      alert('Kart kaydedilemedi: ' + err.message);
     }
   };
 
@@ -5571,10 +5830,10 @@ export default function App() {
     { id: 'overview', label: 'Genel Görünüm', icon: LayoutDashboard },
     { id: 'customers', label: 'Müşteri Kartları', badge: dbCustomers.length, icon: Contact },
     { id: 'sales_customers', label: 'Satış Faturaları', badge: salesDetailedList.length, icon: TrendingUp },
-    { id: 'subcontractors', label: 'Alt Yüklenici Hakedişleri', badge: dbInvoices.filter(i => i.category === 'subcontractor_invoice').length, icon: Users },
-    { id: 'sub_accounts', label: 'Alt Yüklenici Cari Kartları', badge: dbSubcontractors.length, icon: Building2 },
-    { id: 'sub_ibans', label: 'Taşeron IBAN Yönetimi', badge: dbSubcontractors.length, icon: Wallet },
+    { id: 'subcontractors', label: 'Hakediş Faturaları', badge: dbInvoices.filter(i => i.category === 'subcontractor_invoice').length, icon: Users },
+    { id: 'sub_accounts', label: 'Cari Kartları', badge: dbSubcontractors.length, icon: Building2 },
     { id: 'payments', label: 'Banka Ödeme Talimatı', icon: FileCheck2 },
+    { id: 'sub_ibans', label: 'Alt Yüklenici Tanımları', badge: dbSubcontractors.length, icon: Wallet },
     { id: 'employees', label: 'Personel & Bordro', badge: dbEmployees.length, icon: UserCheck },
     { id: 'credit_cards', label: 'Kredi Kartları', badge: dbCreditCards.length, icon: CreditCard },
     { id: 'fleet', label: 'Araç Filosu', badge: dbVehicles.length, icon: Truck },
@@ -5588,8 +5847,8 @@ export default function App() {
   const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
-    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'payments', 'credit_cards', 'general_expenses'] },
-    { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'sub_ibans', 'rental_settlements'] },
+    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses'] },
+    { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements'] },
     { id: 'fleet', label: 'Araç', itemIds: ['fleet', 'profitability', 'plate_rentals'] },
     { id: 'people', label: 'İnsan ve yetki', itemIds: ['employees', 'users'] }
   ].map(g => ({ ...g, items: g.itemIds.map(id => menuById[id]).filter(item => item && canViewMod(item.id)) }))
@@ -5727,7 +5986,14 @@ export default function App() {
                             <button
                               key={item.id}
                               type="button"
-                              onClick={() => { setActiveTab(item.id as any); setIsSidebarOpen(false); }}
+                              onClick={() => {
+                                if (item.id === 'sales_customers') {
+                                  setSalesSearchQuery('');
+                                  setSalesStatusFilter('all');
+                                }
+                                setActiveTab(item.id as any);
+                                setIsSidebarOpen(false);
+                              }}
                               className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold ${
                                 isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'
                               }`}
@@ -5772,7 +6038,7 @@ export default function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div 
-                  onClick={() => setActiveTab('sales_customers')}
+                  onClick={() => { setSalesSearchQuery(''); setSalesStatusFilter('all'); setActiveTab('sales_customers'); }}
                   className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-xs cursor-pointer hover:bg-amber-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-amber-900 flex items-center gap-1.5">
@@ -6375,9 +6641,19 @@ export default function App() {
                   placeholder="Müşteri adı veya fatura no ile filtrele..."
                   value={salesSearchQuery}
                   onChange={e => setSalesSearchQuery(e.target.value)}
-                  className="w-full px-3.5 py-2 pl-9 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white outline-none"
+                  className="w-full px-3.5 py-2 pl-9 pr-8 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white outline-none"
                 />
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                {salesSearchQuery.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => setSalesSearchQuery('')}
+                    className="absolute right-2 top-1.5 p-1 text-slate-400 hover:text-slate-700"
+                    title="Filtreyi temizle"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                ) : null}
               </div>
 
               <select
@@ -6509,8 +6785,8 @@ export default function App() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Hakedişleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Cari = fatura − avans (tek kayıt) − fiili ödeme. Avans herkese 1 nci, artanı 2 nci, kalanı sonraki aya. Banka Excel’i ödeme değildir; hakedişte Tamamını Öde fiili tekil ödemedir.</p>
+                <h3 className="font-bold text-lg text-slate-900">Hakediş Faturaları</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Varsayılan: ödenmemiş faturalar. Avans mahsubu yalnız avansın verildiği aydaki faturaya yazılır; sonraki ay faturasına taşınmaz (kalan avans caridedir). Ödeme Banka Talimatı’ndan.</p>
               </div>
               {isAdmin && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -6523,11 +6799,6 @@ export default function App() {
                     onClick={() => setIsManualSubInvoiceModalOpen(true)}
                     className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
                     <Plus className="w-4 h-4" /> Manuel Hakediş Ekle
-                  </button>
-                  <button 
-                    onClick={() => setIsSubPaymentModalOpen(true)}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
-                    <DollarSign className="w-4 h-4" /> Manuel Ödeme / Avans Yap
                   </button>
                 </div>
               )}
@@ -6564,6 +6835,26 @@ export default function App() {
             </select>
           </div>
         </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Hakediş toplamı</div>
+                <div className="mt-1 text-lg font-black text-slate-900">
+                  {visibleHakedisRows.totals.total.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                </div>
+              </div>
+              <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-blue-700">1 nci ödeme toplamı</div>
+                <div className="mt-1 text-lg font-black text-blue-800">
+                  {visibleHakedisRows.totals.term1.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                </div>
+              </div>
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-700">2 nci ödeme toplamı</div>
+                <div className="mt-1 text-lg font-black text-indigo-800">
+                  {visibleHakedisRows.totals.term2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                </div>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
@@ -6609,69 +6900,11 @@ export default function App() {
               </th>
                     <th className="py-3 px-3">1 nci ödeme</th>
                     <th className="py-3 px-3">2 nci ödeme</th>
-                    {isAdmin && <th className="py-3 px-3 text-center">Ödeme & İşlem</th>}
+                    {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbInvoices
-  .filter(i => i.category === 'subcontractor_invoice')
-  .filter(inv => {
-    const term = subSearchTerm.toLocaleLowerCase('tr-TR').trim();
-    const invTitle = (inv.invoice_no || '').toLocaleLowerCase('tr-TR');
-    const matchesSearch = !term || invTitle.includes(term);
-
-    const isTerm1Paid = inv.term1_status === 'paid';
-    const isTerm2Paid = inv.term2_status === 'paid';
-    const isFullyPaid = isTerm1Paid && isTerm2Paid;
-
-    let matchesStatus = true;
-    if (subStatusFilter === 'pending') {
-      matchesStatus = !isFullyPaid;
-    } else if (subStatusFilter === 'paid') {
-      matchesStatus = isFullyPaid;
-    }
-
-    return matchesSearch && matchesStatus;
-  })
-.sort((a: any, b: any) => {
-    let comparison = 0;
-
-    if (subSortField === 'invoice_no') {
-      // Başlıktan sadece taşeronun adını çekip ona göre alfabetik sıralar:
-      const nameA = (a.invoice_no || '').split(' - ')[1] || a.invoice_no || '';
-      const nameB = (b.invoice_no || '').split(' - ')[1] || b.invoice_no || '';
-      comparison = nameA.trim().localeCompare(nameB.trim(), 'tr-TR', { sensitivity: 'base' });
-    } else if (subSortField === 'issue_date') {
-      // GG.AA.YYYY veya YYYY-AA-GG formatını hatasız tarihe çevirip milisaniyeye göre sıralar:
-      const parseDate = (d: any) => {
-        if (!d) return 0;
-        const str = String(d).trim();
-        if (str.includes('.')) {
-          const [day, month, year] = str.split('.');
-          return new Date(`${year}-${month}-${day}`).getTime() || 0;
-        }
-        return new Date(str).getTime() || 0;
-      };
-      comparison = parseDate(a.issue_date) - parseDate(b.issue_date);
-    } else if (subSortField === 'total_amount') {
-      // Tutara göre matematiksel sıralama:
-      comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
-    }
-
-    return subSortOrder === 'asc' ? comparison : -comparison;
-  })
-                    .map(inv => {
-                    const t1 = cleanNumber(inv.term1_amount || (inv.total_amount / 2));
-                    const t2 = cleanNumber(inv.term2_amount || (inv.total_amount / 2));
-                    const isT1Paid = inv.term1_status === 'paid';
-                    const isT2Paid = inv.term2_status === 'paid';
-                    const line1 = decoratedBankByLineId.get(`${inv.id}-term1`);
-                    const line2 = decoratedBankByLineId.get(`${inv.id}-term2`);
-                    const dynamicT1 = isT1Paid ? 0 : (line1 ? line1.netAmount : t1);
-                    const deductedAdvAmt = line1?.advanceCut || 0;
-                    const dynamicT2 = isT2Paid ? 0 : (line2 ? line2.netAmount : t2);
-                    const deductedAdvForT2 = line2?.advanceCut || 0;
-               
+                  {visibleHakedisRows.rows.map(({ inv, isT1Paid, isT2Paid, dynamicT1, dynamicT2, deductedAdvAmt, deductedAdvForT2 }) => {
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
                         <td className="py-3 px-3 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
@@ -6702,42 +6935,6 @@ export default function App() {
                         {isAdmin && (
                           <td className="py-3 px-3 text-center">
                             <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                              {!isT1Paid && dynamicT1 > 0.009 && (
-                                <button
-                                  onClick={() => handlePaySubcontractorTerm(inv, 'term1')}
-                                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-1 rounded text-[10px] transition">
-                                  1 nci ödemeyi yap
-                                </button>
-                              )}
-                              {!isT1Paid && dynamicT1 <= 0.009 && (
-                                <button
-                                  onClick={() => handlePaySubcontractorTerm(inv, 'term1')}
-                                  className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold px-2 py-1 rounded text-[10px] transition">
-                                  1 nci ödemeyi avansla kapat
-                                </button>
-                              )}
-                              {!isT2Paid && dynamicT2 > 0.009 && (
-                                <button
-                                  onClick={() => handlePaySubcontractorTerm(inv, 'term2')}
-                                  className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-1 rounded text-[10px] transition">
-                                  2 nci ödemeyi yap
-                                </button>
-                              )}
-                              {!isT2Paid && dynamicT2 <= 0.009 && (
-                                <button
-                                  onClick={() => handlePaySubcontractorTerm(inv, 'term2')}
-                                  className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold px-2 py-1 rounded text-[10px] transition">
-                                  2 nci ödemeyi avansla kapat
-                                </button>
-                              )}
-                              {(!isT1Paid || !isT2Paid) && (
-                                <button
-                                  onClick={() => handlePaySubcontractorTerm(inv, 'both')}
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-1 rounded text-[10px] transition shadow-xs">
-                                  Tamamını Öde
-                                </button>
-                              )}
-
                               <button 
                                 onClick={() => {
                                   setEditingSubInvoice(inv);
@@ -6786,8 +6983,8 @@ export default function App() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Cari Kartları ve Avans Yönetimi</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Cari bakiye tüm avansı düşer (kalan borç). Banka talimatı ise bu ay ödenecek vadeyi gösterir; taksitli avansta yalnızca bu ayın taksiti düşülür.</p>
+                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Cari Kartları</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Liste kalan bakiyedir. Ödemeler kartın içinde. Avans için kartı açın veya Tanımlar’dan Avans verin.</p>
               </div>
             </div>
 
@@ -6826,27 +7023,18 @@ export default function App() {
                       Vergi Numarası {ledgerSortField === 'tax' ? (ledgerSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
                     <th className="py-3 px-3">Kayıtlı IBAN</th>
-                    <th className="py-3 px-3 text-right">Toplam Fatura</th>
-                    <th className="py-3 px-3 text-right">Yapılan Ödeme / Avans</th>
                     <th 
                       className="py-3 px-3 text-right cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
                         if (ledgerSortField === 'balance') setLedgerSortOrder(ledgerSortOrder === 'asc' ? 'desc' : 'asc');
                         else { setLedgerSortField('balance'); setLedgerSortOrder('desc'); }
                       }}>
-                      Güncel Bakiye {ledgerSortField === 'balance' ? (ledgerSortOrder === 'asc' ? '↑' : '↓') : '↕'}
+                      Kalan bakiye {ledgerSortField === 'balance' ? (ledgerSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbSubcontractors
-                    .map((sub: any) => {
-                      const ledger = buildSubcontractorLedger(sub);
-                      const totalInvoice = ledger.reduce((s, l) => s + l.debit, 0);
-                      const totalOut = ledger.reduce((s, l) => s + l.credit, 0);
-                      const balance = ledger.length ? ledger[ledger.length - 1].balance : 0;
-                      return { ...sub, computedTax: sub.tax_no || sub.tax_number || '', totalInvoice, totalOut, balance };
-                    })
+                  {subcontractorCariRows
                     .filter((item: any) => {
                       if (!ledgerSearchTerm) return true;
                       const term = ledgerSearchTerm.toLowerCase();
@@ -6854,7 +7042,7 @@ export default function App() {
                     })
                     .sort((a: any, b: any) => {
                       let comp = 0;
-                      if (ledgerSortField === 'name') comp = (a.name || '').localeCompare(b.name || '', 'tr-TR', { sensitivity: 'base' });
+                      if (ledgerSortField === 'name') comp = (a.company_name || a.name || '').localeCompare(b.company_name || b.name || '', 'tr-TR', { sensitivity: 'base' });
                       else if (ledgerSortField === 'tax') {
                          const taxA = a.tax_no || a.computedTax || '';
                          const taxB = b.tax_no || b.computedTax || '';
@@ -6868,9 +7056,7 @@ export default function App() {
                         <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
                         <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_no || sub.computedTax || '-'}</td>
                         <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
-                        <td className="py-3 px-3 text-right font-bold text-slate-900">{sub.totalInvoice.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3 px-3 text-right font-bold text-amber-600">{sub.totalOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                        <td className="py-3 px-3 text-right font-black text-emerald-600 text-sm">{sub.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className={`py-3 px-3 text-right font-black text-sm ${sub.balance < -0.009 ? 'text-amber-600' : 'text-emerald-700'}`}>{sub.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
                       </tr>
                     ))}
                 </tbody>
@@ -6884,8 +7070,8 @@ export default function App() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
-                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici IBAN Veritabanı ({dbSubcontractors.length} Kayıt)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Banka ödeme talimatında taşeronla otomatik eşleşen IBAN havuzu.</p>
+                <h3 className="font-bold text-lg text-slate-900">Alt Yüklenici Tanımları ({dbSubcontractors.length} kart)</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Unvan, vergi no, telefon ve IBAN. Yeni kart açın, düzeltin. Avans vermek için satırdaki Avans’ı kullanın; faturalar silinmez.</p>
               </div>
               {isAdmin && (
                 <div className="flex items-center gap-2">
@@ -6893,47 +7079,77 @@ export default function App() {
                     <FileUp className="w-4 h-4" /> IBAN Exceli Yükle
                     <input type="file" accept=".xlsx,.xls" onChange={handleImportSubIbanExcel} className="hidden" />
                   </label>
-                  <button 
+                  <button
                     onClick={() => {
                       setEditingSubIbanId(null);
-                      setSubIbanFormData({ name: '', iban: '', phone: '' });
+                      setSubIbanFormData({ name: '', iban: '', phone: '', tax_no: '' });
                       setIsSubIbanModalOpen(true);
                     }}
                     className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
-                    <Plus className="w-4 h-4" /> Tekil IBAN Ekle
+                    <Plus className="w-4 h-4" /> Yeni kart
                   </button>
                 </div>
               )}
             </div>
 
+            <input
+              type="text"
+              placeholder="Unvan, vergi no, IBAN veya telefon ara..."
+              value={subInfoSearchTerm}
+              onChange={e => setSubInfoSearchTerm(e.target.value)}
+              className="w-full sm:w-80 px-3.5 py-2 border border-slate-200 rounded-xl text-xs"
+            />
+
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-3">Alt Yüklenici Adı</th>
-                    <th className="py-3 px-3">Kayıtlı IBAN Numarası</th>
+                    <th className="py-3 px-3">Unvan</th>
+                    <th className="py-3 px-3">Vergi no</th>
+                    <th className="py-3 px-3">Telefon</th>
+                    <th className="py-3 px-3">IBAN</th>
                     {isAdmin && <th className="py-3 px-3 text-center">İşlem</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbSubcontractors.map(s => (
+                  {dbSubcontractors
+                    .filter(s => {
+                      const q = subInfoSearchTerm.trim().toLocaleLowerCase('tr-TR');
+                      if (!q) return true;
+                      return [s.name, s.company_name, s.tax_no, s.tax_number, s.phone, s.iban].join(' ').toLocaleLowerCase('tr-TR').includes(q);
+                    })
+                    .map(s => (
                     <tr key={s.id} className="hover:bg-slate-50 transition">
-                      <td className="py-3 px-3 font-bold text-slate-800 text-sm">{s.name}</td>
-                      <td className="py-3 px-3 font-mono font-medium text-blue-700">{s.iban}</td>
+                      <td className="py-3 px-3 font-bold text-slate-800 text-sm">{s.company_name || s.name}</td>
+                      <td className="py-3 px-3 font-mono text-slate-600">{s.tax_no || s.tax_number || '—'}</td>
+                      <td className="py-3 px-3 text-slate-600">{s.phone || '—'}</td>
+                      <td className="py-3 px-3 font-mono font-medium text-blue-700">{s.iban || 'IBAN eksik'}</td>
                       {isAdmin && (
-                        <td className="py-3 px-3 text-center space-x-2">
-                          <button 
+                        <td className="py-3 px-3 text-center space-x-2 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => openContractorAdvance(s)}
+                            className="px-2 py-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded transition"
+                            title="Peşin veya taksitli avans">
+                            Avans
+                          </button>
+                          <button
                             onClick={() => {
                               setEditingSubIbanId(s.id);
-                              setSubIbanFormData({ name: s.name, iban: s.iban || '', phone: s.phone || '' });
+                              setSubIbanFormData({
+                                name: s.company_name || s.name,
+                                iban: s.iban || '',
+                                phone: s.phone || '',
+                                tax_no: s.tax_no || s.tax_number || ''
+                              });
                               setIsSubIbanModalOpen(true);
                             }}
                             className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition" title="Düzenle">
                             <Edit2 className="w-4 h-4" />
                           </button>
-                          <button 
+                          <button
                             onClick={async () => {
-                              if (window.confirm(`${s.name} IBAN kaydını silmek istiyor musunuz?`)) {
+                              if (window.confirm(`${s.name} kartı silinsin mi? Faturalar durur; banka talimatında IBAN eşleşmez.`)) {
                                 await supabase.from('subcontractors').delete().eq('id', s.id);
                                 loadPortalData();
                               }
@@ -6957,7 +7173,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Banka Toplu Ödeme Talimatı (Excel)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Excel indirme = talimat, henüz ödenmedi. Banka başarılı raporu gelince partiyi “Ödendi işle” deyin; cari ve kasa o zaman yazılır. Avans herkese önce 1 nci, artanı 2 nci, kalanı sonraki aya geçer. Bir kişiyi işaretlemek kalan tüm açık tutarını alır; 1 nci / 2 nci filtreleriyle dalga seçilir.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Aynı listede her kişi için 1 nci, 2 nci veya Tamamı seçin; tek Excel karışık gider. İşaretledikleriniz talimata yazılır.</p>
               </div>
 
               {isAdmin ? (
@@ -6977,20 +7193,11 @@ export default function App() {
               )}
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {([
-                ['all', 'Tümü (kalan)'],
-                ['term1', '1 nci ödeme'],
-                ['term2', '2 nci ödeme']
-              ] as const).map(([id, label]) => (
-                <button
-                  key={id}
-                  onClick={() => { setBankWaveFilter(id); setBankSelectedLines({}); }}
-                  className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${bankWaveFilter === id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'}`}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-slate-500 font-semibold">Toplu uygula:</span>
+              <button type="button" onClick={() => handleBulkBankPayMode('term1')} className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-white text-slate-600 border-slate-200 hover:border-blue-300">Tümüne 1 nci</button>
+              <button type="button" onClick={() => handleBulkBankPayMode('term2')} className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-white text-slate-600 border-slate-200 hover:border-blue-300">Tümüne 2 nci</button>
+              <button type="button" onClick={() => handleBulkBankPayMode('both')} className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-white text-slate-600 border-slate-200 hover:border-blue-300">Tümüne Tamamı</button>
             </div>
 
             {(dbPaymentBatches || []).filter((b: any) => String(b.status) === 'sent').length > 0 && (
@@ -7066,6 +7273,7 @@ export default function App() {
                       Alt yüklenici {bankSortField === 'contractorName' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
                     <th className="py-3 px-3">Faturalar</th>
+                    <th className="py-3 px-3">Bu talimatta</th>
                     <th
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
@@ -7098,19 +7306,33 @@ export default function App() {
                 <tbody className="divide-y divide-slate-100">
                   {bankContractorRows.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-400">Bankaya gidecek açık tutar yok (avansla kapananlar listelenmez).</td>
+                      <td colSpan={7} className="py-8 text-center text-slate-400">Bankaya gidecek açık tutar yok.</td>
                     </tr>
                   )}
                   {bankContractorRows.map(row => {
                     const isChecked = row.lineIds.length > 0 && row.lineIds.every(id => bankSelectedLines[id]);
                     const overdue = row.dueDate && new Date(row.dueDate) < new Date(new Date().toISOString().split('T')[0]);
+                    const modeBtn = (id: 'term1' | 'term2' | 'both', label: string, enabled: boolean) => (
+                      <button
+                        type="button"
+                        disabled={!enabled}
+                        onClick={() => handleSetBankPayMode(row.groupKey, id, row)}
+                        className={`px-2 py-1 rounded text-[10px] font-bold border ${
+                          !enabled ? 'opacity-30 cursor-not-allowed bg-slate-50 text-slate-400 border-slate-100'
+                            : row.mode === id ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
                     return (
                       <tr key={row.groupKey} className={`hover:bg-slate-50 transition ${isChecked ? 'bg-blue-50/60' : ''}`}>
                         <td className="py-3 px-3 text-center">
                           <input
                             type="checkbox"
                             checked={isChecked}
-                            onChange={() => handleToggleBankContractor(row.lineIds)}
+                            onChange={() => handleToggleBankContractor(row.lineIds, [...row.term1Ids, ...row.term2Ids])}
                             className="w-4 h-4 rounded text-blue-600"
                           />
                         </td>
@@ -7121,6 +7343,16 @@ export default function App() {
                             {row.invoiceNos.slice(0, 2).join(' · ')}{row.invoiceNos.length > 2 ? '…' : ''}
                           </span>
                         </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <div className="flex flex-wrap gap-1">
+                            {modeBtn('term1', '1 nci', row.has1)}
+                            {modeBtn('term2', '2 nci', row.has2)}
+                            {modeBtn('both', 'Tamamı', row.has1 && row.has2)}
+                          </div>
+                          <span className="block text-[10px] text-slate-400 mt-1">
+                            1 nci {row.term1Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} · 2 nci {row.term2Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </td>
                         <td className={`py-3 px-3 whitespace-nowrap ${overdue ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
                           {formatDateTR(row.dueDate)}
                         </td>
@@ -7129,9 +7361,9 @@ export default function App() {
                         </td>
                         <td className="py-3 px-3 text-right font-bold text-emerald-700">
                           {row.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                          {row.advanceCut > 0 && (
+                          {row.leftoverAdvance > 0.01 && (
                             <span className="block text-[10px] font-semibold text-amber-700">
-                              Avans −{row.advanceCut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                              Caride kalan avans {row.leftoverAdvance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ (talimattan düşülmez)
                             </span>
                           )}
                         </td>
@@ -8445,7 +8677,7 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Taşerona Manuel Ödeme / Avans Yap</h3>
+              <h3 className="font-bold text-slate-900 text-base">Alt yükleniciye avans ver</h3>
               <button onClick={() => setIsSubPaymentModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSaveSubPayment} className="mt-4 space-y-3 text-xs">
@@ -8457,7 +8689,7 @@ export default function App() {
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white" required>
                   <option value="">-- Taşeron Seçiniz --</option>
                   {dbSubcontractors.map(s => (
-                    <option key={s.id} value={s.name}>{s.name}</option>
+                    <option key={s.id} value={s.company_name || s.name}>{s.company_name || s.name}</option>
                   ))}
                 </select>
               </div>
@@ -8468,9 +8700,8 @@ export default function App() {
                   value={subPaymentFormData.actionType} 
                   onChange={e => setSubPaymentFormData({ ...subPaymentFormData, actionType: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium">
-                  <option value="advance">Peşin Avans (Bu ayki hakedişten düşer)</option>
-                  <option value="installment_advance">Taksitli Avans (Aylara bölerek mahsup eder)</option>
-                  <option value="direct_payment">Doğrudan Ara Ödeme</option>
+                  <option value="advance">Peşin avans</option>
+                  <option value="installment_advance">Taksitli avans</option>
                 </select>
               </div>
 
@@ -8523,7 +8754,7 @@ export default function App() {
 
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsSubPaymentModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-medium">Ödemeyi Yap ve Kasadan Düş</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-medium">Avansı kaydet</button>
               </div>
             </form>
           </div>
@@ -8606,26 +8837,37 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: TAŞERON IBAN EKLE & DÜZENLE */}
+      {/* MODAL: ALT YÜKLENİCİ KARTI */}
       {isSubIbanModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">{editingSubIbanId ? 'IBAN Bilgisini Düzenle' : 'Alt Yüklenici IBAN Kaydet'}</h3>
+              <h3 className="font-bold text-slate-900 text-base">{editingSubIbanId ? 'Alt yüklenici düzenle' : 'Yeni alt yüklenici'}</h3>
               <button onClick={() => setIsSubIbanModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSaveSubIban} className="mt-4 space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Taşeron Adı / Unvanı</label>
+                <label className="block font-semibold text-slate-700 mb-1">Unvan</label>
                 <input type="text" placeholder="Örn: Ahmet Aksu" value={subIbanFormData.name} onChange={e => setSubIbanFormData({ ...subIbanFormData, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Vergi no</label>
+                  <input type="text" value={subIbanFormData.tax_no} onChange={e => setSubIbanFormData({ ...subIbanFormData, tax_no: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono" />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Telefon</label>
+                  <input type="text" value={subIbanFormData.phone} onChange={e => setSubIbanFormData({ ...subIbanFormData, phone: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
+                </div>
+              </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">TR IBAN Numarası</label>
-                <input type="text" placeholder="TR87 0006 ..." value={subIbanFormData.iban} onChange={e => setSubIbanFormData({ ...subIbanFormData, iban: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono font-medium" required />
+                <label className="block font-semibold text-slate-700 mb-1">IBAN</label>
+                <input type="text" placeholder="TR87 0006 ..." value={subIbanFormData.iban} onChange={e => setSubIbanFormData({ ...subIbanFormData, iban: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono font-medium" />
+                <p className="text-[10px] text-slate-400 mt-1">Boş bırakılabilir; banka talimatında IBAN eksik uyarısı çıkar.</p>
               </div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsSubIbanModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-blue-600 text-white font-medium">Kaydet</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-[#009fe3] text-white font-medium">Kaydet</button>
               </div>
             </form>
           </div>
@@ -9230,7 +9472,7 @@ export default function App() {
               Net alacak: {singleSalaryPay.net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
               {singleSalaryPay.base > 0 ? ` · Sözleşmeli maaş: ${singleSalaryPay.base.toLocaleString('tr-TR')} ₺` : ''}
             </p>
-            <p className="text-[11px] text-slate-500">Kasım maaşı 1 Aralık’ta carıye girer. Şimdi bu ayın maaşını ödüyorsanız tutarı kendiniz yazın.</p>
+            <p className="text-[11px] text-slate-500">Kasım maaşı 1 Aralık’ta cariye girer. Şimdi bu ayın maaşını ödüyorsanız tutarı kendiniz yazın.</p>
             <div>
               <label className="block font-semibold text-slate-700 mb-1 text-xs">Ödenen tutar</label>
               <input type="text" value={singleSalaryPay.amount} onChange={e => setSingleSalaryPay({ ...singleSalaryPay, amount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-right" required />
@@ -9525,7 +9767,7 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-base">Hakediş Düzenleme & Avans Mahsubu</h3>
+              <h3 className="font-bold text-slate-900 text-base">Hakediş faturası düzenle</h3>
               <button onClick={() => setIsEditSubModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSaveSubInvoiceEdit} className="mt-4 space-y-4 text-xs">
@@ -9539,40 +9781,7 @@ export default function App() {
                   <input type="text" value={subEditFormData.totalAmount} onChange={e => setSubEditFormData({ ...subEditFormData, totalAmount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-slate-900" required />
                 </div>
               </div>
-             <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-amber-950 text-xs">Avans / Kısmi Ödeme Mahsubu</span>
-              <span className="text-[10px] text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full font-medium">1. ve taşan tutar 2 nci ödemeden düşer</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[10px] text-slate-600 mb-1">Düşülecek Avans Tutarı (TL)</label>
-                <input 
-                  type="text" 
-                  placeholder="Örn: 50000" 
-                  value={subEditFormData.advanceAmount} 
-                  onChange={e => setSubEditFormData({ ...subEditFormData, advanceAmount: e.target.value })} 
-                  className="w-full px-2 py-1.5 border border-amber-300 rounded-lg text-xs bg-white font-semibold text-slate-800" 
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] text-slate-600 mb-1">Taksit Sayısı</label>
-                <select 
-                  value={subEditFormData.advanceInstallmentCount} 
-                  onChange={e => setSubEditFormData({ ...subEditFormData, advanceInstallmentCount: e.target.value })} 
-                  className="w-full px-2 py-1.5 border border-amber-300 rounded-lg text-xs bg-white text-slate-800"
-                >
-                  <option value="1">1 Taksit (Tamamı Bu Faturadan)</option>
-                  <option value="2">2 Taksit</option>
-                  <option value="3">3 Taksit</option>
-                  <option value="4">4 Taksit</option>
-                  <option value="5">5 Taksit</option>
-                  <option value="6">6 Taksit</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
+          <p className="text-[11px] text-slate-500">Burada yalnız fatura bilgisi düzeltilir. Avans cari karttan, ödeme Banka Talimatı’ndan işlenir.</p>
           <div className="grid grid-cols-2 gap-3">
             <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
               <div className="flex items-center justify-between">
@@ -10367,7 +10576,7 @@ export default function App() {
                 const subName = selectedSubcontractorForDetail.company_name || selectedSubcontractorForDetail.name || '';
                 const taxNo = selectedSubcontractorForDetail.tax_no || selectedSubcontractorForDetail.computedTax || 'Belirtilmedi';
                 const ibanVal = selectedSubcontractorForDetail.iban || 'Belirtilmedi';
-                const ledger = buildSubcontractorLedger(selectedSubcontractorForDetail);
+                const ledger = selectedSubcontractorLedger;
                 let csvContent = "\uFEFF";
                 csvContent += "Firma Adı;Vergi Numarası;IBAN;Tarih;İşlem Türü;Açıklama;Borç (Fatura);Alacak (Ödeme/Avans);Bakiye\n";
                 ledger.forEach(tx => {
@@ -10395,18 +10604,27 @@ export default function App() {
               <span className="text-xs text-blue-700">Artı bakiye: taşerona borcunuz. Eksi: avans / fazla ödeme.</span>
             </div>
             <div className="text-right">
-              <span className="text-xl font-black text-blue-900">{(() => { const L = buildSubcontractorLedger(selectedSubcontractorForDetail); return (L.length ? L[L.length - 1].balance : 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 }); })()} ₺</span>
+              <span className="text-xl font-black text-blue-900">{(selectedSubcontractorLedger.length ? selectedSubcontractorLedger[selectedSubcontractorLedger.length - 1].balance : 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
               <span className="text-xs text-blue-700 block mt-0.5">Güncel Bakiye</span>
             </div>
           </div>
 
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-            <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle</span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle</span>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => openContractorAdvance(selectedSubcontractorForDetail)}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg">
+                  Peşin / taksitli avans ver
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <select id="sub_tx_type" className="px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-sm">
-                <option value="advance">Avans verildi (alacak)</option>
-                <option value="payment">Ödeme yapıldı (alacak)</option>
-                <option value="invoice">Fatura eklendi (borç)</option>
+                <option value="payment">Düzeltme notu (alacak)</option>
+                <option value="invoice">Düzeltme notu (borç)</option>
               </select>
               <input id="sub_tx_amount" type="number" placeholder="Tutar (TL)" className="px-3 py-2 border border-slate-200 rounded-lg bg-white font-bold text-slate-800 text-sm" />
               <input id="sub_tx_desc" type="text" placeholder="Açıklama / Belge No" className="px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm" />
@@ -10454,7 +10672,7 @@ export default function App() {
                 </thead>
                <tbody className="divide-y divide-slate-100 bg-white">
                   {(() => {
-                    const ledger = buildSubcontractorLedger(selectedSubcontractorForDetail);
+                    const ledger = selectedSubcontractorLedger;
                     if (ledger.length === 0) {
                       return (
                         <tr>
