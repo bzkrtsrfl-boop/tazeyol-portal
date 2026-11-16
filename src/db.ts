@@ -76,8 +76,11 @@ export const INVOICE_CUSTOMER_OVERRIDES: { key: string; customer: string }[] = [
 
 export function extractSalesInvoiceKeys(text: string): string[] {
   const s = String(text || '').toUpperCase();
+  const compact = s.replace(/\s+/g, '');
   const keys = new Set<string>();
-  for (const m of s.matchAll(/\bEF\d{8,}\b/g)) keys.add(m[0]);
+  for (const m of s.matchAll(/\bEF\s*\d{8,}\b/g)) keys.add(m[0].replace(/\s+/g, ''));
+  for (const m of compact.matchAll(/EF\d{8,}/g)) keys.add(m[0]);
+  for (const m of compact.matchAll(/GIB\d{8,}/g)) keys.add(m[0]);
   return [...keys];
 }
 
