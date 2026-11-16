@@ -722,6 +722,14 @@ export default function App() {
   const [newPortalUserBusy, setNewPortalUserBusy] = useState(false);
   const [newPortalUserOpen, setNewPortalUserOpen] = useState(false);
   const [newPortalUserHint, setNewPortalUserHint] = useState('');
+  const [userDrafts, setUserDrafts] = useState<Record<string, {
+    full_name: string;
+    role: 'admin' | 'reporter' | 'saha';
+    groups: string[];
+    access: Record<string, AccessLevel>;
+  }>>({});
+  const [userSaveBusyId, setUserSaveBusyId] = useState<string | null>(null);
+  const [userSaveOkId, setUserSaveOkId] = useState<string | null>(null);
   const [rentalAssignedGroup, setRentalAssignedGroup] = useState<string | null>(null);
   const [rentalAssignedGroups, setRentalAssignedGroups] = useState<string[]>([]);
   const [portalAccess, setPortalAccess] = useState<Record<string, AccessLevel>>({});
@@ -849,7 +857,7 @@ export default function App() {
     rental_work_groups?: string[];
     portal_access?: Record<string, AccessLevel>;
   }) => {
-    if (currentUserRole !== 'admin') return;
+    if (currentUserRole !== 'admin') return false;
     const nextRole = patch.role ?? user.role;
     const nextGroups = normalizeGroups(
       patch.rental_work_groups !== undefined ? patch.rental_work_groups : (user.rental_work_groups || user.rental_work_group)
@@ -859,13 +867,13 @@ export default function App() {
       : normalizeAccess(user.portal_access);
     if (nextRole === 'saha' && nextAccess.rental_settlements && !nextGroups.length) {
       alert('Kiralık mutabakat yetkisi varsa en az bir grup işaretleyin. İzin döneminde birden fazla grup açabilirsiniz.');
-      return;
+      return false;
     }
     if (user.id === currentUserId && nextRole !== 'admin') {
       const otherAdmins = portalUsers.filter((u: any) => u.role === 'admin' && u.id !== user.id);
       if (!otherAdmins.length) {
         alert('Son yönetici rolü kaldırılamaz.');
-        return;
+        return false;
       }
     }
     const payload: any = {
@@ -878,7 +886,7 @@ export default function App() {
     const { error } = await supabase.from('profiles').update(payload).eq('id', user.id);
     if (error) {
       alert('Kullanıcı kaydedilemedi: ' + (error.message || '') + ( /portal_access|rental_work_groups/i.test(error.message || '') ? ' setup_users.sql dosyasını bir kez daha Run edin.' : ''));
-      return;
+      return false;
     }
     setPortalUsers(prev => prev.map((u: any) => u.id === user.id ? { ...u, ...payload } : u));
     if (user.id === currentUserId) {
@@ -886,6 +894,7 @@ export default function App() {
       setRentalAssignedGroup(payload.rental_work_group);
       setPortalAccess(payload.portal_access);
     }
+    return true;
   };
 
   const handleCreatePortalUser = async (e: React.FormEvent) => {
@@ -11499,33 +11508,54 @@ export default function App() {
             {portalUsersBusy && <div className="text-sm text-slate-400 p-6">Yükleniyor…</div>}
             <div className="space-y-3">
               {portalUsers.map((u: any) => {
-                const groups = normalizeGroups(u.rental_work_groups, u.rental_work_group);
-                const access = normalizeAccess(u.portal_access);
-                const toggleGroup = (id: string) => {
-                  const next = groups.includes(id) ? groups.filter((g: string) => g !== id) : [...groups, id];
-                  void handleSavePortalUser(u, { rental_work_groups: next });
+                const liveGroups = normalizeGroups(u.rental_work_groups, u.rental_work_group);
+                const liveAccess = normalizeAccess(u.portal_access);
+                const draft = userDrafts[u.id] || {
+                  full_name: u.full_name || '',
+                  role: u.role as 'admin' | 'reporter' | 'saha',
+                  groups: liveGroups,
+                  access: liveAccess
                 };
-                const setMod = (id: string, level: '' | AccessLevel) => {
-                  const next = { ...access };
-                  if (!level) delete next[id];
-                  else next[id] = level;
-                  void handleSavePortalUser(u, { portal_access: next, rental_work_groups: groups });
+                const groups = draft.groups;
+                const access = draft.access;
+                const patchDraft = (part: Partial<typeof draft>) => {
+                  setUserSaveOkId(prev => prev === u.id ? null : prev);
+                  setUserDrafts(prev => ({
+                    ...prev,
+                    [u.id]: { ...draft, ...part }
+                  }));
+                };
+                const saveUser = async () => {
+                  setUserSaveBusyId(u.id);
+                  const ok = await handleSavePortalUser(u, {
+                    full_name: draft.full_name,
+                    role: draft.role,
+                    rental_work_groups: draft.groups,
+                    portal_access: draft.access
+                  });
+                  setUserSaveBusyId(null);
+                  if (ok) {
+                    setUserDrafts(prev => {
+                      const next = { ...prev };
+                      delete next[u.id];
+                      return next;
+                    });
+                    await loadPortalUsers();
+                    setUserSaveOkId(u.id);
+                  }
                 };
                 return (
                   <div key={u.id} className={`bg-white rounded-2xl border p-4 space-y-3 ${u.id === currentUserId ? 'border-[#009fe3]' : 'border-slate-200'}`}>
                     <div className="flex flex-wrap gap-2 items-center">
                       <div className="font-semibold text-slate-800">{u.email}{u.id === currentUserId ? <span className="ml-2 text-[10px] font-bold text-[#009fe3]">Siz</span> : null}</div>
                       <input
-                        defaultValue={u.full_name || ''}
-                        onBlur={e => {
-                          const v = e.target.value.trim();
-                          if (v !== (u.full_name || '')) void handleSavePortalUser(u, { full_name: v });
-                        }}
+                        value={draft.full_name}
+                        onChange={e => patchDraft({ full_name: e.target.value })}
                         className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm min-w-[140px]"
                       />
                       <select
-                        value={u.role}
-                        onChange={e => void handleSavePortalUser(u, { role: e.target.value as 'admin' | 'reporter' | 'saha', rental_work_groups: groups, portal_access: access })}
+                        value={draft.role}
+                        onChange={e => patchDraft({ role: e.target.value as 'admin' | 'reporter' | 'saha' })}
                         className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white"
                       >
                         <option value="admin">Yönetici</option>
@@ -11533,14 +11563,14 @@ export default function App() {
                         <option value="saha">Personel (yetkili)</option>
                       </select>
                     </div>
-                    {u.role === 'saha' && (
+                    {draft.role === 'saha' && (
                       <>
                         <div className="flex flex-wrap gap-1.5">
                           {ACCESS_PRESETS.map(p => (
                             <button
                               key={p.id}
                               type="button"
-                              onClick={() => void handleSavePortalUser(u, { portal_access: p.access, rental_work_groups: groups })}
+                              onClick={() => patchDraft({ access: { ...p.access } })}
                               className="px-2 py-1 rounded-lg border border-slate-200 text-[10px] font-bold text-slate-600 hover:bg-slate-50"
                             >
                               Şablon: {p.label}
@@ -11552,7 +11582,10 @@ export default function App() {
                           <div className="flex flex-wrap gap-2">
                             {RENTAL_WORK_GROUPS.map(g => (
                               <label key={g.id} className={`text-xs font-semibold px-2 py-1 rounded-lg border cursor-pointer ${groups.includes(g.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white text-slate-600 border-slate-200'}`}>
-                                <input type="checkbox" className="hidden" checked={groups.includes(g.id)} onChange={() => toggleGroup(g.id)} />
+                                <input type="checkbox" className="hidden" checked={groups.includes(g.id)} onChange={() => {
+                                  const next = groups.includes(g.id) ? groups.filter((x: string) => x !== g.id) : [...groups, g.id];
+                                  patchDraft({ groups: next });
+                                }} />
                                 {g.label}
                               </label>
                             ))}
@@ -11566,7 +11599,13 @@ export default function App() {
                                 <span className="text-slate-700">{m.label}</span>
                                 <select
                                   value={access[m.id] || ''}
-                                  onChange={e => setMod(m.id, e.target.value as '' | AccessLevel)}
+                                  onChange={e => {
+                                    const next = { ...access };
+                                    const level = e.target.value as '' | AccessLevel;
+                                    if (!level) delete next[m.id];
+                                    else next[m.id] = level;
+                                    patchDraft({ access: next });
+                                  }}
                                   className="text-[11px] font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white"
                                 >
                                   <option value="">Kapalı</option>
@@ -11579,8 +11618,21 @@ export default function App() {
                         </div>
                       </>
                     )}
-                    {u.role === 'reporter' && <p className="text-[11px] text-slate-500">Tüm menüler açık, kayıt düğmeleri kapalı.</p>}
-                    {u.role === 'admin' && <p className="text-[11px] text-slate-500">Tüm menüler ve işlemler açık.</p>}
+                    {draft.role === 'reporter' && <p className="text-[11px] text-slate-500">Tüm menüler açık, kayıt düğmeleri kapalı.</p>}
+                    {draft.role === 'admin' && <p className="text-[11px] text-slate-500">Tüm menüler ve işlemler açık.</p>}
+                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+                      <button
+                        type="button"
+                        disabled={userSaveBusyId === u.id}
+                        onClick={() => void saveUser()}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-60"
+                      >
+                        {userSaveBusyId === u.id ? 'Kaydediliyor…' : 'Kaydet / uygula'}
+                      </button>
+                      {userSaveOkId === u.id && (
+                        <span className="text-xs font-bold text-emerald-700">Kaydedildi. Kullanıcı çıkıp tekrar girerse menü güncellenir.</span>
+                      )}
+                    </div>
                   </div>
                 );
               })}

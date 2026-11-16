@@ -52,8 +52,12 @@ export function normalizeGroups(raw: any, fallback?: string | null): string[] {
 
 export function normalizeAccess(raw: any): Record<string, AccessLevel> {
   const out: Record<string, AccessLevel> = {};
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
-  Object.entries(raw).forEach(([k, v]) => {
+  let src = raw;
+  if (typeof src === 'string') {
+    try { src = JSON.parse(src); } catch { return out; }
+  }
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return out;
+  Object.entries(src).forEach(([k, v]) => {
     if (v === 'view' || v === 'edit') out[k] = v;
   });
   return out;
