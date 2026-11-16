@@ -46,8 +46,8 @@ Deno.serve(async (req) => {
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(400, { error: 'Geçerli e-posta yazın' });
   if (password.length < 8) return json(400, { error: 'Şifre en az 8 karakter olsun' });
-  if (role === 'saha' && (!rental_work_group || !GROUPS.has(rental_work_group))) {
-    return json(400, { error: 'Saha için kiralık grup seçin' });
+  if (role === 'saha' && rental_work_group && !GROUPS.has(rental_work_group)) {
+    return json(400, { error: 'Geçersiz kiralık grup. Filo kullanıcısında grup boş bırakılabilir.' });
   }
   if (rental_work_group && !GROUPS.has(rental_work_group)) return json(400, { error: 'Geçersiz grup' });
 

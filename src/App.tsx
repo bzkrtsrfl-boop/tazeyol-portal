@@ -567,6 +567,64 @@ function profitabilityPdfMarkup(opts: {
   </div>`;
 }
 
+function exportAoaExcel(rows: any[][], fileName: string, sheetName: string) {
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, sheetName.slice(0, 31));
+  XLSX.writeFile(workbook, fileName);
+}
+
+function incomeReportPdfMarkup(opts: {
+  rangeLabel: string;
+  girdi: number;
+  cikti: number;
+  net: number;
+  inLines: { date: string; title: string; amount: number }[];
+  outLines: { date: string; title: string; amount: number }[];
+}) {
+  const co = COMPANY_IDENTITY;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const money = (n: number) => `${(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
+  const rowHtml = (lines: { date: string; title: string; amount: number }[], color: string) =>
+    lines.map((l, i) => `<tr style="background:${i % 2 ? '#f8fafc' : '#ffffff'}">
+      <td style="padding:6px 8px;font-size:11px">${escHtml(l.date)}</td>
+      <td style="padding:6px 8px;font-size:11px">${escHtml(l.title)}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:right;font-weight:800;color:${color}">${escHtml(money(l.amount))}</td>
+    </tr>`).join('');
+  return `
+  <div style="width:1100px;padding:28px 32px 36px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#0f172a;background:#ffffff">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;border-bottom:2px solid #009fe3;padding-bottom:12px">
+      <img src="${origin}${co.tazeyolLogo}" alt="Tazeyol" style="height:48px;object-fit:contain" />
+      <div style="text-align:center">
+        <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:#009fe3">GENEL GELİR GİDER</div>
+        <div style="font-size:18px;font-weight:800;margin-top:4px">${escHtml(opts.rangeLabel)}</div>
+      </div>
+      <img src="${origin}${co.alkanLogo}" alt="Alkan Nakliyat" style="height:48px;object-fit:contain" />
+    </div>
+    <div style="display:flex;gap:12px;margin:18px 0 16px">
+      <div style="flex:1;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#065f46">GİRDİ</div>
+        <div style="font-size:22px;font-weight:900;color:#059669">${escHtml(money(opts.girdi))}</div>
+      </div>
+      <div style="flex:1;background:#fff1f2;border:1px solid #fecdd3;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#9f1239">ÇIKTI</div>
+        <div style="font-size:22px;font-weight:900;color:#e11d48">${escHtml(money(opts.cikti))}</div>
+      </div>
+      <div style="flex:1;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px 14px">
+        <div style="font-size:10px;font-weight:800;color:#1e40af">NET</div>
+        <div style="font-size:22px;font-weight:900;color:${opts.net >= 0 ? '#059669' : '#e11d48'}">${escHtml(money(opts.net))}</div>
+      </div>
+    </div>
+    <div style="font-size:12px;font-weight:800;margin:8px 0 6px">Gelirler</div>
+    <table style="width:100%;border-collapse:collapse">${rowHtml(opts.inLines, '#059669')}</table>
+    <div style="font-size:12px;font-weight:800;margin:16px 0 6px">Giderler</div>
+    <table style="width:100%;border-collapse:collapse">${rowHtml(opts.outLines, '#e11d48')}</table>
+    <div style="margin-top:22px;font-size:9px;color:#94a3b8;line-height:1.45">
+      ${escHtml(co.legalName)} · Ana sayfa Girdi−Çıktı ile aynı kasa motoru. Excel/EA tahsilat kopyası yok.
+    </div>
+  </div>`;
+}
+
 function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -838,10 +896,7 @@ export default function App() {
       alert('E-posta ve en az 8 karakter şifre gerekli.');
       return;
     }
-    if (newPortalUser.role === 'saha' && !newPortalUser.rental_work_group) {
-      alert('Saha için grup seçin.');
-      return;
-    }
+    // Personel (saha) kiralık grup olmadan da açılır; filo gibi menü yetkisi sonra karttan verilir.
     setNewPortalUserBusy(true);
     const { data, error } = await supabase.functions.invoke('create-portal-user', {
       body: {
@@ -849,7 +904,7 @@ export default function App() {
         password: newPortalUser.password,
         full_name: newPortalUser.full_name.trim(),
         role: newPortalUser.role,
-        rental_work_group: newPortalUser.role === 'saha' ? newPortalUser.rental_work_group : null
+        rental_work_group: newPortalUser.role === 'saha' ? (newPortalUser.rental_work_group || null) : null
       }
     });
     setNewPortalUserBusy(false);
@@ -1338,12 +1393,15 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'plate_rentals' | 'rental_settlements' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'users'
   >('overview');
 
   useEffect(() => {
-    if (currentUserRole === 'saha' && !canViewMod('overview')) setActiveTab('rental_settlements');
-  }, [currentUserRole]);
+    if (currentUserRole !== 'saha') return;
+    if (canViewMod(activeTab)) return;
+    const first = PORTAL_MODULES.map(m => m.id).find(id => canViewMod(id));
+    if (first) setActiveTab(first as typeof activeTab);
+  }, [currentUserRole, portalAccess, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'users' && currentUserRole === 'admin') void loadPortalUsers();
@@ -1381,10 +1439,33 @@ export default function App() {
 
     return { start: startStr, end: endStr };
   };
+  const getPreviousMonthRange = () => {
+    const now = new Date();
+    let year = now.getFullYear();
+    let month = now.getMonth() - 1;
+    if (month < 0) { month = 11; year -= 1; }
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    return { start: `${year}-${pad(month + 1)}-01`, end: `${year}-${pad(month + 1)}-${pad(lastDay)}` };
+  };
 
   const [filterStartDate, setFilterStartDate] = useState(getCurrentMonthRange().start);
   const [filterEndDate, setFilterEndDate] = useState(getCurrentMonthRange().end);
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
+  const dateMenuRef = useRef<HTMLDivElement>(null);
+  const applyPeriod = (start: string, end: string) => {
+    setFilterStartDate(start);
+    setFilterEndDate(end);
+    setIsDateDropdownOpen(false);
+  };
+  useEffect(() => {
+    if (!isDateDropdownOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (dateMenuRef.current && !dateMenuRef.current.contains(e.target as Node)) setIsDateDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [isDateDropdownOpen]);
   const getPreviousYearMonth = () => {
     const d = new Date();
     d.setDate(1);
@@ -1394,6 +1475,7 @@ export default function App() {
   };
   const [profitMonth, setProfitMonth] = useState(getPreviousYearMonth);
   const [profitPdfBusy, setProfitPdfBusy] = useState(false);
+  const [incomePdfBusy, setIncomePdfBusy] = useState(false);
   const [monthlyInputRows, setMonthlyInputRows] = useState<any[]>([]);
 
   // 3. VERİTABANI STATE'LERİ
@@ -2887,10 +2969,12 @@ export default function App() {
     isDateInRange(i.issue_date) &&
     !isExpensePaidByCard(i)
   );
-  const totalPeriodPaidExpenses = [
+  const periodExpenseRows = [
     ...periodCashOutCandidates.filter((i: any) => i.category !== 'subcontractor_paid_outflow'),
     ...pickUniqueContractorOutflows(periodCashOutCandidates.filter((i: any) => i.category === 'subcontractor_paid_outflow'))
-  ].reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  ];
+  const totalPeriodPaidExpenses = periodExpenseRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const periodIncomeRows = cashInRows.filter((i: any) => isDateInRange(i.issue_date));
 
   const cashLedgerView = useMemo(() => {
     const from = cashLedgerFrom || cashStartDate;
@@ -3208,7 +3292,7 @@ export default function App() {
   const [salesSortConfig, setSalesSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'issue_date', direction: 'desc' });
 
   const displayedSalesList = useMemo(() => {
-    let list = [...salesDetailedList];
+    let list = [...salesDetailedList].filter(item => isDateInRange(item.issue_date));
 
     if (salesSearchQuery.trim()) {
       const q = salesSearchQuery.toLowerCase();
@@ -3239,7 +3323,7 @@ export default function App() {
     });
 
     return list;
-  }, [salesDetailedList, salesSearchQuery, salesStatusFilter, salesSortConfig]);
+  }, [salesDetailedList, salesSearchQuery, salesStatusFilter, salesSortConfig, filterStartDate, filterEndDate]);
 
   const handleSalesSort = (key: string) => {
     setSalesSortConfig(prev => ({
@@ -4143,6 +4227,7 @@ export default function App() {
     };
     const list = (dbInvoices || [])
       .filter((i: any) => i.category === 'subcontractor_invoice')
+      .filter((inv: any) => isDateInRange(inv.issue_date))
       .filter((inv: any) => {
         const invTitle = (inv.invoice_no || '').toLocaleLowerCase('tr-TR');
         const matchesSearch = !term || invTitle.includes(term);
@@ -4215,7 +4300,7 @@ export default function App() {
         term2: Math.round(totals.term2 * 100) / 100
       }
     };
-  }, [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder]);
+  }, [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder, filterStartDate, filterEndDate]);
 
   const visibleGeneralExpenses = useMemo(() => {
     const skip = ['subcontractor_invoice', 'customer_collection', 'freight_sales', 'cash_deposit', 'customer_advance', 'credit_card_payment', 'salary_payroll', 'subcontractor_paid_outflow', 'subcontractor_advance_paid'];
@@ -4227,6 +4312,7 @@ export default function App() {
     };
     return (dbInvoices || [])
       .filter((i: any) => !skip.includes(i.category))
+      .filter((i: any) => isDateInRange(i.issue_date))
       .filter((i: any) => {
         if (expenseStatusFilter === 'unpaid') return i.status !== 'paid';
         if (expenseStatusFilter === 'paid') return i.status === 'paid';
@@ -4248,7 +4334,7 @@ export default function App() {
         }
         return expenseSortOrder === 'asc' ? cmp : -cmp;
       });
-  }, [dbInvoices, expenseSearchTerm, expenseStatusFilter, expenseSortField, expenseSortOrder]);
+  }, [dbInvoices, expenseSearchTerm, expenseStatusFilter, expenseSortField, expenseSortOrder, filterStartDate, filterEndDate]);
 
   const displayBankTermLines = allDecoratedBankLines;
 
@@ -4348,9 +4434,11 @@ export default function App() {
     });
     return rows;
   }, [payableBankTermLines, bankPayMode, bankSortField, bankSortOrder, contractorAccountsBySubId, dbSubcontractors]);
+  const personnelViewYm = String(filterStartDate || currentPayYearMonth()).slice(0, 7);
+
   // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
   const processedEmployees = useMemo(() => {
-    const ym = currentPayYearMonth();
+    const ym = personnelViewYm;
     return (dbEmployees || [])
       .map(emp => {
         const pay = employeePayForMonth(emp, ym);
@@ -4383,7 +4471,7 @@ export default function App() {
         }
         return empSortOrder === 'asc' ? comp : -comp;
       });
-  }, [dbEmployees, dbAdvances, dbEmployeeTransactions, dbInvoices, empSearchTerm, empSortField, empSortOrder]);
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions, dbInvoices, empSearchTerm, empSortField, empSortOrder, personnelViewYm]);
 
   // PERSONEL SAYFASI FİNANSAL ÖZET SAYAÇLARI
   const empSummary = useMemo(() => {
@@ -6123,6 +6211,7 @@ export default function App() {
     { id: 'credit_cards', label: 'Kredi Kartları', badge: dbCreditCards.length, icon: CreditCard },
     { id: 'fleet', label: 'Araç Filosu', badge: dbVehicles.length, icon: Truck },
     { id: 'profitability', label: 'Öz Mal Karlılık & Maliyet', badge: dbProfitability.length, icon: BarChart3 },
+    { id: 'income_report', label: 'Gelir Gider Raporu', icon: FileText },
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection' || i.category === 'customer_advance').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
     { id: 'rental_settlements', label: 'Kiralık Araçlar', badge: dbRentalSettlements.length, icon: FileSpreadsheet },
@@ -6132,7 +6221,7 @@ export default function App() {
   const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
-    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses'] },
+    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses', 'income_report'] },
     { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements'] },
     { id: 'fleet', label: 'Araç', itemIds: ['fleet', 'profitability', 'plate_rentals'] },
     { id: 'people', label: 'İnsan ve yetki', itemIds: ['employees', 'users'] }
@@ -6142,8 +6231,8 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col">
       {/* ÜST MENÜ ÇUBUĞU */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setIsSidebarOpen(true)}
@@ -6170,8 +6259,46 @@ export default function App() {
             )}
           </div>
           
-          <div className="flex items-center gap-3">
-            <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${isAdmin ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : isReporter ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+          <div className="flex items-center gap-2 sm:gap-3">
+            {['overview', 'customers', 'collections', 'income_report', 'sales_customers', 'subcontractors', 'general_expenses', 'employees'].includes(activeTab) && (
+              <div className="relative" ref={dateMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
+                  className="flex items-center gap-2 px-2.5 sm:px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-semibold text-xs transition"
+                  title="Dönem filtresi"
+                >
+                  <Calendar className="w-4 h-4 text-[#009fe3] shrink-0" />
+                  <span className="tabular-nums whitespace-nowrap">
+                    {filterStartDate && filterEndDate
+                      ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}`
+                      : 'Tüm dönem'}
+                  </span>
+                  <span className="text-slate-400 hidden sm:inline">▼</span>
+                </button>
+                {isDateDropdownOpen && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-4 z-50 flex flex-col gap-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <span className="font-bold text-slate-800 text-xs">Tarih aralığı</span>
+                      <button type="button" onClick={() => setIsDateDropdownOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
+                      <span className="text-slate-400 font-bold">—</span>
+                      <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 pt-1">
+                      <button type="button" onClick={() => { const r = getCurrentMonthRange(); applyPeriod(r.start, r.end); }} className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">Bu Ay</button>
+                      <button type="button" onClick={() => { const r = getPreviousMonthRange(); applyPeriod(r.start, r.end); }} className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">Geçen Ay</button>
+                      <button type="button" onClick={() => { const end = new Date(); const start = new Date(); start.setDate(end.getDate() - 30); applyPeriod(start.toISOString().split('T')[0], end.toISOString().split('T')[0]); }} className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">Son 30 Gün</button>
+                      <button type="button" onClick={() => { const end = new Date(); const start = new Date(); start.setMonth(end.getMonth() - 3); applyPeriod(start.toISOString().split('T')[0], end.toISOString().split('T')[0]); }} className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">Son 3 Ay</button>
+                      <button type="button" onClick={() => applyPeriod('', '')} className="col-span-2 px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">Tüm dönem</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            <span className={`hidden sm:inline text-[11px] font-bold px-2.5 py-1 rounded-full ${isAdmin ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : isReporter ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
               {isAdmin ? 'Yönetici' : isReporter ? 'Rapor · salt okuma' : `Personel${rentalAssignedGroups.length ? ' · ' + rentalAssignedGroups.map(id => RENTAL_WORK_GROUPS.find(g => g.id === id)?.label).filter(Boolean).join(', ') : ''}`}
             </span>
             <button onClick={loadPortalData} title="Verileri Yenile" className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition">
@@ -6431,118 +6558,9 @@ export default function App() {
               )}
             </div>
 
-{/* FİNANSAL VERİ FİLTRESİ VE AÇILIR POP-UP TAKVİM */}
-<div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative">
-  <div className="flex items-center gap-2">
-    <Calendar className="w-5 h-5 text-[#009fe3]" />
-    <div>
-      <h3 className="font-bold text-slate-900 text-sm">Finansal Veri Filtresi</h3>
-                <span className="text-[11px] text-slate-400">Ay filtresi tahsilat ve Girdi−Çıktı’yı değiştirir. Kasa bakiyesi ve bekleyen alacak bugünkü gerçek rakamdır.</span>
-    </div>
-  </div>
-
-  {/* Tarih Seçim Butonu (Tıklayınca Pop-up Açılır) */}
-  <div className="relative">
-    <button
-      onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
-      className="flex items-center gap-3 px-4 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-semibold text-xs transition shadow-sm">
-      <Calendar className="w-4 h-4 text-[#009fe3]" />
-      <span>{filterStartDate} — {filterEndDate}</span>
-      <span className="text-slate-400">▼</span>
-    </button>
-
-    {/* Açılır Pop-up Menü */}
-    {isDateDropdownOpen && (
-      <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl border border-slate-200 shadow-xl p-4 z-50 flex flex-col gap-3">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-          <span className="font-bold text-slate-800 text-xs">Tarih Aralığı Seçin</span>
-          <button 
-            onClick={() => setIsDateDropdownOpen(false)}
-            className="text-slate-400 hover:text-slate-600 font-bold text-sm">
-            ✕
-          </button>
-        </div>
-
-        {/* Manuel Tarih Girişleri */}
-        <div className="flex items-center gap-2">
-          <input  
-            type="date"  
-            value={filterStartDate}
-            onChange={e => setFilterStartDate(e.target.value)}
-            className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none"
-          />
-          <span className="text-slate-400 font-bold">—</span>
-          <input  
-            type="date"  
-            value={filterEndDate}
-            onChange={e => setFilterEndDate(e.target.value)}
-            className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium outline-none"
-          />
-        </div>
-
-        {/* Hızlı Seçim Butonları (Alt Alta / Grid Düzen) */}
-        <div className="grid grid-cols-2 gap-1.5 pt-1">
-          <button  
-            onClick={() => {
-              const now = new Date();
-              const year = now.getFullYear();
-              const month = now.getMonth();
-              const pad = (n: number) => (n < 10 ? '0' + n : String(n));
-              setFilterStartDate(`${year}-${pad(month + 1)}-01`);
-              const lastDay = new Date(year, month + 1, 0);
-              setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
-              setIsDateDropdownOpen(false);
-            }}
-            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
-            Bu Ay
-          </button>
-
-          <button  
-            onClick={() => {
-              const now = new Date();
-              let year = now.getFullYear();
-              let month = now.getMonth() - 1;
-              if (month < 0) { month = 11; year -= 1; }
-              const pad = (n: number) => (n < 10 ? '0' + n : String(n));
-              setFilterStartDate(`${year}-${pad(month + 1)}-01`);
-              const lastDay = new Date(year, month + 1, 0);
-              setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
-              setIsDateDropdownOpen(false);
-            }}
-            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
-            Geçen Ay
-          </button>
-
-          <button  
-            onClick={() => {
-              const end = new Date();
-              const start = new Date();
-              start.setDate(end.getDate() - 30);
-              setFilterStartDate(start.toISOString().split('T')[0]);
-              setFilterEndDate(end.toISOString().split('T')[0]);
-              setIsDateDropdownOpen(false);
-            }}
-            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
-            Son 30 Gün
-          </button>
-
-          <button  
-            onClick={() => {
-              const end = new Date();
-              const start = new Date();
-              start.setMonth(end.getMonth() - 3);
-              setFilterStartDate(start.toISOString().split('T')[0]);
-              setFilterEndDate(end.toISOString().split('T')[0]);
-              setIsDateDropdownOpen(false);
-            }}
-            className="px-3 py-2 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-xl font-semibold text-xs transition text-center">
-            Son 3 Ay
-          </button>
-        </div>
-      </div>
-    )}
-  </div>
-</div>
+            <p className="text-[11px] text-slate-400">
+              Dönem üst çubuktan: {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'}. Tahsilat ve Girdi−Çıktı bu aralığa göre. Kasa bakiyesi ve bekleyen alacak bugünkü gerçek rakamdır.
+            </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <button type="button" onClick={() => setActiveTab('collections')} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-emerald-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
@@ -6552,7 +6570,7 @@ export default function App() {
                   +{totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-xs text-slate-400 mt-1 block">
-                  {filterStartDate} — {filterEndDate} · o ay kasaya giren
+                  {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'} · o aralıkta kasaya giren
                 </span>
                 <span className="text-[11px] text-slate-400 mt-0.5 block">
                   Ciro {totalPeriodSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ (kesilen fatura, kasa değil)
@@ -6642,7 +6660,7 @@ export default function App() {
               <div className="px-5 pt-4 pb-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
                 <div>
                   <p className="text-[11px] font-bold tracking-widest uppercase text-slate-400">Seçilen dönemde nakit akışı</p>
-                  <p className="text-sm font-semibold text-slate-700 mt-0.5">{filterStartDate} — {filterEndDate}</p>
+                  <p className="text-sm font-semibold text-slate-700 mt-0.5">{filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'Tüm dönem'}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-[11px] font-bold tracking-widest uppercase text-slate-400">Net</p>
@@ -6843,44 +6861,13 @@ export default function App() {
                 </button>
               )}
             </div>
-            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-              <input
-                type="text"
-                placeholder="Unvan, VKN veya telefon ara..."
-                value={customerSearchTerm}
-                onChange={e => setCustomerSearchTerm(e.target.value)}
-                className="w-full sm:w-80 px-3.5 py-2 border border-slate-200 rounded-xl text-xs"
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <Calendar className="w-4 h-4 text-[#009fe3]" />
-                <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium" />
-                <span className="text-slate-400 text-xs">—</span>
-                <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const r = getCurrentMonthRange();
-                    setFilterStartDate(r.start);
-                    setFilterEndDate(r.end);
-                  }}
-                  className="px-3 py-1.5 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-lg font-semibold text-xs"
-                >Bu Ay</button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const now = new Date();
-                    let year = now.getFullYear();
-                    let month = now.getMonth() - 1;
-                    if (month < 0) { month = 11; year -= 1; }
-                    const pad = (n: number) => (n < 10 ? '0' + n : String(n));
-                    setFilterStartDate(`${year}-${pad(month + 1)}-01`);
-                    const lastDay = new Date(year, month + 1, 0);
-                    setFilterEndDate(`${year}-${pad(month + 1)}-${pad(lastDay.getDate())}`);
-                  }}
-                  className="px-3 py-1.5 bg-slate-50 hover:bg-[#009fe3] hover:text-white text-slate-700 rounded-lg font-semibold text-xs"
-                >Geçen Ay</button>
-              </div>
-            </div>
+            <input
+              type="text"
+              placeholder="Unvan, VKN veya telefon ara..."
+              value={customerSearchTerm}
+              onChange={e => setCustomerSearchTerm(e.target.value)}
+              className="w-full sm:w-80 px-3.5 py-2 border border-slate-200 rounded-xl text-xs"
+            />
             {dbCustomers.length === 0 ? (
               <p className="text-sm text-slate-500 bg-amber-50 border border-amber-100 rounded-xl p-4">
                 Henüz müşteri yok. Önce Supabase SQL Editor’da <b>setup_customers.sql</b> dosyasını çalıştırın, sonra buradan kart ekleyin.
@@ -7802,7 +7789,7 @@ export default function App() {
               Personel & Maaş Yönetimi ({empSummary.count} Personel)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Sözleşmeli maaş ve kart primi kapanmış ayda caridedir (Kasım maaşı 1 Aralık’ta). Elle girilen sefer/prim hemen net alacağa yazılır; ödeme yoksa tutar durur. Toplu maaş yalnızca girdiğiniz kadar düşer.
+              Prim ve avans kesintisi üstteki dönemin ayına göre ({yearMonthTrLabel(personnelViewYm)}). Net ödenecek, caride kalan gerçek borçtur. Sözleşmeli maaş kapanmış ayda caridedir (Kasım maaşı 1 Aralık’ta).
             </p>
           </div>
           {isAdmin && (
@@ -7837,21 +7824,21 @@ export default function App() {
           </div>
 
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
-            <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Toplam Hak Edilen Prim</span>
+            <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">{yearMonthTrLabel(personnelViewYm)} primi</span>
             <span className="text-base font-extrabold text-emerald-800 mt-0.5 block">
               +{empSummary.totalBonus.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
             </span>
           </div>
 
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-            <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Mahsup Edilen Avanslar</span>
+            <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">{yearMonthTrLabel(personnelViewYm)} avans kesintisi</span>
             <span className="text-base font-extrabold text-amber-800 mt-0.5 block">
               -{empSummary.totalAdv.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
             </span>
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
-            <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider block">Bu Ay Ödenecek Net Tutar</span>
+            <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider block">Net cari alacak</span>
             <span className="text-base font-black text-blue-900 mt-0.5 block">
               {empSummary.totalNet.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
             </span>
@@ -7945,7 +7932,7 @@ export default function App() {
                 </th>
                 <th className="py-3 px-3 text-right">SGK işveren</th>
                 <th className="py-3 px-3 text-right">Prim / Ek</th>
-                <th className="py-3 px-3 text-right">Bu Ay Avans Kesintisi</th>
+                <th className="py-3 px-3 text-right">{yearMonthTrLabel(personnelViewYm)} avans</th>
                 <th 
                   className="py-3 px-3 text-right cursor-pointer hover:bg-slate-100 transition group"
                   onClick={() => {
@@ -8297,7 +8284,7 @@ export default function App() {
                 <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({dbVehicles.length} Araç)</h3>
                 <p className="text-xs text-slate-500 mt-0.5">Sürücü, muayene, sigorta, kasko ve otomatik MTV bildirimleri.</p>
               </div>
-              {isAdmin && (
+              {canEditMod('fleet') && (
                 <button 
                   onClick={() => {
                     setEditingVehicleId(null);
@@ -8382,7 +8369,7 @@ export default function App() {
                     <th className="py-3 px-3">MUAYENE</th>
                     <th className="py-3 px-3 text-right">DİĞER GİDERLER</th>
                     <th className="py-3 px-3 text-right">TOPLAM MALİYET</th>
-                    {isAdmin && <th className="py-3 px-3 text-center">İŞLEM</th>}
+                    {canEditMod('fleet') && <th className="py-3 px-3 text-center">İŞLEM</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -8463,7 +8450,7 @@ export default function App() {
                         <td className="py-3 px-3 text-right font-black text-slate-900 text-sm">
                           {totalCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                         </td>
-                        {isAdmin && (
+                        {canEditMod('fleet') && (
                           <td className="py-3 px-3 text-center">
                             <button
                               onClick={() => openEditVehicleModal(v)}
@@ -8533,6 +8520,48 @@ export default function App() {
                 >
                   <Download className="w-4 h-4" />
                   {profitPdfBusy ? 'PDF hazırlanıyor…' : 'PDF arşiv'}
+                </button>
+                <button
+                  type="button"
+                  disabled={!dbProfitability.length}
+                  onClick={() => {
+                    const included = dbProfitability.filter((p: any) => p.included);
+                    const totalRev = included.reduce((sum: number, p: any) => sum + p.invoice_rev, 0);
+                    const totalCost = included.reduce((sum: number, p: any) => sum + p.totalCost, 0);
+                    const totalNet = included.reduce((sum: number, p: any) => sum + p.netProfit, 0);
+                    const marginPct = totalRev > 0 ? (totalNet / totalRev) * 100 : null;
+                    const money = (n: number) => Number(n || 0);
+                    exportAoaExcel([
+                      ['Tazeyol ERP — Öz Mal Karlılık'],
+                      ['Ay', yearMonthTrLabel(profitMonth)],
+                      [],
+                      ['Toplam ciro', money(totalRev)],
+                      ['Toplam gider', money(totalCost)],
+                      ['Net kâr / zarar', money(totalNet)],
+                      ['Karlılık oranı %', marginPct == null ? '' : Math.round(marginPct * 10) / 10],
+                      [],
+                      ['Bu ay', 'Tip', 'Plaka', 'Şoför', 'Ciro', 'Yakıt', 'HGS', 'Maaş + prim', 'SGK', 'Sabit / ay', 'Bakım / ay', 'Toplam gider', 'Net kâr'],
+                      ...dbProfitability.map((p: any) => [
+                        p.included ? 'Dahil' : 'Hariç',
+                        p.vehicleType,
+                        p.plate_number,
+                        p.driver_name || '',
+                        money(p.invoice_rev),
+                        money(p.fuel),
+                        money(p.hgs),
+                        money(p.payroll),
+                        money(p.sgk),
+                        money(p.fixed_monthly),
+                        money(p.bakim),
+                        money(p.totalCost),
+                        money(p.netProfit)
+                      ])
+                    ], `Oz_Mal_Karlilik_${profitMonth}.xlsx`, 'Oz mal');
+                  }}
+                  className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-bold flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  Excel
                 </button>
                 </div>
               </div>
@@ -8678,6 +8707,187 @@ export default function App() {
             </div>
         )}
 
+        {activeTab === 'income_report' && (() => {
+          const money = (n: number) => n.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          const girdi = Math.max(0, totalCollectedCash);
+          const cikti = Math.max(0, totalPeriodPaidExpenses);
+          const flowTotal = girdi + cikti;
+          const girdiShare = flowTotal > 0 ? (girdi / flowTotal) * 100 : 50;
+          const barMax = Math.max(girdi, cikti, 1);
+          const rangeLabel = filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'Tüm dönem';
+          const inLines = periodIncomeRows
+            .slice()
+            .sort((a: any, b: any) => String(a.issue_date).localeCompare(String(b.issue_date)))
+            .map((inv: any) => ({
+              date: formatDateTR(inv.issue_date),
+              title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gelir'),
+              amount: cleanNumber(inv.total_amount)
+            }));
+          const outLines = periodExpenseRows
+            .slice()
+            .sort((a: any, b: any) => String(a.issue_date).localeCompare(String(b.issue_date)))
+            .map((inv: any) => ({
+              date: formatDateTR(inv.issue_date),
+              title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gider'),
+              amount: cleanNumber(inv.total_amount)
+            }));
+          const exportExcel = () => {
+            exportAoaExcel([
+              ['Tazeyol ERP — Genel Gelir Gider'],
+              ['Dönem', rangeLabel],
+              [],
+              ['Girdi', totalCollectedCash],
+              ['Çıktı', totalPeriodPaidExpenses],
+              ['Net', periodProfit],
+              [],
+              ['Gelirler'],
+              ['Tarih', 'Açıklama', 'Tutar'],
+              ...inLines.map(l => [l.date, l.title, l.amount]),
+              ['Toplam gelir', '', totalCollectedCash],
+              [],
+              ['Giderler'],
+              ['Tarih', 'Açıklama', 'Tutar'],
+              ...outLines.map(l => [l.date, l.title, l.amount]),
+              ['Toplam gider', '', totalPeriodPaidExpenses]
+            ], `Gelir_Gider_${filterStartDate}_${filterEndDate}.xlsx`, 'Gelir gider');
+          };
+          const exportPdf = async () => {
+            setIncomePdfBusy(true);
+            try {
+              const blob = await htmlNodeToPdfBlob(incomeReportPdfMarkup({
+                rangeLabel,
+                girdi: totalCollectedCash,
+                cikti: totalPeriodPaidExpenses,
+                net: periodProfit,
+                inLines,
+                outLines
+              }), 'landscape');
+              downloadBlob(blob, `Gelir_Gider_${filterStartDate}_${filterEndDate}.pdf`);
+            } catch (err: any) {
+              alert('PDF hazırlanamadı: ' + (err.message || ''));
+            } finally {
+              setIncomePdfBusy(false);
+            }
+          };
+          return (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Genel Gelir Gider</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Üstteki tarih aralığı ile ana sayfa Girdi−Çıktı aynı rakamlar. Kasaya giren / çıkan nakit; fatura cirosu değil.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={incomePdfBusy}
+                  onClick={exportPdf}
+                  className="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  <Download className="w-4 h-4" />
+                  {incomePdfBusy ? 'PDF hazırlanıyor…' : 'PDF'}
+                </button>
+                <button
+                  type="button"
+                  onClick={exportExcel}
+                  className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-bold flex items-center gap-1.5"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  Excel
+                </button>
+              </div>
+            </div>
+            <div className="rounded-2xl bg-slate-50 border border-slate-100 p-5 flex flex-col sm:flex-row items-center gap-8">
+              <div className="relative w-36 h-36 shrink-0">
+                <div
+                  className="w-full h-full rounded-full"
+                  style={{ background: `conic-gradient(#10b981 0% ${girdiShare}%, #fb7185 ${girdiShare}% 100%)` }}
+                />
+                <div className="absolute inset-7 rounded-full bg-white flex flex-col items-center justify-center text-center px-2">
+                  <span className="text-[10px] font-bold text-slate-400 tracking-wider">NET</span>
+                  <span className={`text-sm font-black leading-tight ${periodProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {periodProfit >= 0 ? '+' : ''}{money(periodProfit)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex-1 w-full space-y-5">
+                <div>
+                  <div className="flex justify-between items-baseline text-xs font-bold mb-1.5">
+                    <span className="text-emerald-700 uppercase tracking-wider">Girdi</span>
+                    <span className="text-emerald-800 text-sm tabular-nums">{money(girdi)} ₺</span>
+                  </div>
+                  <div className="h-4 rounded-full bg-slate-200 overflow-hidden">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${(girdi / barMax) * 100}%` }} />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between items-baseline text-xs font-bold mb-1.5">
+                    <span className="text-rose-700 uppercase tracking-wider">Çıktı</span>
+                    <span className="text-rose-800 text-sm tabular-nums">{money(cikti)} ₺</span>
+                  </div>
+                  <div className="h-4 rounded-full bg-slate-200 overflow-hidden">
+                    <div className="h-full rounded-full bg-rose-400" style={{ width: `${(cikti / barMax) * 100}%` }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-800 mb-2">Gelirler ({inLines.length})</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                    <tr>
+                      <th className="py-2 px-3">Tarih</th>
+                      <th className="py-2 px-3">Açıklama</th>
+                      <th className="py-2 px-3 text-right">Tutar</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {inLines.map((l, i) => (
+                      <tr key={'in-' + i}>
+                        <td className="py-2 px-3 whitespace-nowrap">{l.date}</td>
+                        <td className="py-2 px-3">{l.title}</td>
+                        <td className="py-2 px-3 text-right font-bold text-emerald-700">{money(l.amount)} ₺</td>
+                      </tr>
+                    ))}
+                    {!inLines.length && (
+                      <tr><td colSpan={3} className="py-6 px-3 text-center text-slate-400">Bu aralıkta kasa girişi yok.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-800 mb-2">Giderler ({outLines.length})</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                    <tr>
+                      <th className="py-2 px-3">Tarih</th>
+                      <th className="py-2 px-3">Açıklama</th>
+                      <th className="py-2 px-3 text-right">Tutar</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {outLines.map((l, i) => (
+                      <tr key={'out-' + i}>
+                        <td className="py-2 px-3 whitespace-nowrap">{l.date}</td>
+                        <td className="py-2 px-3">{l.title}</td>
+                        <td className="py-2 px-3 text-right font-bold text-rose-600">{money(l.amount)} ₺</td>
+                      </tr>
+                    ))}
+                    {!outLines.length && (
+                      <tr><td colSpan={3} className="py-6 px-3 text-center text-slate-400">Bu aralıkta kasa çıkışı yok.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+
         {/* 10. MÜŞTERİ TAHSİLATLARI */}
         {activeTab === 'collections' && (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
@@ -8685,7 +8895,7 @@ export default function App() {
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Müşteri Tahsilatları</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Tarih = paranın bankaya girdiği gün. Bugün işleseniz bile 20.10 ise tarihi 20.10 yapın; o zaman Ekim tahsilatına ve kasaya o gün yazılır. Aralık: {filterStartDate} — {filterEndDate}. Toplam {totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  Yalnız kasaya giren banka transferi ve senin eklediğin dekont. Excel/EA kopyası yok. Aralık: {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'}. Toplam {totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </p>
               </div>
               {isAdmin && (
@@ -8709,14 +8919,16 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {dbInvoices
-                    .filter(i => isBankCashIn(i) && i.category !== 'cash_deposit' && isDateInRange(i.issue_date))
+                  {cashInRows
+                    .filter(i => i.category !== 'cash_deposit' && isDateInRange(i.issue_date))
                     .sort((a, b) => String(sanitizeDate(b.issue_date)).localeCompare(String(sanitizeDate(a.issue_date))))
-                    .map((item) => (
+                    .map((item) => {
+                    const lockedBank = String(item.id || '').startsWith('migros_bank_');
+                    return (
                     <tr key={String(item.id)} className="hover:bg-slate-50 transition">
                       <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.invoice_no}</td>
                       <td className="py-3 px-4 text-slate-600">
-                        {isAdmin ? (
+                        {isAdmin && !lockedBank ? (
                           <input
                             type="date"
                             defaultValue={sanitizeDate(item.issue_date)}
@@ -8726,27 +8938,34 @@ export default function App() {
                             title="Paranın bankaya girdiği gün"
                           />
                         ) : (
-                          sanitizeDate(item.issue_date)
+                          formatDateTR(item.issue_date)
                         )}
                       </td>
                       <td className="py-3 px-4">
-                        <span className="bg-emerald-100 text-emerald-800 text-[11px] px-2.5 py-0.5 rounded-full font-semibold">Tahsil edildi</span>
+                        <span className="bg-emerald-100 text-emerald-800 text-[11px] px-2.5 py-0.5 rounded-full font-semibold">
+                          {lockedBank ? 'Banka ekstresi' : 'Tahsil edildi'}
+                        </span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-emerald-600 text-sm">
                         +{cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                       </td>
                       {isAdmin && (
                         <td className="py-3 px-4 text-center">
+                          {lockedBank ? (
+                            <span className="text-[10px] text-slate-400">Kilitli</span>
+                          ) : (
                           <button
                             onClick={() => handleDeleteReceipt(item)}
                             className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
                             title="Tahsilatı Sil ve Faturayı Geri Aç">
                             <Trash2 className="w-4 h-4" />
                           </button>
+                          )}
                         </td>
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -11233,7 +11452,7 @@ export default function App() {
                   <h3 className="font-bold text-slate-900">Kullanıcı yetkileri</h3>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-3xl">
                     <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın. Otomatik açılmazsa aynı bilgileri Authentication → Users → Add user içine bir kez girersiniz; yetki yine bu listeden verilir.
-                    <b>Yönetici</b> her şey. <b>Rapor</b> görür işlem yok. <b>Personel</b> işaretlenen menü ve gruplar (izin için birden fazla grup).
+                    <b>Yönetici</b> her şey. <b>Rapor</b> görür işlem yok. <b>Personel</b> yalnız işaretlenen menüler. Yalnız filo için: Personel oluştur → şablon <b>Sadece araç filosu</b> (kiralık grup gerekmez).
                   </p>
                 </div>
                 <div className="flex gap-2">

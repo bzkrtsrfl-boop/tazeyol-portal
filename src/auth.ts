@@ -17,18 +17,21 @@ export const PORTAL_MODULES = [
   { id: 'payments', label: 'Banka ödeme talimatı' },
   { id: 'employees', label: 'Personel ve bordro' },
   { id: 'credit_cards', label: 'Kredi kartları' },
-  { id: 'general_expenses', label: 'Genel giderler' }
+  { id: 'general_expenses', label: 'Genel giderler' },
+  { id: 'income_report', label: 'Gelir gider raporu' }
 ] as const;
 
 export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];
 
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
-  { id: 'arac', label: 'Araç sorumlusu', access: { fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
+  { id: 'filo_sadece', label: 'Sadece araç filosu', access: { fleet: 'edit' } },
+  { id: 'arac', label: 'Araç sorumlusu (filo + plaka + karlılık)', access: { fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
   { id: 'on_muhasebe', label: 'Ön muhasebe', access: {
     sales_customers: 'edit', customers: 'edit', collections: 'edit',
     subcontractors: 'edit', sub_accounts: 'edit', sub_ibans: 'edit',
-    payments: 'edit', credit_cards: 'edit', general_expenses: 'edit', employees: 'edit'
+    payments: 'edit', credit_cards: 'edit', general_expenses: 'edit', employees: 'edit',
+    income_report: 'view'
   } }
 ];
 
