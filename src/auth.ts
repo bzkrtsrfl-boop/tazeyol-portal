@@ -83,8 +83,7 @@ export async function fetchProfile(userId: string): Promise<PortalProfile | null
 
   if (data?.role === 'admin' || data?.role === 'reporter' || data?.role === 'saha') {
     const groups = normalizeGroups((data as any).rental_work_groups, (data as any).rental_work_group);
-    let access = normalizeAccess((data as any).portal_access);
-    if (data.role === 'saha' && !Object.keys(access).length) access = { rental_settlements: 'edit' };
+    const access = normalizeAccess((data as any).portal_access);
     return {
       role: data.role,
       rental_work_group: groups[0] || null,

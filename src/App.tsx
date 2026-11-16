@@ -567,6 +567,10 @@ function profitabilityPdfMarkup(opts: {
   </div>`;
 }
 
+function dismissIfBackdrop(e: React.MouseEvent, close: () => void) {
+  if (e.target === e.currentTarget) close();
+}
+
 function exportAoaExcel(rows: any[][], fileName: string, sheetName: string) {
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   const workbook = XLSX.utils.book_new();
@@ -717,7 +721,7 @@ export default function App() {
     password: '',
     full_name: '',
     role: 'saha' as 'admin' | 'reporter' | 'saha',
-    rental_work_group: 'magazalar'
+    rental_work_group: ''
   });
   const [newPortalUserBusy, setNewPortalUserBusy] = useState(false);
   const [newPortalUserOpen, setNewPortalUserOpen] = useState(false);
@@ -879,8 +883,8 @@ export default function App() {
     const payload: any = {
       full_name: patch.full_name !== undefined ? patch.full_name : user.full_name,
       role: nextRole,
-      rental_work_groups: nextRole === 'saha' ? nextGroups : [],
-      rental_work_group: nextRole === 'saha' ? (nextGroups[0] || null) : null,
+      rental_work_groups: nextRole === 'saha' && nextAccess.rental_settlements ? nextGroups : [],
+      rental_work_group: nextRole === 'saha' && nextAccess.rental_settlements ? (nextGroups[0] || null) : null,
       portal_access: nextRole === 'saha' ? nextAccess : {}
     };
     const { error } = await supabase.from('profiles').update(payload).eq('id', user.id);
@@ -1408,7 +1412,8 @@ export default function App() {
   useEffect(() => {
     if (currentUserRole !== 'saha') return;
     if (canViewMod(activeTab)) return;
-    const first = PORTAL_MODULES.map(m => m.id).find(id => canViewMod(id));
+    const order = ['fleet', 'plate_rentals', 'profitability', ...PORTAL_MODULES.map(m => m.id)];
+    const first = order.find(id => canViewMod(id));
     if (first) setActiveTab(first as typeof activeTab);
   }, [currentUserRole, portalAccess, activeTab]);
 
@@ -3301,7 +3306,7 @@ export default function App() {
   const [salesSortConfig, setSalesSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' }>({ key: 'issue_date', direction: 'desc' });
 
   const displayedSalesList = useMemo(() => {
-    let list = [...salesDetailedList].filter(item => isDateInRange(item.issue_date));
+    let list = [...salesDetailedList];
 
     if (salesSearchQuery.trim()) {
       const q = salesSearchQuery.toLowerCase();
@@ -3332,7 +3337,7 @@ export default function App() {
     });
 
     return list;
-  }, [salesDetailedList, salesSearchQuery, salesStatusFilter, salesSortConfig, filterStartDate, filterEndDate]);
+  }, [salesDetailedList, salesSearchQuery, salesStatusFilter, salesSortConfig]);
 
   const handleSalesSort = (key: string) => {
     setSalesSortConfig(prev => ({
@@ -6447,6 +6452,11 @@ export default function App() {
 
       {/* ANA İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
+        {isSaha && !PORTAL_MODULES.some(m => canViewMod(m.id)) && (
+          <div className="bg-white rounded-2xl border border-amber-200 p-6 text-sm text-amber-950">
+            Bu hesaba açık menü yok. Yönetici Kullanıcılar ekranında şablon seçip <b>Kaydet / uygula</b> basmalı.
+          </div>
+        )}
 {/* 1. GENEL GÖRÜNÜM (DOKUNULMAYAN KİLİTLİ BLOK) */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
@@ -7077,12 +7087,9 @@ export default function App() {
                 <option value="paid">✅ Sadece Tahsil Edilenler</option>
               </select>
             </div>
-            {/* BEKLEYEN VE SEÇİLİ TAHSİLAT ÖZET KARTI */}
-        {(() => {
-          const salesInvoices = dbInvoices.filter((i: any) => i.direction === 'outgoing' || i.category === 'freight_sales');
-          const uncollected = salesInvoices.filter((i: any) => i.status !== 'paid');
-          const totalUncollectedAmt = uncollected.reduce((acc: number, cur: any) => acc + (Number(cur.total_amount) || 0), 0);
-
+            {(() => {
+          const uncollected = displayedSalesList.filter((i: any) => i.status !== 'paid');
+          const totalUncollectedAmt = uncollected.reduce((acc: number, cur: any) => acc + cleanNumber(cur.total_amount), 0);
           return (
             <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm mb-3">
               <div className="flex items-center gap-3">
@@ -7091,22 +7098,22 @@ export default function App() {
                 </div>
                 <div>
                   <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
-                    Açık fatura tutarı (mutabakat bayrağı)
+                    Listelenen açık fatura
                   </span>
                   <span className="text-2xl font-black text-slate-900 tracking-tight">
                     {totalUncollectedAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                   <span className="text-[11px] text-slate-500 block mt-0.5">
-                    Cari net alacak: {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    Arama ve durum kutusuna göre. Üst tarih bu listeyi kesmez.
                   </span>
                 </div>
               </div>
               <div className="flex items-center gap-2 self-start sm:self-center">
                 <span className="bg-white/90 border border-emerald-200 text-emerald-800 font-bold text-xs px-3.5 py-1.5 rounded-xl shadow-xs">
-                  {uncollected.length} Açık Fatura
+                  {uncollected.length} Açık fatura
                 </span>
                 <span className="bg-slate-100 text-slate-600 font-semibold text-xs px-3 py-1.5 rounded-xl">
-                  Toplam: {salesInvoices.length} Fatura
+                  Listede: {displayedSalesList.length}
                 </span>
               </div>
             </div>
@@ -7137,6 +7144,13 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
+                  {displayedSalesList.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 px-3 text-center text-slate-400">
+                        Bu arama / durumda fatura yok. Kutuyu “Tüm Faturalar” yapın veya aramayı silin.
+                      </td>
+                    </tr>
+                  )}
                   {displayedSalesList.map((sale, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 transition">
                       <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sale.customerName}</td>
@@ -9134,7 +9148,7 @@ export default function App() {
       
       {/* MODAL: PERSONEL EKLE & DÜZENLE (PRİM / EK MASRAF DESTEKLİ) */}
       {isEmployeeModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsEmployeeModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">{editingEmployeeId ? 'Personeli Düzenle' : 'Yeni Personel Ekle'}</h3>
@@ -9391,7 +9405,7 @@ export default function App() {
 
       {/* MODAL: TAŞERONA MANUEL ÖDEME / AVANS YAP */}
       {isSubPaymentModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsSubPaymentModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Alt yükleniciye avans ver</h3>
@@ -9480,7 +9494,7 @@ export default function App() {
 
       {/* MODAL: MANUEL TAŞERON HAKEDİŞ FATURASI EKLE */}
       {isManualSubInvoiceModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsManualSubInvoiceModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Manuel Hakediş / Fatura Ekle</h3>
@@ -9556,7 +9570,7 @@ export default function App() {
 
       {/* MODAL: ALT YÜKLENİCİ KARTI */}
       {isSubIbanModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsSubIbanModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">{editingSubIbanId ? 'Alt yüklenici düzenle' : 'Yeni alt yüklenici'}</h3>
@@ -9593,7 +9607,7 @@ export default function App() {
 
       {/* MODAL: GENEL GİDER EKLE & DÜZENLE */}
       {isGeneralExpenseModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsGeneralExpenseModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">{editingExpenseId ? 'Gider Kaydını Düzenle' : 'Yeni Gider / Fatura Ekle'}</h3>
@@ -9708,7 +9722,7 @@ export default function App() {
 
       {/* DİĞER MODALLAR: SATIŞ, TAHSİLAT, KASA, ARAÇ, KREDİ KARTI, HAKEDİŞ DÜZENLEME, TOPLU MAAŞ */}
       {selectedCariCustomer && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:bg-white print:static print:p-0">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:bg-white print:static print:p-0" onMouseDown={e => dismissIfBackdrop(e, () => setSelectedCariCustomer(null))}>
           <div id="cari-dokum-print" className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-xl border border-slate-100 print:shadow-none print:border-0 print:max-h-none print:rounded-none">
             <div className="flex justify-between items-start pb-4 border-b border-slate-100 print:border-black">
               <div>
@@ -9782,7 +9796,7 @@ export default function App() {
       )}
 
       {selectedPayrollEmp && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:bg-white print:static print:p-0">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:bg-white print:static print:p-0" onMouseDown={e => dismissIfBackdrop(e, () => setSelectedPayrollEmp(null))}>
           <div id="personel-hakedis-print" className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-xl border border-slate-100 print:shadow-none print:border-0 print:max-h-none print:rounded-none">
             <div className="flex justify-between items-start pb-4 border-b border-slate-100 print:border-black gap-4">
               <div>
@@ -9881,7 +9895,7 @@ export default function App() {
       )}
 
       {isCustomerModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsCustomerModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">{editingCustomerId ? 'Müşteri Düzenle' : 'Yeni Müşteri'}</h3>
@@ -9930,7 +9944,7 @@ export default function App() {
       )}
 
       {isNewSaleModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsNewSaleModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Yeni Satış Faturası Ekle</h3>
@@ -10005,7 +10019,7 @@ export default function App() {
       )}
 
       {isNewReceiptModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsNewReceiptModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Cari ödeme / avans</h3>
@@ -10076,7 +10090,7 @@ export default function App() {
       )}
 
       {isCashLedgerOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsCashLedgerOpen(false))}>
           <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] flex flex-col shadow-xl border border-slate-100">
             <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -10149,7 +10163,7 @@ export default function App() {
       )}
 
       {isCashDepositModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsCashDepositModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Kasaya / Bankaya Para Girişi</h3>
@@ -10194,7 +10208,7 @@ export default function App() {
       )}
 
       {isSingleSalaryPayOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsSingleSalaryPayOpen(false))}>
           <form onSubmit={handleExecuteSingleSalaryPay} className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm">
             <div className="flex justify-between items-center pb-2 border-b border-slate-100">
               <h3 className="font-bold text-slate-900">Maaş / prim öde</h3>
@@ -10227,7 +10241,7 @@ export default function App() {
       )}
 
       {isBulkSalaryModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsBulkSalaryModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Toplu Personel Maaş Ödemesi</h3>
@@ -10276,7 +10290,7 @@ export default function App() {
       )}
 
       {isVehicleModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsVehicleModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-lg">{editingVehicleId ? 'Araç ve Poliçe Bilgilerini Düzenle' : 'Filoya Yeni Araç Ekle'}</h3>
@@ -10393,7 +10407,7 @@ export default function App() {
       )}
 
       {isCreditCardModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => { setIsCreditCardModalOpen(false); setEditingCreditCardId(null); })}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
             <h3 className="font-bold text-slate-900 text-base">
@@ -10497,7 +10511,7 @@ export default function App() {
       )}
 
       {isEditSubModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsEditSubModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Hakediş faturası düzenle</h3>
@@ -10655,7 +10669,7 @@ export default function App() {
     </div>
  )}
 
-        {activeTab === 'rental_settlements' && (() => {
+        {activeTab === 'rental_settlements' && canViewMod('rental_settlements') && (() => {
           const meta = rentalGroupMeta(rentalWorkGroup);
           const approved = rentalEditRow?.status === 'approved';
           const adminGrace = isAdmin && rentalAdminCanEditMonth(rentalEditRow?.year_month || rentalSettlementMonth);
@@ -11084,7 +11098,7 @@ export default function App() {
         )}
 
         {isRentalTariffModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsRentalTariffModalOpen(false))}>
             <form onSubmit={handleSaveRentalTariff} className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm">
               <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                 <h3 className="font-bold text-slate-900">İl ve araç tipi tarife</h3>
@@ -11107,7 +11121,7 @@ export default function App() {
         )}
 
         {isRentalSettlementModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsRentalSettlementModalOpen(false))}>
             <form
               onSubmit={rentalFleetMode === 'identity' ? handleSaveRentalIdentity : handleSaveRentalSettlement}
               className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm"
@@ -11155,7 +11169,7 @@ export default function App() {
           const t = r.totals || rentalSettlementTotals(r);
           const money = (n: number) => `${n.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`;
           return (
-            <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setRentalReportRow(null))}>
               <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 space-y-4">
                 <div className="relative pb-3 border-b-2 border-[#009fe3]">
                   <button type="button" onClick={() => setRentalReportRow(null)} className="absolute -top-1 -right-1 text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
@@ -11212,7 +11226,7 @@ export default function App() {
         })()}
 
         {isPlateRentalModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsPlateRentalModalOpen(false))}>
             <form onSubmit={handleSavePlateRental} className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 space-y-3 text-sm">
               <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                 <h3 className="font-bold text-slate-900">{editingPlateRentalId ? 'Plaka kaydını düzenle' : 'Yeni plaka'}</h3>
@@ -11295,7 +11309,7 @@ export default function App() {
 
 {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
   {selectedSubcontractorForDetail && (
-    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setSelectedSubcontractorForDetail(null))}>
       <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-xl border border-slate-100 max-h-[90vh] flex flex-col">
         <div className="flex justify-between items-center pb-4 border-b border-slate-100">
           <div>
