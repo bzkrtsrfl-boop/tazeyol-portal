@@ -46,7 +46,7 @@ import {
   Tag
 } from 'lucide-react';
 import { supabase } from './supabase';
-import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, type AccessLevel } from './auth';
+import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, roleCanView, needsFinanceData, type AccessLevel } from './auth';
 import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, extractSalesInvoiceKeys, type Customer } from './db';
 import {
   normalizeContractorKey,
@@ -68,6 +68,20 @@ import { jsPDF } from 'jspdf';
 import JSZip from 'jszip';
 import html2canvas from 'html2canvas';
 import { COMPANY_IDENTITY } from './companyIdentity';
+import {
+  RENTAL_WORK_GROUPS,
+  rentalAdminGraceUntilMonth,
+  rentalAdminCanEditMonth,
+  rentalRowLockedForUser,
+  rentalListeFromWorkbook,
+  rentalGroupMeta,
+  inferRentalWorkGroup,
+  rentalRowGroup,
+  rentalMonthlyRent,
+  rentalSettlementTotals,
+  rentalFisFileName
+} from './rentalMath';
+import FleetPage from './FleetPage';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
@@ -161,27 +175,6 @@ function yearMonthTrLabel(ym: string) {
   return `${TR_MONTH_NAMES[m - 1]} ${y}`;
 }
 
-/** Mutabakat ayı + sonraki takvim ayı (Ekim → Kasım sonu). */
-function rentalAdminGraceUntilMonth(yearMonth: string) {
-  return addYearMonth(String(yearMonth || '').slice(0, 7), 1);
-}
-
-function rentalAdminCanEditMonth(yearMonth: string, now = new Date()) {
-  const ym = String(yearMonth || '').slice(0, 7);
-  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
-  const current = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
-  return current <= rentalAdminGraceUntilMonth(ym);
-}
-
-function rentalRowLockedForUser(row: any, role: string | null) {
-  if (role === 'admin') {
-    if ((row?.status || 'draft') !== 'approved') return false;
-    return !rentalAdminCanEditMonth(row.year_month);
-  }
-  if (role === 'saha') return (row?.status || 'draft') === 'approved';
-  return true;
-}
-
 const PLATE_VEHICLE_TYPES = ['Çekici', 'Dorse', 'Kamyon', 'Kamyonet'] as const;
 
 function normalizePlateVehicleType(raw: any) {
@@ -243,48 +236,6 @@ function excelColFuzzy(row: any, needles: string[]) {
   return '';
 }
 
-function rentalListeFromWorkbook(workbook: XLSX.WorkBook) {
-  const names = workbook.SheetNames || [];
-  const preferred = names.find(n => foldHeader(n).includes('liste')) || names[0];
-  const sheet = workbook.Sheets[preferred];
-  const matrix: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
-  let headerIdx = 0;
-  for (let i = 0; i < Math.min(matrix.length, 20); i++) {
-    const cells = (matrix[i] || []).map(c => foldHeader(c));
-    const hasPlate = cells.some(c => c.includes('plak'));
-    const hasContractor = cells.some(c => c.includes('yuklen') || c.includes('kesen') || c.includes('sofor') || c.includes('unvan'));
-    if (hasPlate && hasContractor) {
-      headerIdx = i;
-      break;
-    }
-    if (hasPlate) headerIdx = i;
-  }
-  const headers = (matrix[headerIdx] || []).map((h, i) => String(h || '').replace(/\s+/g, ' ').trim() || `COL${i}`);
-  const rows: any[] = [];
-  for (let r = headerIdx + 1; r < matrix.length; r++) {
-    const line = matrix[r] || [];
-    if (line.every(c => String(c ?? '').trim() === '')) continue;
-    const obj: any = {};
-    headers.forEach((h, i) => { obj[h] = line[i]; });
-    rows.push(obj);
-  }
-  return { sheetName: preferred, headers, rows };
-}
-
-function rentalFuelIncome(km: any, rate: any, unit: any) {
-  return (Number(km) || 0) / 100 * (Number(rate) || 0) * (Number(unit) || 0);
-}
-
-const RENTAL_WORK_GROUPS = [
-  { id: 'magazalar', label: 'Mağazalar', rentMode: 'monthly' as const, visitUnit: 35, hasHgs: false, hasWorkDays: false, stopLabel: 'Nokta sayısı' },
-  { id: 'bati_marmara_yemek', label: 'Batı Marmara Yemek', rentMode: 'daily' as const, visitUnit: 355, hasHgs: true, hasWorkDays: true, stopLabel: 'Uğrama gün' },
-  { id: 'dogu_marmara_yemek', label: 'Doğu Marmara Yemek', rentMode: 'daily' as const, visitUnit: 205, hasHgs: true, hasWorkDays: true, stopLabel: 'Uğrama gün' }
-] as const;
-
-function rentalGroupMeta(id: string | undefined | null) {
-  return RENTAL_WORK_GROUPS.find(g => g.id === id) || RENTAL_WORK_GROUPS[0];
-}
-
 function parseLocaleNumber(val: any): number {
   if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
@@ -315,65 +266,6 @@ function excelColExact(row: any, names: string[]) {
     if (hit !== undefined && row[hit] !== undefined && String(row[hit]).trim() !== '') return row[hit];
   }
   return '';
-}
-
-function inferRentalWorkGroup(text: string) {
-  const n = foldHeader(text);
-  if (n.includes('magaza')) return 'magazalar';
-  if (n.includes('dogu') && n.includes('marmara')) return 'dogu_marmara_yemek';
-  if (n.includes('bati') && n.includes('marmara')) return 'bati_marmara_yemek';
-  if (n.includes('dogu marmara')) return 'dogu_marmara_yemek';
-  if (n.includes('bati marmara')) return 'bati_marmara_yemek';
-  return '';
-}
-
-function rentalRowGroup(row: any) {
-  return row?.work_group
-    || inferRentalWorkGroup(`${row?.notes || ''} ${row?.region || ''} ${row?.province || ''}`);
-}
-
-function rentalMonthlyRent(row: any) {
-  const meta = rentalGroupMeta(rentalRowGroup(row));
-  const rent = Number(row?.rent_amount) || 0;
-  const days = Number(row?.work_days) || 0;
-  if (meta.rentMode === 'daily') return rent > 15000 ? rent : rent * days;
-  return rent;
-}
-
-function rentalVisitMoney(row: any) {
-  const stored = Number(row?.visit_prime) || 0;
-  if (stored > 0) return stored;
-  const meta = rentalGroupMeta(rentalRowGroup(row));
-  return (Number(row?.stop_count) || 0) * (meta.visitUnit || 0);
-}
-
-function rentalSettlementTotals(row: any) {
-  const fuelIncome = rentalFuelIncome(row?.total_km, row?.fuel_rate, row?.fuel_unit_price);
-  const brut = rentalMonthlyRent(row)
-    + rentalVisitMoney(row)
-    + (Number(row?.extra_work) || 0)
-    + (Number(row?.hgs) || 0)
-    + fuelIncome
-    - (Number(row?.fuel_charge) || 0);
-  const kdv = brut * 0.2;
-  const stoppage = kdv * 0.2;
-  const payable = brut + kdv - stoppage;
-  return {
-    fuelIncome,
-    brut,
-    kdv,
-    stoppage,
-    payable,
-    term1: payable / 2,
-    term2: payable / 2
-  };
-}
-
-function rentalFisFileName(row: any) {
-  const plate = String(row?.plate || 'plaka').replace(/\s+/g, '').replace(/[\\/:*?"<>|]/g, '-');
-  const name = String(row?.contractor_name || 'unvan').trim().replace(/\s+/g, '_').replace(/[\\/:*?"<>|]/g, '-');
-  const ym = String(row?.year_month || '').slice(0, 7) || 'ay';
-  return `${plate}_${name}_${ym}.pdf`;
 }
 
 function escHtml(s: any) {
@@ -1613,6 +1505,10 @@ export default function App() {
           return [];
         }
       };
+      const want = (mod: string) => roleCanView(currentUserRole, portalAccess, mod);
+      const finance = needsFinanceData(currentUserRole, portalAccess);
+      const loadIf = (ok: boolean, table: string, order?: { column: string; ascending: boolean }) =>
+        ok ? load(table, order) : Promise.resolve([]);
 
       const [
         batchData,
@@ -1632,22 +1528,22 @@ export default function App() {
         rentalSettlementData,
         rentalTariffData
       ] = await Promise.all([
-        load('payment_batches'),
-        load('advance_installments'),
-        load('vehicles', { column: 'id', ascending: true }),
-        load('invoices', { column: 'created_at', ascending: false }),
-        load('employees', { column: 'id', ascending: true }),
-        load('advance_payments', { column: 'created_at', ascending: false }),
-        load('credit_cards', { column: 'due_date', ascending: true }),
-        load('subcontractors', { column: 'name', ascending: true }),
-        load('subcontractor_ledger'),
-        load('employee_transactions', { column: 'created_at', ascending: false }),
-        load('customers', { column: 'name', ascending: true }),
-        load('app_settings'),
-        load('vehicle_monthly_inputs'),
-        load('plate_rentals', { column: 'renewal_date', ascending: true }),
-        load('rental_settlements', { column: 'year_month', ascending: false }),
-        load('rental_settlement_tariffs', { column: 'province', ascending: true })
+        loadIf(want('payments'), 'payment_batches'),
+        loadIf(want('payments') || want('subcontractors'), 'advance_installments'),
+        loadIf(want('fleet') || want('profitability') || want('plate_rentals'), 'vehicles', { column: 'id', ascending: true }),
+        loadIf(finance, 'invoices', { column: 'created_at', ascending: false }),
+        loadIf(want('employees') || want('profitability'), 'employees', { column: 'id', ascending: true }),
+        loadIf(want('subcontractors') || want('sub_accounts') || want('payments') || want('employees'), 'advance_payments', { column: 'created_at', ascending: false }),
+        loadIf(want('credit_cards'), 'credit_cards', { column: 'due_date', ascending: true }),
+        loadIf(want('subcontractors') || want('sub_accounts') || want('sub_ibans') || want('payments'), 'subcontractors', { column: 'name', ascending: true }),
+        loadIf(want('sub_accounts'), 'subcontractor_ledger'),
+        loadIf(want('employees'), 'employee_transactions', { column: 'created_at', ascending: false }),
+        loadIf(want('customers') || want('sales_customers') || want('collections'), 'customers', { column: 'name', ascending: true }),
+        loadIf(isAdmin || isReporter, 'app_settings'),
+        loadIf(want('profitability'), 'vehicle_monthly_inputs'),
+        loadIf(want('plate_rentals'), 'plate_rentals', { column: 'renewal_date', ascending: true }),
+        loadIf(want('rental_settlements'), 'rental_settlements', { column: 'year_month', ascending: false }),
+        loadIf(want('rental_settlements'), 'rental_settlement_tariffs', { column: 'province', ascending: true })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -1666,7 +1562,7 @@ export default function App() {
       setDbRentalSettlements(rentalSettlementData);
       setDbRentalTariffs(rentalTariffData);
 
-      const crcCard = findCrcCustomer(customerData as Customer[]);
+      const crcCard = isAdmin ? findCrcCustomer(customerData as Customer[]) : null;
       if (crcCard) {
         const moved = [];
         for (const inv of invData || []) {
@@ -1682,7 +1578,7 @@ export default function App() {
         if (moved.length) setDbInvoices([...invData]);
       }
 
-      const migrosCard = findMigrosCustomer(customerData as Customer[]);
+      const migrosCard = isAdmin ? findMigrosCustomer(customerData as Customer[]) : null;
       if (migrosCard) {
         const movedMigros = [];
         for (const inv of invData || []) {
@@ -1715,11 +1611,13 @@ export default function App() {
       } else {
         setCashOpening(CASH_BOOK_OPENING);
         setCashOpeningAsOf(CASH_BOOK_START);
-        try {
-          await saveAppSetting('cash_opening', String(CASH_BOOK_OPENING));
-          await saveAppSetting('cash_opening_as_of', CASH_BOOK_START);
-        } catch {
-          /* ayar tablosu yoksa ekranda yine 7 Ekim açılışı durur */
+        if (isAdmin) {
+          try {
+            await saveAppSetting('cash_opening', String(CASH_BOOK_OPENING));
+            await saveAppSetting('cash_opening_as_of', CASH_BOOK_START);
+          } catch {
+            /* ayar tablosu yoksa ekranda yine 7 Ekim açılışı durur */
+          }
         }
       }
       if (Object.prototype.hasOwnProperty.call(settings, 'sgk_driver_amount')) {
@@ -8301,194 +8199,41 @@ export default function App() {
 
         {/* 8. ARAÇ FİLOSU */}
         {activeTab === 'fleet' && (
-         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-         <div className="flex justify-between items-center pb-5 border-b border-slate-100">
-         <div>
-                <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({dbVehicles.length} Araç)</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Sürücü, muayene, sigorta, kasko ve otomatik MTV bildirimleri.</p>
-              </div>
-              {canEditMod('fleet') && (
-                <button 
-                  onClick={() => {
-                    setEditingVehicleId(null);
-                    setVehicleFormData({
-                      plateNumber: '',
-                      driverName: '',
-                      brandModel: '',
-                      documentIncluded: 'VAR',
-                      trackingSystem: 'Var',
-                      fuelSystem: 'UTTS',
-                      hgsSystem: 'SHELL',
-                      vehicleType: 'Kamyon',
-                      ownershipType: 'Öz Mal',
-                      isActive: true,
-                      nextInspectionDate: '',
-                      inspectionCost: '',
-                      insuranceCompany: '',
-                      insuranceCost: '',
-                      insuranceStartDate: '',
-                      kaskoCompany: '',
-                      kaskoCost: '',
-                      kaskoStartDate: '',
-                      lastMtvCost: ''
-                    });
-                    setIsVehicleModalOpen(true);
-                  }}
-                  className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition">
-                  <Plus className="w-4 h-4" /> Yeni Araç Ekle
-                </button>
-              )}
-            </div>
-
-{/* 4 ÖZET KART (TÜM FİLO SABİT & DİĞER GİDERLER) */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
-                <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam Sigorta (Yıllık)</span>
-                <span className="text-base font-bold text-slate-800 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insurance_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-                <span className="text-[10px] text-slate-400">{dbVehicles.length} Öz Mal Araç</span>
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
-                <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam Kasko (Yıllık)</span>
-                <span className="text-base font-bold text-slate-800 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.kasko_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-                <span className="text-[10px] text-slate-400">Poliçe Toplamı</span>
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm">
-                <span className="text-[11px] font-medium text-slate-500 uppercase block">Toplam MTV & Muayene</span>
-                <span className="text-base font-bold text-slate-800 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.last_mtv_cost || 0) + cleanNumber(v.inspection_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-                <span className="text-[10px] text-slate-400">Yıllık Yasal Yük</span>
-              </div>
-
-              <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3.5 shadow-sm">
-                <span className="text-[11px] font-semibold text-blue-700 uppercase block">FİLO SABİT GİDER TOPLAMI</span>
-                <span className="text-base font-black text-blue-900 block mt-1">
-                  {dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insurance_cost || 0) + cleanNumber(v.kasko_cost || 0) + cleanNumber(v.last_mtv_cost || 0) + cleanNumber(v.inspection_cost || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </span>
-                <span className="text-[10px] font-medium text-blue-600">
-                  Aylık: {(dbVehicles.reduce((sum, v) => sum + cleanNumber(v.insurance_cost || 0) + cleanNumber(v.kasko_cost || 0) + cleanNumber(v.last_mtv_cost || 0) + cleanNumber(v.inspection_cost || 0), 0) / 12).toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ / ay
-                </span>
-              </div>
-            </div>
-
-            {/* DİNAMİK MALİYET TABLOSU */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-3">PLAKA</th>
-                    <th className="py-3 px-3">TİP</th>
-                    <th className="py-3 px-3">DURUM</th>
-                    <th className="py-3 px-3">SÜRÜCÜ</th>
-                    <th className="py-3 px-3">SİGORTA (TUTAR / BİTİŞ)</th>
-                    <th className="py-3 px-3">KASKO (TUTAR / BİTİŞ)</th>
-                    <th className="py-3 px-3">YILLIK MTV</th>
-                    <th className="py-3 px-3">MUAYENE</th>
-                    <th className="py-3 px-3 text-right">DİĞER GİDERLER</th>
-                    <th className="py-3 px-3 text-right">TOPLAM MALİYET</th>
-                    {canEditMod('fleet') && <th className="py-3 px-3 text-center">İŞLEM</th>}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dbVehicles.map((v, idx) => {
-                    const plate = (v.plate_number || '').trim();
-                    const cleanPlate = plate.replace(/\s+/g, '').toUpperCase();
-
-                    // Plakaya ait genel giderleri eşleştir
-                    const plateExpenses = cleanPlate.length >= 5 ? dbInvoices.filter(inv => {
-                      const desc = (inv.description || '').replace(/\s+/g, '').toUpperCase();
-                      const invNo = (inv.invoice_no || '').replace(/\s+/g, '').toUpperCase();
-                      return (
-                        inv.category !== 'freight_sales' &&
-                        inv.category !== 'customer_collection' &&
-                        (desc.includes(cleanPlate) || invNo.includes(cleanPlate))
-                      );
-                    }) : [];
-
-                    const otherCost = plateExpenses.reduce((sum, e) => sum + cleanNumber(e.total_amount), 0);
-                    const sigortaAmt = cleanNumber(v.insurance_cost || 0);
-                    const kaskoAmt = cleanNumber(v.kasko_cost || 0);
-                    const mtvAmt = cleanNumber(v.last_mtv_cost || 0);
-                    const muayeneAmt = cleanNumber(v.inspection_cost || 0);
-
-                    const fixedCost = sigortaAmt + kaskoAmt + mtvAmt + muayeneAmt;
-                    const totalCost = fixedCost + otherCost;
-
-                    const vehType = normalizeVehicleType(v.vehicle_type);
-                    const active = isActiveVehicle(v);
-                    return (
-                      <tr key={v.id || idx} className={`hover:bg-slate-50 transition ${active ? '' : 'opacity-45'}`}>
-                        <td className="py-3 px-3 font-mono font-bold text-blue-700">{plate || '-'}</td>
-                        <td className="py-3 px-3 text-slate-600">{vehType}</td>
-                        <td className="py-3 px-3">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                            {active ? 'Aktif' : 'Pasif'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-slate-700 font-medium">{v.driver_name || '-'}</td>
-                        <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800">
-                            {sigortaAmt > 0 ? `${sigortaAmt.toLocaleString('tr-TR')} ₺` : '-'}
-                          </span>
-                          {(v.insurance_expiry_date || v.insurance_start_date) && (
-                            <span className="block text-[10px] text-slate-400">
-                              Bitiş: {formatDateTR(v.insurance_expiry_date || v.insurance_start_date)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800">
-                            {kaskoAmt > 0 ? `${kaskoAmt.toLocaleString('tr-TR')} ₺` : '-'}
-                          </span>
-                          {(v.kasko_expiry_date || v.kasko_start_date) && (
-                            <span className="block text-[10px] text-slate-400">
-                              Bitiş: {formatDateTR(v.kasko_expiry_date || v.kasko_start_date)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 font-semibold text-slate-800">
-                          {mtvAmt > 0 ? `${mtvAmt.toLocaleString('tr-TR')} ₺` : '-'}
-                        </td>
-                        <td className="py-3 px-3">
-                          <span className="font-semibold text-slate-800">
-                            {muayeneAmt > 0 ? `${muayeneAmt.toLocaleString('tr-TR')} ₺` : '-'}
-                          </span>
-                          {v.next_inspection_date && (
-                            <span className="block text-[10px] text-slate-400">
-                              Tarih: {formatDateTR(v.next_inspection_date)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <span className={`font-bold ${otherCost > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
-                            {otherCost > 0 ? `${otherCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '-'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-right font-black text-slate-900 text-sm">
-                          {totalCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                        </td>
-                        {canEditMod('fleet') && (
-                          <td className="py-3 px-3 text-center">
-                            <button
-                              onClick={() => openEditVehicleModal(v)}
-                              className="text-blue-600 hover:text-blue-800 font-medium text-xs">
-                              Düzenle
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <FleetPage
+            vehicles={dbVehicles}
+            invoices={dbInvoices}
+            canEdit={canEditMod('fleet')}
+            onAdd={() => {
+              setEditingVehicleId(null);
+              setVehicleFormData({
+                plateNumber: '',
+                driverName: '',
+                brandModel: '',
+                documentIncluded: 'VAR',
+                trackingSystem: 'Var',
+                fuelSystem: 'UTTS',
+                hgsSystem: 'SHELL',
+                vehicleType: 'Kamyon',
+                ownershipType: 'Öz Mal',
+                isActive: true,
+                nextInspectionDate: '',
+                inspectionCost: '',
+                insuranceCompany: '',
+                insuranceCost: '',
+                insuranceStartDate: '',
+                kaskoCompany: '',
+                kaskoCost: '',
+                kaskoStartDate: '',
+                lastMtvCost: ''
+              });
+              setIsVehicleModalOpen(true);
+            }}
+            onEdit={openEditVehicleModal}
+            cleanNumber={cleanNumber}
+            formatDateTR={formatDateTR}
+            normalizeVehicleType={normalizeVehicleType}
+            isActiveVehicle={isActiveVehicle}
+          />
         )}
 
 {/* 9. ÖZ MAL KARLILIK & MALİYET */}

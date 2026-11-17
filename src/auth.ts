@@ -23,6 +23,27 @@ export const PORTAL_MODULES = [
 
 export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];
 
+export const FINANCE_DATA_MODULES: PortalModuleId[] = [
+  'sales_customers', 'collections', 'customers', 'general_expenses',
+  'employees', 'payments', 'credit_cards', 'subcontractors', 'sub_accounts',
+  'income_report', 'profitability'
+];
+
+export function roleCanView(
+  role: UserRole | null,
+  access: Record<string, AccessLevel>,
+  mod: string
+) {
+  if (role === 'admin' || role === 'reporter') return true;
+  if (role !== 'saha') return false;
+  const a = access[mod];
+  return a === 'view' || a === 'edit';
+}
+
+export function needsFinanceData(role: UserRole | null, access: Record<string, AccessLevel>) {
+  return FINANCE_DATA_MODULES.some(m => roleCanView(role, access, m));
+}
+
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
   { id: 'filo_sadece', label: 'Sadece araç filosu', access: { fleet: 'edit' } },
