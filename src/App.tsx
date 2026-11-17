@@ -5932,7 +5932,7 @@ export default function App() {
   };
 
   const handleDownloadAllRentalFis = async () => {
-    if (!isAdmin) return;
+    if (!isAdmin && !isReporter) return;
     const rows = rentalGroupMonthRows || [];
     if (!rows.length) {
       alert('Bu grup ve ayda fiş indirilecek araç yok.');
@@ -7529,17 +7529,21 @@ export default function App() {
                   <Download className="w-4 h-4" /> Seçilenleri Banka Exceli Olarak İndir
                 </button>
                 </div>
+              ) : isReporter ? (
+                <span className="text-xs text-slate-500 font-semibold">Liste açık. Banka talimat Excel’i ve ödendi işlemi yalnızca yöneticide.</span>
               ) : (
-                <span className="text-xs text-rose-600 font-bold">Raporör rolünde Excel indirme yetkisi kapalıdır.</span>
+                <span className="text-xs text-rose-600 font-bold">Bu menüde işlem yetkisi yok.</span>
               )}
             </div>
 
+            {isAdmin && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[11px] text-slate-500 font-semibold">Toplu uygula:</span>
               <button type="button" onClick={() => handleBulkBankPayMode('term1')} className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-white text-slate-600 border-slate-200 hover:border-blue-300">Tümüne 1 nci</button>
               <button type="button" onClick={() => handleBulkBankPayMode('term2')} className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-white text-slate-600 border-slate-200 hover:border-blue-300">Tümüne 2 nci</button>
               <button type="button" onClick={() => handleBulkBankPayMode('both')} className="text-xs font-bold px-3 py-1.5 rounded-lg border bg-white text-slate-600 border-slate-200 hover:border-blue-300">Tümüne Tamamı</button>
             </div>
+            )}
 
             {(dbPaymentBatches || []).filter((b: any) => String(b.status) === 'sent').length > 0 && (
               <div className="border border-amber-200 bg-amber-50 rounded-xl p-4 space-y-2">
@@ -10507,16 +10511,24 @@ export default function App() {
                 <div className="text-[10px] text-slate-400">Müşteri mutabakatı ile burayı kıyaslayın</div>
               </div>
             </div>
-            {isAdmin && (
+            {(isAdmin || isReporter) && (
               <div className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-xl border border-slate-200 px-4 py-2.5">
-                <p className="text-[11px] text-slate-500">Tablodaki tutarlar bu grubun açık ayıdır. Kaydet: onaya alır. Onayla: kilitler. Yönetici, kilitli olsa da mutabakat ayının sonraki takvim ayı boyunca (Ekim → Kasım sonu) düzeltme yapabilir. Saha kilitli kalır.</p>
+                <p className="text-[11px] text-slate-500">
+                  {isAdmin
+                    ? 'Tablodaki tutarlar bu grubun açık ayıdır. Kaydet: onaya alır. Onayla: kilitler. Yönetici, kilitli olsa da mutabakat ayının sonraki takvim ayı boyunca (Ekim → Kasım sonu) düzeltme yapabilir. Saha kilitli kalır.'
+                    : 'Salt okuma: kaydet / onay yok. Fiş PDF’lerini indirebilirsiniz.'}
+                </p>
                 <div className="flex flex-wrap gap-2">
+                  {isAdmin && (
+                    <>
                   <button type="button" onClick={handleAdminSaveAllRental} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold whitespace-nowrap">
                     Tümünü kaydet
                   </button>
                   <button type="button" onClick={handleAdminApproveAllRental} className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold whitespace-nowrap">
                     Tümünü onayla
                   </button>
+                    </>
+                  )}
                   <button type="button" onClick={handleDownloadAllRentalFis} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-800 text-xs font-bold whitespace-nowrap">
                     Tüm fişler (PDF)
                   </button>
@@ -10541,7 +10553,7 @@ export default function App() {
                     <option value="submitted">Onay bekler</option>
                     <option value="approved">Kilitli</option>
                   </select>
-                  {isAdmin && (
+                  {(isAdmin || isReporter) && (
                     <>
                       <select value={rentalDownloadContractor} onChange={e => setRentalDownloadContractor(e.target.value)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white max-w-[160px]">
                         <option value="">İndirilecek unvan</option>
