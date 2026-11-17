@@ -731,6 +731,8 @@ export default function App() {
     setRentalAssignedGroup(null);
     setRentalAssignedGroups([]);
     setPortalAccess({});
+    setPortalDataReady(false);
+    setLoading(true);
   };
 
   const loadPortalUsers = async () => {
@@ -1395,6 +1397,7 @@ export default function App() {
   const [dbPaymentBatches, setDbPaymentBatches] = useState<any[]>([]);
   const [dbAdvanceInstallments, setDbAdvanceInstallments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [portalDataReady, setPortalDataReady] = useState(false);
   const [isExcelUploading, setIsExcelUploading] = useState(false);
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
   const [dbCustomers, setDbCustomers] = useState<Customer[]>([]);
@@ -1623,6 +1626,7 @@ export default function App() {
       if (Object.prototype.hasOwnProperty.call(settings, 'sgk_driver_amount')) {
         setSgkDriverAmount(cleanNumber(settings.sgk_driver_amount));
       }
+      setPortalDataReady(true);
     } catch (err) {
       console.error('Yükleme hatası:', err);
       alert('Veriler yüklenirken hata oluştu. Sayfayı yenileyin veya bağlantıyı kontrol edin.');
@@ -2844,17 +2848,19 @@ export default function App() {
       seen.add(key);
       rows.push(inv);
     };
-    MIGROS_BANK_TRANSFERS.forEach(t => {
-      push({
-        id: 'migros_bank_' + t.date,
-        invoice_no: `BANKA - ${t.label}`,
-        category: 'customer_advance',
-        issue_date: t.date,
-        total_amount: t.amount,
-        status: 'paid'
+    if (portalDataReady) {
+      MIGROS_BANK_TRANSFERS.forEach(t => {
+        push({
+          id: 'migros_bank_' + t.date,
+          invoice_no: `BANKA - ${t.label}`,
+          category: 'customer_advance',
+          issue_date: t.date,
+          total_amount: t.amount,
+          status: 'paid'
+        });
       });
-    });
-    (dbInvoices || []).forEach(push);
+      (dbInvoices || []).forEach(push);
+    }
     return rows;
   })();
   const totalCollectedCash = cashInRows
@@ -6106,6 +6112,17 @@ export default function App() {
               {loginBusy ? 'Giriş yapılıyor…' : 'Giriş Yap'}
             </button>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (!portalDataReady) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <div className="text-center space-y-2">
+          <p className="text-white text-sm font-medium">Kayıtlar yükleniyor…</p>
+          <p className="text-slate-400 text-xs">Kasa ve hatırlatmalar faturalar gelmeden gösterilmez.</p>
         </div>
       </div>
     );
