@@ -602,6 +602,22 @@ function salaryPayrollMatchesEmployee(inv: any, emp: any) {
   return !!empNorm && empNorm.length >= 3 && hay.includes(empNorm);
 }
 
+async function readPortalUserFnError(error: any, data: any, fallback: string) {
+  let msg = data?.error || error?.message || fallback;
+  try {
+    const ctx = error?.context;
+    if (ctx && typeof ctx.json === 'function') {
+      const j = await ctx.json();
+      if (j?.error) msg = j.error;
+    }
+  } catch { /* ignore */ }
+  return String(msg);
+}
+
+function isPortalUserFnMissing(msg: string) {
+  return /not found|404|Failed to send|FunctionsRelayError|function/i.test(msg);
+}
+
 export default function App() {
   // 1. KULLANICI GİRİŞ & YETKİLENDİRME (RBAC)
   const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reporter' | 'saha' | null>(null);
@@ -627,6 +643,9 @@ export default function App() {
   }>>({});
   const [userSaveBusyId, setUserSaveBusyId] = useState<string | null>(null);
   const [userSaveOkId, setUserSaveOkId] = useState<string | null>(null);
+  const [resetPwById, setResetPwById] = useState<Record<string, string>>({});
+  const [resetPwBusyId, setResetPwBusyId] = useState<string | null>(null);
+  const [resetPwOkId, setResetPwOkId] = useState<string | null>(null);
   const [rentalAssignedGroup, setRentalAssignedGroup] = useState<string | null>(null);
   const [rentalAssignedGroups, setRentalAssignedGroups] = useState<string[]>([]);
   const [portalAccess, setPortalAccess] = useState<Record<string, AccessLevel>>({});
@@ -820,6 +839,7 @@ export default function App() {
     setNewPortalUserBusy(true);
     const { data, error } = await supabase.functions.invoke('create-portal-user', {
       body: {
+        action: 'create',
         email,
         password: newPortalUser.password,
         full_name: newPortalUser.full_name.trim(),
@@ -829,15 +849,8 @@ export default function App() {
     });
     setNewPortalUserBusy(false);
     if (error || data?.error) {
-      let msg = data?.error || error?.message || 'Kullanıcı açılamadı.';
-      try {
-        const ctx = (error as any)?.context;
-        if (ctx && typeof ctx.json === 'function') {
-          const j = await ctx.json();
-          if (j?.error) msg = j.error;
-        }
-      } catch { /* ignore */ }
-      if (/not found|404|Failed to send|FunctionsRelayError|function/i.test(String(msg))) {
+      const msg = await readPortalUserFnError(error, data, 'Kullanıcı açılamadı.');
+      if (isPortalUserFnMissing(msg)) {
         setNewPortalUserHint(
           `Portaldan otomatik açma henüz kapalı. Aynı bilgileri Supabase’de yazın:\n1) Authentication → Users → Add user / Create new user\n2) E-posta: ${email}\n3) Şifre: formdaki şifre (kopyalayın)\n4) Auto Confirm User işaretli → Create user\n5) Bu sayfada Listeyi yenile, sonra grup ve menü işaretleyin.`
         );
@@ -852,6 +865,33 @@ export default function App() {
     setNewPortalUser({ email: '', password: '', full_name: '', role: 'saha', rental_work_group: 'magazalar' });
     await loadPortalUsers();
     alert(`${email} açıldı. Bu e-posta ve şifre ile giriş yapabilir.`);
+  };
+
+  const handleResetPortalPassword = async (user: any) => {
+    if (currentUserRole !== 'admin') return;
+    const password = (resetPwById[user.id] || '').trim();
+    if (password.length < 8) {
+      alert('Yeni şifre en az 8 karakter olsun.');
+      return;
+    }
+    if (!window.confirm(`${user.email} için şifre değişecek. Bu kişi yeni şifreyle girer. Devam?`)) return;
+    setResetPwBusyId(user.id);
+    setResetPwOkId(null);
+    const { data, error } = await supabase.functions.invoke('create-portal-user', {
+      body: { action: 'reset', user_id: user.id, password }
+    });
+    setResetPwBusyId(null);
+    if (error || data?.error) {
+      const msg = await readPortalUserFnError(error, data, 'Şifre yazılamadı.');
+      if (isPortalUserFnMissing(msg)) {
+        alert('Şifre sıfırlama portaldan henüz açık değil. Function canlıya alınmalı.');
+        return;
+      }
+      alert(msg);
+      return;
+    }
+    setResetPwById(prev => ({ ...prev, [user.id]: '' }));
+    setResetPwOkId(user.id);
   };
 
   const handleSavePlateRental = async (e: React.FormEvent) => {
@@ -11415,7 +11455,7 @@ export default function App() {
                 <div>
                   <h3 className="font-bold text-slate-900">Kullanıcı yetkileri</h3>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-3xl">
-                    <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın. Otomatik açılmazsa aynı bilgileri Authentication → Users → Add user içine bir kez girersiniz; yetki yine bu listeden verilir.
+                    <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın; hesap burada açılır. Unutan kişi için karttaki <b>yeni şifre</b> kutusuna yazıp sıfırlayın, sonra o kişiye söyleyin.
                     Her satırda menüler <b>Kapalı / Görür / İşler</b> olarak görünür: yönetici tümünde İşler, rapor tümünde Görür (kilitli). Personelde her menü ayrı seçilir. Gece saha için Hal saha = İşler.
                   </p>
                 </div>
@@ -11585,7 +11625,7 @@ export default function App() {
                         })()}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+                    <div className="flex flex-wrap items-end gap-2 pt-1 border-t border-slate-100">
                       <button
                         type="button"
                         disabled={userSaveBusyId === u.id}
@@ -11596,6 +11636,27 @@ export default function App() {
                       </button>
                       {userSaveOkId === u.id && (
                         <span className="text-xs font-bold text-emerald-700">Kaydedildi. Kullanıcı çıkıp tekrar girerse menü güncellenir.</span>
+                      )}
+                      <label className="ml-auto">
+                        <span className="block text-[10px] font-bold text-slate-500">Yeni şifre (min 8)</span>
+                        <input
+                          type="text"
+                          autoComplete="new-password"
+                          value={resetPwById[u.id] || ''}
+                          onChange={e => setResetPwById(prev => ({ ...prev, [u.id]: e.target.value }))}
+                          className="w-40 px-2 py-1.5 border border-slate-200 rounded-lg text-sm"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={resetPwBusyId === u.id}
+                        onClick={() => void handleResetPortalPassword(u)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {resetPwBusyId === u.id ? 'Yazılıyor…' : 'Şifreyi sıfırla'}
+                      </button>
+                      {resetPwOkId === u.id && (
+                        <span className="text-xs font-bold text-emerald-700">Şifre değişti. Kullanıcı yeni şifreyle girer.</span>
                       )}
                     </div>
                   </div>

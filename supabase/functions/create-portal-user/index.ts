@@ -29,13 +29,26 @@ Deno.serve(async (req) => {
   if (userErr || !userData.user) return json(401, { error: 'Oturum yok' });
 
   const { data: profile } = await caller.from('profiles').select('role').eq('id', userData.user.id).maybeSingle();
-  if (profile?.role !== 'admin') return json(403, { error: 'Yalnız yönetici kullanıcı açabilir' });
+  if (profile?.role !== 'admin') return json(403, { error: 'Yalnız yönetici kullanıcı açabilir veya şifre sıfırlayabilir' });
 
   let body: any;
   try {
     body = await req.json();
   } catch {
     return json(400, { error: 'Geçersiz istek' });
+  }
+
+  const action = body.action === 'reset' ? 'reset' : 'create';
+  const admin = createClient(url, service);
+
+  if (action === 'reset') {
+    const user_id = String(body.user_id || '').trim();
+    const password = String(body.password || '');
+    if (!user_id) return json(400, { error: 'Kullanıcı seçin' });
+    if (password.length < 8) return json(400, { error: 'Yeni şifre en az 8 karakter olsun' });
+    const updated = await admin.auth.admin.updateUserById(user_id, { password });
+    if (updated.error) return json(400, { error: updated.error.message || 'Şifre yazılamadı' });
+    return json(200, { ok: true, id: user_id });
   }
 
   const email = String(body.email || '').trim().toLowerCase();
@@ -51,7 +64,6 @@ Deno.serve(async (req) => {
   }
   if (rental_work_group && !GROUPS.has(rental_work_group)) return json(400, { error: 'Geçersiz grup' });
 
-  const admin = createClient(url, service);
   const created = await admin.auth.admin.createUser({
     email,
     password,
