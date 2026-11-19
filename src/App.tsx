@@ -47,7 +47,7 @@ import {
   List
 } from 'lucide-react';
 import { supabase } from './supabase';
-import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, roleCanView, needsFinanceData, displayAccess, type AccessLevel } from './auth';
+import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, roleCanView, needsFinanceData, displayAccess, moduleAccessLevel, type AccessLevel } from './auth';
 import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, extractSalesInvoiceKeys, type Customer } from './db';
 import {
   normalizeContractorKey,
@@ -1375,15 +1375,14 @@ export default function App() {
     if (mod === 'users') return isAdmin;
     if (isAdmin || isReporter) return true;
     if (mod === 'overview') return false;
-    const a = portalAccess[mod] || (mod === 'arac_filosu' ? portalAccess.fleet : undefined);
+    const a = moduleAccessLevel(portalAccess, mod);
     return a === 'view' || a === 'edit';
   };
   const canEditMod = (mod: string) => {
     if (mod === 'users') return isAdmin;
     if (isAdmin) return true;
     if (isReporter) return false;
-    if (mod === 'arac_filosu') return portalAccess.arac_filosu === 'edit' || portalAccess.fleet === 'edit';
-    return portalAccess[mod] === 'edit';
+    return moduleAccessLevel(portalAccess, mod) === 'edit';
   };
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
