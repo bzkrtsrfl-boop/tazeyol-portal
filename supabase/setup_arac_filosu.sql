@@ -223,3 +223,9 @@ create policy trip_fleet_plates_write on public.trip_fleet_plates
   for all to authenticated
   using (public.is_admin() or public.can_edit_module('arac_filosu'))
   with check (public.is_admin() or public.can_edit_module('arac_filosu'));
+
+alter table public.fleet_vehicles add column if not exists brand text;
+alter table public.fleet_vehicles add column if not exists model_name text;
+alter table public.fleet_vehicles add column if not exists model_year integer;
+alter table public.fleet_vehicles add column if not exists wrapping text;
+alter table public.fleet_vehicles add column if not exists wrapping_label text;

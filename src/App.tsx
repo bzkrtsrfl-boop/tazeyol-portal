@@ -4299,7 +4299,7 @@ export default function App() {
     };
     const list = (dbInvoices || [])
       .filter((i: any) => i.category === 'subcontractor_invoice')
-      .filter((inv: any) => isDateInRange(inv.issue_date))
+      .filter((inv: any) => !String(inv.invoice_no || '').toUpperCase().includes('AVANS'))
       .filter((inv: any) => {
         const invTitle = (inv.invoice_no || '').toLocaleLowerCase('tr-TR');
         const matchesSearch = !term || invTitle.includes(term);
@@ -4372,7 +4372,7 @@ export default function App() {
         term2: Math.round(totals.term2 * 100) / 100
       }
     };
-  }, [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder, filterStartDate, filterEndDate]);
+  }, [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder]);
 
   const visibleGeneralExpenses = useMemo(() => {
     const skip = ['subcontractor_invoice', 'customer_collection', 'freight_sales', 'cash_deposit', 'customer_advance', 'credit_card_payment', 'salary_payroll', 'subcontractor_paid_outflow', 'subcontractor_advance_paid'];
@@ -6922,16 +6922,16 @@ export default function App() {
             })()}
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <button type="button" onClick={() => setActiveTab('subcontractors')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
+              <button type="button" onClick={() => { setSubStatusFilter('pending'); setSubSearchTerm(''); setActiveTab('subcontractors'); }} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" /> Ödenecek borç · taşeron
                 </span>
                 <div className="text-xl font-bold text-rose-600 mt-1.5">
                   {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Açık hakediş − avans</span>
+                <span className="text-[11px] text-slate-400 mt-1 block">Açık hakediş − avans · hakediş listesine git</span>
               </button>
-              <button type="button" onClick={() => setActiveTab('employees')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition cursor-pointer">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left">
                 <span className="text-xs font-semibold text-amber-800 tracking-wider uppercase flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" /> Ödenecek borç · diğer
                 </span>
@@ -6939,9 +6939,9 @@ export default function App() {
                   {payableOtherDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Toplam {payableTotalDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ · personel + gider
+                  Devlet + tedarik + personel (sağdaki kutular)
                 </span>
-              </button>
+              </div>
               <button type="button" onClick={() => { setExpenseStatusFilter('unpaid'); setActiveTab('general_expenses'); }} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-xs font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
                   <Building2 className="w-3.5 h-3.5" /> Devlet Ödemeleri
@@ -7409,7 +7409,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Hakediş Faturaları</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Varsayılan: ödenmemiş faturalar. Avans mahsubu yalnız avansın verildiği aydaki faturaya yazılır; sonraki ay faturasına taşınmaz (kalan avans caridedir). Ödeme Banka Talimatı’ndan.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Güncel açık borçlar. Ana ekrandaki ay seçimi bu listeyi daraltmaz. Avans mahsubu verildiği aydaki faturaya yazılır; kalan avans caridedir. Ödeme Banka Talimatı’ndan.</p>
               </div>
               {isAdmin && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -7458,21 +7458,28 @@ export default function App() {
             </select>
           </div>
         </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
+              <div className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Güncel ödenecek</div>
+                <div className="mt-1 text-lg font-black text-rose-800">
+                  {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                </div>
+                <div className="text-[10px] text-rose-600/80 mt-0.5">Açık vade − avans (ana ekranla aynı)</div>
+              </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Hakediş toplamı</div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Listelenen fatura</div>
                 <div className="mt-1 text-lg font-black text-slate-900">
                   {visibleHakedisRows.totals.total.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
               </div>
               <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-                <div className="text-[10px] font-bold uppercase tracking-wide text-blue-700">1 nci ödeme toplamı</div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-blue-700">1 nci ödeme (açık)</div>
                 <div className="mt-1 text-lg font-black text-blue-800">
                   {visibleHakedisRows.totals.term1.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
               </div>
               <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-                <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-700">2 nci ödeme toplamı</div>
+                <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-700">2 nci ödeme (açık)</div>
                 <div className="mt-1 text-lg font-black text-indigo-800">
                   {visibleHakedisRows.totals.term2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
@@ -7527,6 +7534,13 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
+                  {!visibleHakedisRows.rows.length && (
+                    <tr>
+                      <td colSpan={isAdmin ? 6 : 5} className="py-10 text-center text-slate-400">
+                        Bu süzgeçte hakediş faturası yok. Üstten “Tüm Faturalar”ı deneyin.
+                      </td>
+                    </tr>
+                  )}
                   {visibleHakedisRows.rows.map(({ inv, isT1Paid, isT2Paid, dynamicT1, dynamicT2, deductedAdvAmt, deductedAdvForT2 }) => {
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50 transition">

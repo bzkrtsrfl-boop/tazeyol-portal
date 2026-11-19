@@ -44,12 +44,23 @@ const emptyForm = {
   camera_gsm: '',
   vehicle_type: 'OrtaKamyon',
   cooling: 'plus4',
+  brand: '',
+  model_name: '',
+  model_year: '',
+  wrapping: '' as '' | 'yes' | 'no',
+  wrapping_label: '',
   notes: '',
   filoGroups: [] as string[],
   kiralikGroups: [] as string[]
 };
 
-type SortKey = 'code' | 'plate' | 'type' | 'cooling' | 'contractor' | 'driver' | 'groups';
+type SortKey = 'code' | 'plate' | 'type' | 'cooling' | 'brand' | 'wrap' | 'contractor' | 'driver' | 'groups';
+
+function wrapText(v: any) {
+  if (v.wrapping === 'yes') return String(v.wrapping_label || '').trim() || 'Var';
+  if (v.wrapping === 'no') return 'Yok';
+  return '—';
+}
 
 function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -85,6 +96,9 @@ export default function AracFilosuPage({
   const [filterCool, setFilterCool] = useState('');
   const [newJob, setNewJob] = useState({ code: '', label: '' });
   const [newPlace, setNewPlace] = useState({ code: '', label: '' });
+  const [renameKind, setRenameKind] = useState<'job' | 'place'>('place');
+  const [renamePick, setRenamePick] = useState('');
+  const [renameLabel, setRenameLabel] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('plate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [col, setCol] = useState({
@@ -92,6 +106,8 @@ export default function AracFilosuPage({
     plate: '',
     type: '',
     cooling: '',
+    brand: '',
+    wrap: '',
     contractor: '',
     driver: '',
     groups: ''
@@ -129,6 +145,8 @@ export default function AracFilosuPage({
     plate: v.plate || '',
     type: v.vehicle_type || '',
     cooling: coolingLabel(v.cooling),
+    brand: [v.brand, v.model_name, v.model_year].filter(Boolean).join(' '),
+    wrap: wrapText(v),
     contractor: v.contractor_name || '',
     driver: v.driver_name || '',
     groups: groupText(v.id)
@@ -147,6 +165,8 @@ export default function AracFilosuPage({
       if (!hit(f.plate, col.plate)) return false;
       if (col.type && f.type !== col.type) return false;
       if (col.cooling && v.cooling !== col.cooling) return false;
+      if (!hit(f.brand, col.brand)) return false;
+      if (!hit(f.wrap, col.wrap)) return false;
       if (!hit(f.contractor, col.contractor)) return false;
       if (!hit(f.driver, col.driver)) return false;
       if (!hit(f.groups, col.groups)) return false;
@@ -180,6 +200,10 @@ export default function AracFilosuPage({
       Plaka: v.plate,
       Tip: v.vehicle_type,
       Soğutma: coolingLabel(v.cooling),
+      Marka: v.brand || '',
+      Model: v.model_name || '',
+      'Model yılı': v.model_year || '',
+      Giydirme: wrapText(v),
       Ruhsat: v.contractor_name || '',
       'Şoför Adı': v.driver_name || '',
       'Şoför Tel No': v.driver_phone || '',
@@ -228,7 +252,7 @@ export default function AracFilosuPage({
         <table style="width:100%;border-collapse:collapse;font-size:10px">
           <thead>
             <tr>
-              ${['Kod','Plaka','Tip','Soğutma','Ruhsat','Şoför Adı','Mutabakat'].map(h => `<th style="text-align:left;padding:6px 5px;border-bottom:1px solid #cbd5e1;background:#f8fafc">${h}</th>`).join('')}
+              ${['Kod','Plaka','Tip','Marka','Model','Yıl','Giydirme','Ruhsat','Şoför Adı','Mutabakat'].map(h => `<th style="text-align:left;padding:6px 5px;border-bottom:1px solid #cbd5e1;background:#f8fafc">${h}</th>`).join('')}
             </tr>
           </thead>
           <tbody>
@@ -236,7 +260,10 @@ export default function AracFilosuPage({
               <td style="padding:5px;border-bottom:1px solid #e2e8f0;font-family:Consolas,monospace;font-weight:800">${esc(r.Kod)}</td>
               <td style="padding:5px;border-bottom:1px solid #e2e8f0;font-family:Consolas,monospace;font-weight:800">${esc(r.Plaka)}</td>
               <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Tip)}</td>
-              <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Soğutma)}</td>
+              <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Marka)}</td>
+              <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Model)}</td>
+              <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r['Model yılı'])}</td>
+              <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Giydirme)}</td>
               <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Ruhsat)}</td>
               <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r['Şoför Adı'])}</td>
               <td style="padding:5px;border-bottom:1px solid #e2e8f0">${esc(r.Mutabakat)}</td>
@@ -309,6 +336,11 @@ export default function AracFilosuPage({
       camera_gsm: v.camera_gsm || '',
       vehicle_type: v.vehicle_type || 'OrtaKamyon',
       cooling: v.cooling || 'plus4',
+      brand: v.brand || '',
+      model_name: v.model_name || '',
+      model_year: v.model_year ? String(v.model_year) : '',
+      wrapping: v.wrapping === 'yes' || v.wrapping === 'no' ? v.wrapping : '',
+      wrapping_label: v.wrapping_label || '',
       notes: v.notes || '',
       filoGroups: g.filo,
       kiralikGroups: g.kiralik
@@ -351,8 +383,29 @@ export default function AracFilosuPage({
     if (!editingId && !isAdmin) return;
     const plate = plateKeyArac(form.plate);
     const contractor_name = form.contractor_name.trim();
+    const brand = form.brand.trim();
+    const model_name = form.model_name.trim();
+    const yearN = Number(String(form.model_year).replace(/\D/g, ''));
+    const wrapping = form.wrapping;
+    const wrapping_label = wrapping === 'yes' ? form.wrapping_label.trim() : '';
     if (!plate || !contractor_name || !form.job_code || !form.place_code || !form.vehicle_type || !form.cooling) {
       alert('Plaka, ruhsat sahibi, iş/yer kodu, tip ve soğutma zorunlu.');
+      return;
+    }
+    if (!brand || !model_name || !yearN) {
+      alert('Araç marka, model ve model yılı zorunlu.');
+      return;
+    }
+    if (yearN < 1980 || yearN > 2035) {
+      alert('Model yılı 1980–2035 arasında olsun.');
+      return;
+    }
+    if (wrapping !== 'yes' && wrapping !== 'no') {
+      alert('Giydirme var veya yok seçin.');
+      return;
+    }
+    if (wrapping === 'yes' && !wrapping_label) {
+      alert('Giydirme varsa yazın. Örn. Migros, Tazeyol, Alkan.');
       return;
     }
     const keepSeq = editingId
@@ -379,6 +432,11 @@ export default function AracFilosuPage({
       camera_gsm: form.camera_gsm.trim() || null,
       vehicle_type: form.vehicle_type,
       cooling: form.cooling,
+      brand,
+      model_name,
+      model_year: yearN,
+      wrapping,
+      wrapping_label: wrapping_label || null,
       notes: form.notes.trim() || null,
       updated_at: new Date().toISOString()
     };
@@ -400,6 +458,11 @@ export default function AracFilosuPage({
             camera_gsm: payload.camera_gsm,
             vehicle_type: payload.vehicle_type,
             cooling: payload.cooling,
+            brand: payload.brand,
+            model_name: payload.model_name,
+            model_year: payload.model_year,
+            wrapping: payload.wrapping,
+            wrapping_label: payload.wrapping_label,
             notes: payload.notes,
             updated_at: payload.updated_at
           };
@@ -469,13 +532,37 @@ export default function AracFilosuPage({
       return;
     }
     const table = kind === 'job' ? 'fleet_code_jobs' : 'fleet_code_places';
-    const { error } = await supabase.from(table).upsert([{ code, label, sort_order: 99 }]);
+    const { data: existing } = await supabase.from(table).select('code, sort_order').eq('code', code).maybeSingle();
+    const { error } = await supabase.from(table).upsert([{
+      code,
+      label,
+      sort_order: existing?.sort_order ?? 99
+    }]);
     if (error) {
-      alert('Eklenemedi: ' + error.message);
+      alert('Yazılamadı: ' + error.message);
       return;
     }
     if (kind === 'job') setNewJob({ code: '', label: '' });
     else setNewPlace({ code: '', label: '' });
+    await onReload();
+  };
+
+  const renameCode = async () => {
+    if (!isAdmin) return;
+    const code = renamePick.trim();
+    const label = renameLabel.trim();
+    if (!code || !label) {
+      alert('Listeden kayıt seçin, adı yazın.');
+      return;
+    }
+    const table = renameKind === 'job' ? 'fleet_code_jobs' : 'fleet_code_places';
+    setBusy(true);
+    const { error } = await supabase.from(table).update({ label }).eq('code', code);
+    setBusy(false);
+    if (error) {
+      alert('İsim kaydedilemedi: ' + error.message);
+      return;
+    }
     await onReload();
   };
 
@@ -485,7 +572,7 @@ export default function AracFilosuPage({
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
       <div className="flex flex-col sm:flex-row justify-between gap-3 pb-4 border-b border-slate-100">
         <div>
-          <h3 className="font-bold text-lg text-slate-900">Araç Filosu</h3>
+          <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({(vehicles || []).length} araç)</h3>
           <p className="text-xs text-slate-500 mt-0.5">
             Tüm plakalar burada tanımlanır. İşler Değiştir ile künyeyi ve Filo/kiralık grubunu günceller; grup seçmeden de kaydedebilir. Plaka ekleme/silme yalnız yönetici.
           </p>
@@ -505,7 +592,25 @@ export default function AracFilosuPage({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 text-xs">
+      <div className="flex flex-wrap gap-2">
+        {(['', ...ARAC_VEHICLE_TYPES] as const).map(t => {
+          const count = t === ''
+            ? (vehicles || []).length
+            : (vehicles || []).filter((v: any) => v.vehicle_type === t).length;
+          const on = filterType === t;
+          return (
+            <button
+              key={t || 'all'}
+              type="button"
+              onClick={() => setFilterType(t)}
+              className={`text-xs font-bold px-3 py-1.5 rounded-lg border ${on ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'}`}
+            >
+              {t === '' ? `Tümü (${count})` : `${t} (${count})`}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-2 text-xs items-center">
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Plaka / kod / şoför" className="px-2 py-1.5 border rounded-lg min-w-[160px]" />
         <select value={filterJob} onChange={e => setFilterJob(e.target.value)} className="px-2 py-1.5 border rounded-lg bg-white">
           <option value="">İş</option>
@@ -515,27 +620,63 @@ export default function AracFilosuPage({
           <option value="">Yer</option>
           {placeList.map((p: any) => <option key={p.code} value={p.code}>{p.code} · {p.label}</option>)}
         </select>
-        <select value={filterType} onChange={e => setFilterType(e.target.value)} className="px-2 py-1.5 border rounded-lg bg-white">
-          <option value="">Tip</option>
-          {ARAC_VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
         <select value={filterCool} onChange={e => setFilterCool(e.target.value)} className="px-2 py-1.5 border rounded-lg bg-white">
           <option value="">Soğutma</option>
           {ARAC_COOLING.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
         </select>
+        <span className="text-slate-400 font-semibold ml-auto">Listede {listed.length} / {(vehicles || []).length} araç</span>
       </div>
 
       {isAdmin && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs p-3 rounded-xl bg-slate-50 border">
-          <div className="flex flex-wrap gap-2 items-end">
-            <label>İş harfi<input value={newJob.code} onChange={e => setNewJob({ ...newJob, code: e.target.value })} className="mt-1 w-20 px-2 py-1 border rounded uppercase" /></label>
-            <label className="flex-1">Ad<input value={newJob.label} onChange={e => setNewJob({ ...newJob, label: e.target.value })} className="mt-1 w-full px-2 py-1 border rounded" /></label>
-            <button type="button" disabled={busy} onClick={() => void addCode('job')} className="px-2 py-1.5 border rounded-lg font-bold">İş ekle</button>
+        <div className="text-xs p-3 rounded-xl bg-slate-50 border space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="flex flex-wrap gap-2 items-end">
+              <label>İş harfi<input value={newJob.code} onChange={e => setNewJob({ ...newJob, code: e.target.value })} className="mt-1 w-16 px-2 py-1 border rounded uppercase" /></label>
+              <label className="flex-1 min-w-[120px]">Ad<input value={newJob.label} onChange={e => setNewJob({ ...newJob, label: e.target.value })} className="mt-1 w-full px-2 py-1 border rounded" /></label>
+              <button type="button" disabled={busy} onClick={() => void addCode('job')} className="px-2 py-1.5 border rounded-lg font-bold">İş ekle</button>
+            </div>
+            <div className="flex flex-wrap gap-2 items-end">
+              <label>Yer harfi<input value={newPlace.code} onChange={e => setNewPlace({ ...newPlace, code: e.target.value })} className="mt-1 w-16 px-2 py-1 border rounded uppercase" /></label>
+              <label className="flex-1 min-w-[120px]">Ad<input value={newPlace.label} onChange={e => setNewPlace({ ...newPlace, label: e.target.value })} className="mt-1 w-full px-2 py-1 border rounded" /></label>
+              <button type="button" disabled={busy} onClick={() => void addCode('place')} className="px-2 py-1.5 border rounded-lg font-bold">Yer ekle</button>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2 items-end">
-            <label>Yer harfi<input value={newPlace.code} onChange={e => setNewPlace({ ...newPlace, code: e.target.value })} className="mt-1 w-20 px-2 py-1 border rounded uppercase" /></label>
-            <label className="flex-1">Ad<input value={newPlace.label} onChange={e => setNewPlace({ ...newPlace, label: e.target.value })} className="mt-1 w-full px-2 py-1 border rounded" /></label>
-            <button type="button" disabled={busy} onClick={() => void addCode('place')} className="px-2 py-1.5 border rounded-lg font-bold">Yer ekle</button>
+          <div className="flex flex-wrap gap-2 items-end pt-1 border-t border-slate-200">
+            <label>Düzelt
+              <select
+                value={renameKind}
+                onChange={e => {
+                  setRenameKind(e.target.value as 'job' | 'place');
+                  setRenamePick('');
+                  setRenameLabel('');
+                }}
+                className="mt-1 block px-2 py-1 border rounded bg-white"
+              >
+                <option value="place">Yer adı</option>
+                <option value="job">İş adı</option>
+              </select>
+            </label>
+            <label className="min-w-[160px]">Kayıt
+              <select
+                value={renamePick}
+                onChange={e => {
+                  const code = e.target.value;
+                  setRenamePick(code);
+                  const row = (renameKind === 'job' ? jobList : placeList).find((r: any) => r.code === code);
+                  setRenameLabel(row?.label || '');
+                }}
+                className="mt-1 block w-full px-2 py-1 border rounded bg-white"
+              >
+                <option value="">Seçin</option>
+                {(renameKind === 'job' ? jobList : placeList).map((r: any) => (
+                  <option key={r.code} value={r.code}>{r.code} · {r.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex-1 min-w-[160px]">Yeni ad
+              <input value={renameLabel} onChange={e => setRenameLabel(e.target.value)} className="mt-1 w-full px-2 py-1 border rounded" />
+            </label>
+            <button type="button" disabled={busy || !renamePick} onClick={() => void renameCode()} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white font-bold">İsmi kaydet</button>
           </div>
         </div>
       )}
@@ -549,6 +690,8 @@ export default function AracFilosuPage({
                 ['plate', 'Plaka'],
                 ['type', 'Tip'],
                 ['cooling', 'Soğutma'],
+                ['brand', 'Marka / model'],
+                ['wrap', 'Giydirme'],
                 ['contractor', 'Ruhsat'],
                 ['driver', 'Şoför Adı'],
                 ['groups', 'Mutabakat']
@@ -593,6 +736,8 @@ export default function AracFilosuPage({
                   <td className="py-2 px-3 font-mono font-bold">{v.plate}</td>
                   <td className="py-2 px-3">{v.vehicle_type}</td>
                   <td className="py-2 px-3">{coolingLabel(v.cooling)}</td>
+                  <td className="py-2 px-3">{[v.brand, v.model_name, v.model_year].filter(Boolean).join(' ') || '—'}</td>
+                  <td className="py-2 px-3">{wrapText(v)}</td>
                   <td className="py-2 px-3">{v.contractor_name || '—'}</td>
                   <td className="py-2 px-3">{v.driver_name || '—'}</td>
                   <td className="py-2 px-3 text-[11px]">{tags.join(' · ') || 'Atanmadı'}</td>
@@ -612,7 +757,7 @@ export default function AracFilosuPage({
               );
             })}
             {!listed.length && (
-              <tr><td colSpan={8} className="py-8 text-center text-slate-400">Kayıt yok. setup_arac_filosu.sql çalıştırın veya plaka tanımlayın.</td></tr>
+              <tr><td colSpan={10} className="py-8 text-center text-slate-400">Kayıt yok. setup_arac_filosu.sql çalıştırın veya plaka tanımlayın.</td></tr>
             )}
           </tbody>
         </table>
@@ -661,6 +806,43 @@ export default function AracFilosuPage({
                   {ARAC_COOLING.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                 </select>
               </label>
+              <label className="font-semibold">Araç marka
+                <input list="arac-marka" value={form.brand} onChange={e => setForm({ ...form, brand: e.target.value })} className="mt-1 w-full px-2 py-1.5 border rounded-lg" placeholder="Fiat" />
+                <datalist id="arac-marka">
+                  {[...new Set((vehicles || []).map((v: any) => String(v.brand || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr')).map(n => <option key={n} value={n} />)}
+                </datalist>
+              </label>
+              <label className="font-semibold">Model
+                <input list="arac-model" value={form.model_name} onChange={e => setForm({ ...form, model_name: e.target.value })} className="mt-1 w-full px-2 py-1.5 border rounded-lg" placeholder="Transit Custom" />
+                <datalist id="arac-model">
+                  {[...new Set((vehicles || []).map((v: any) => String(v.model_name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr')).map(n => <option key={n} value={n} />)}
+                </datalist>
+              </label>
+              <label className="font-semibold">Model yılı
+                <input value={form.model_year} onChange={e => setForm({ ...form, model_year: e.target.value })} className="mt-1 w-full px-2 py-1.5 border rounded-lg" placeholder="2026" inputMode="numeric" />
+              </label>
+              <label className="font-semibold">Giydirme
+                <select
+                  value={form.wrapping}
+                  onChange={e => {
+                    const wrapping = e.target.value as '' | 'yes' | 'no';
+                    setForm({ ...form, wrapping, wrapping_label: wrapping === 'yes' ? form.wrapping_label : '' });
+                  }}
+                  className="mt-1 w-full px-2 py-1.5 border rounded-lg bg-white"
+                >
+                  <option value="">Seçin</option>
+                  <option value="yes">Var</option>
+                  <option value="no">Yok</option>
+                </select>
+              </label>
+              {form.wrapping === 'yes' && (
+                <label className="font-semibold sm:col-span-2">Giydirme nedir
+                  <input list="arac-giydirme" value={form.wrapping_label} onChange={e => setForm({ ...form, wrapping_label: e.target.value })} className="mt-1 w-full px-2 py-1.5 border rounded-lg" placeholder="Migros, Tazeyol, Alkan…" />
+                  <datalist id="arac-giydirme">
+                    {['Migros', 'Tazeyol', 'Alkan', ...[...new Set((vehicles || []).map((v: any) => String(v.wrapping_label || '').trim()).filter(Boolean))]].filter((n, i, a) => a.indexOf(n) === i).map(n => <option key={n} value={n} />)}
+                  </datalist>
+                </label>
+              )}
               <label className="font-semibold">Şoför Adı
                 <input value={form.driver_name} onChange={e => setForm({ ...form, driver_name: e.target.value })} className="mt-1 w-full px-2 py-1.5 border rounded-lg" />
               </label>
