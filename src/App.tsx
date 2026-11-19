@@ -43,7 +43,8 @@ import {
   ShieldCheck,
   Phone,
   Contact,
-  Tag
+  Tag,
+  List
 } from 'lucide-react';
 import { supabase } from './supabase';
 import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, roleCanView, needsFinanceData, displayAccess, type AccessLevel } from './auth';
@@ -83,6 +84,8 @@ import {
 } from './rentalMath';
 import FleetPage from './FleetPage';
 import HalSahaPage from './HalSahaPage';
+import TripSettlementsPage from './TripSettlementsPage';
+import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
@@ -639,6 +642,7 @@ export default function App() {
     full_name: string;
     role: 'admin' | 'reporter' | 'saha';
     groups: string[];
+    filoDepots: string[];
     access: Record<string, AccessLevel>;
   }>>({});
   const [userSaveBusyId, setUserSaveBusyId] = useState<string | null>(null);
@@ -648,6 +652,8 @@ export default function App() {
   const [resetPwOkId, setResetPwOkId] = useState<string | null>(null);
   const [rentalAssignedGroup, setRentalAssignedGroup] = useState<string | null>(null);
   const [rentalAssignedGroups, setRentalAssignedGroups] = useState<string[]>([]);
+  const [filoAssignedDepots, setFiloAssignedDepots] = useState<string[]>([]);
+  const [filoDepot, setFiloDepot] = useState<FiloDepotId>('omerli');
   const [portalAccess, setPortalAccess] = useState<Record<string, AccessLevel>>({});
   const [authReady, setAuthReady] = useState(false);
   const isAuthenticated = !!currentUserRole;
@@ -677,6 +683,7 @@ export default function App() {
         setCurrentUserId(null);
         setRentalAssignedGroup(null);
         setRentalAssignedGroups([]);
+        setFiloAssignedDepots([]);
         setPortalAccess({});
         return;
       }
@@ -684,6 +691,7 @@ export default function App() {
       setCurrentUserId(userId);
       setRentalAssignedGroup(profile.rental_work_groups[0] || profile.rental_work_group);
       setRentalAssignedGroups(profile.rental_work_groups);
+      setFiloAssignedDepots(profile.filo_depots || []);
       setPortalAccess(profile.portal_access);
     };
 
@@ -735,6 +743,7 @@ export default function App() {
       setCurrentUserId(data.user.id);
       setRentalAssignedGroup(profile.rental_work_groups[0] || profile.rental_work_group);
       setRentalAssignedGroups(profile.rental_work_groups);
+      setFiloAssignedDepots(profile.filo_depots || []);
       setPortalAccess(profile.portal_access);
     } catch {
       setLoginError('Giriş sırasında bir hata oluştu.');
@@ -767,11 +776,10 @@ export default function App() {
       return;
     }
     let rows = (data || []) as any[];
-    const accessMissing = rows.some((u: any) => u.portal_access == null);
-    if (accessMissing && rows.length) {
+    if (rows.length) {
       const { data: extras } = await supabase
         .from('profiles')
-        .select('id, portal_access, rental_work_groups, rental_work_group, role, full_name');
+        .select('id, portal_access, rental_work_groups, rental_work_group, filo_depots, role, full_name');
       const byId = Object.fromEntries((extras || []).map((p: any) => [p.id, p]));
       rows = rows.map((u: any) => {
         const p = byId[u.id];
@@ -785,6 +793,7 @@ export default function App() {
     full_name?: string;
     role?: 'admin' | 'reporter' | 'saha';
     rental_work_groups?: string[];
+    filo_depots?: string[];
     portal_access?: Record<string, AccessLevel>;
   }) => {
     if (currentUserRole !== 'admin') return false;
@@ -795,8 +804,15 @@ export default function App() {
     const nextAccess = patch.portal_access !== undefined
       ? normalizeAccess(patch.portal_access)
       : normalizeAccess(user.portal_access);
+    const nextFilo = normalizeGroups(
+      patch.filo_depots !== undefined ? patch.filo_depots : (user.filo_depots || [])
+    );
     if (nextRole === 'saha' && nextAccess.rental_settlements && !nextGroups.length) {
       alert('Kiralık mutabakat yetkisi varsa en az bir grup işaretleyin. İzin döneminde birden fazla grup açabilirsiniz.');
+      return false;
+    }
+    if (nextRole === 'saha' && nextAccess.trip_settlements && !nextFilo.length) {
+      alert('Filo yetkisi varsa en az bir depo işaretleyin (Ömerli / Konacık / Peltili). Ortak tablo otomatik görünür.');
       return false;
     }
     if (user.id === currentUserId && nextRole !== 'admin') {
@@ -811,17 +827,19 @@ export default function App() {
       role: nextRole,
       rental_work_groups: nextRole === 'saha' && nextAccess.rental_settlements ? nextGroups : [],
       rental_work_group: nextRole === 'saha' && nextAccess.rental_settlements ? (nextGroups[0] || null) : null,
+      filo_depots: nextRole === 'saha' && nextAccess.trip_settlements ? nextFilo : [],
       portal_access: nextRole === 'saha' ? nextAccess : {}
     };
     const { error } = await supabase.from('profiles').update(payload).eq('id', user.id);
     if (error) {
-      alert('Kullanıcı kaydedilemedi: ' + (error.message || '') + ( /portal_access|rental_work_groups/i.test(error.message || '') ? ' setup_users.sql dosyasını bir kez daha Run edin.' : ''));
+      alert('Kullanıcı kaydedilemedi: ' + (error.message || '') + ( /portal_access|rental_work_groups|filo_depots/i.test(error.message || '') ? ' setup_trip_settlements.sql dosyasını bir kez Run edin.' : ''));
       return false;
     }
     setPortalUsers(prev => prev.map((u: any) => u.id === user.id ? { ...u, ...payload } : u));
     if (user.id === currentUserId) {
       setRentalAssignedGroups(payload.rental_work_groups);
       setRentalAssignedGroup(payload.rental_work_group);
+      setFiloAssignedDepots(payload.filo_depots || []);
       setPortalAccess(payload.portal_access);
     }
     return true;
@@ -1369,7 +1387,7 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'hal_saha' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
   >('overview');
 
   useEffect(() => {
@@ -1478,6 +1496,9 @@ export default function App() {
   const [dbHalEntries, setDbHalEntries] = useState<any[]>([]);
   const [dbHalHandovers, setDbHalHandovers] = useState<any[]>([]);
   const [dbHalPlates, setDbHalPlates] = useState<any[]>([]);
+  const [dbTripSettlements, setDbTripSettlements] = useState<any[]>([]);
+  const [dbTripPlates, setDbTripPlates] = useState<any[]>([]);
+  const [dbFiloDepots, setDbFiloDepots] = useState<any[]>([]);
   const emptyPlateRentalForm = {
     plate: '',
     owner_name: '',
@@ -1540,7 +1561,12 @@ export default function App() {
       setRentalWorkGroup(rentalAssignedGroups[0] as (typeof RENTAL_WORK_GROUPS)[number]['id']);
     }
   }, [rentalAssignedGroups, rentalWorkGroup]);
+  useEffect(() => {
+    const vis = filoVisibleDepots(currentUserRole, filoAssignedDepots, dbFiloDepots);
+    if (vis.length && !vis.some(d => d.id === filoDepot)) setFiloDepot(vis[0].id);
+  }, [currentUserRole, filoAssignedDepots, filoDepot, dbFiloDepots]);
   const [isRentalMenuOpen, setIsRentalMenuOpen] = useState(true);
+  const [isFiloMenuOpen, setIsFiloMenuOpen] = useState(true);
   const [openMenuGroups, setOpenMenuGroups] = useState<Record<string, boolean>>({});
   const [rentalDownloadContractor, setRentalDownloadContractor] = useState('');
   const [rentalEditRow, setRentalEditRow] = useState<any | null>(null);
@@ -1609,7 +1635,10 @@ export default function App() {
         halFirmData,
         halEntryData,
         halHandoverData,
-        halPlateData
+        halPlateData,
+        tripSettlementData,
+        tripPlateData,
+        filoDepotData
       ] = await Promise.all([
         loadIf(want('payments'), 'payment_batches'),
         loadIf(want('payments') || want('subcontractors'), 'advance_installments'),
@@ -1623,14 +1652,17 @@ export default function App() {
         loadIf(want('employees'), 'employee_transactions', { column: 'created_at', ascending: false }),
         loadIf(want('customers') || want('sales_customers') || want('collections'), 'customers', { column: 'name', ascending: true }),
         loadIf(isAdmin || isReporter, 'app_settings'),
-        loadIf(want('profitability'), 'vehicle_monthly_inputs'),
+        loadIf(want('profitability') || want('trip_settlements'), 'vehicle_monthly_inputs'),
         loadIf(want('plate_rentals'), 'plate_rentals', { column: 'renewal_date', ascending: true }),
         loadIf(want('rental_settlements'), 'rental_settlements', { column: 'year_month', ascending: false }),
         loadIf(want('rental_settlements'), 'rental_settlement_tariffs', { column: 'province', ascending: true }),
         loadIf(want('hal_saha'), 'hal_firms', { column: 'name', ascending: true }),
         loadIf(want('hal_saha'), 'hal_entries', { column: 'entry_date', ascending: false }),
         loadIf(want('hal_saha'), 'hal_handovers', { column: 'hand_date', ascending: false }),
-        loadIf(want('hal_saha'), 'hal_plates', { column: 'sort_order', ascending: true })
+        loadIf(want('hal_saha'), 'hal_plates', { column: 'sort_order', ascending: true }),
+        loadIf(want('trip_settlements'), 'trip_settlements', { column: 'year_month', ascending: false }),
+        loadIf(want('trip_settlements') || want('profitability'), 'trip_fleet_plates', { column: 'plate', ascending: true }),
+        loadIf(want('trip_settlements') || isAdmin, 'trip_filo_depots', { column: 'sort_order', ascending: true })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -1652,6 +1684,9 @@ export default function App() {
       setDbHalEntries(halEntryData);
       setDbHalHandovers(halHandoverData);
       setDbHalPlates(halPlateData);
+      setDbTripSettlements(tripSettlementData);
+      setDbTripPlates(tripPlateData);
+      setDbFiloDepots(filoDepotData);
 
       const crcCard = isAdmin ? findCrcCustomer(customerData as Customer[]) : null;
       if (crcCard) {
@@ -2664,6 +2699,12 @@ export default function App() {
     if (!isAdmin) return;
     const plateKey = String(plate || '').trim();
     if (!plateKey) return;
+    if (
+      (field === 'invoice_rev' || field === 'fuel')
+      && alkanFiloPlateKeys(dbTripPlates).has(filoPlateKey(plate))
+    ) {
+      return;
+    }
     const veh = dbVehicles.find(v => String(v.plate_number).trim() === plateKey);
     const existing = monthlyInputRows.find(
       r => String(r.plate_number).trim() === plateKey && r.year_month === profitMonth
@@ -6280,7 +6321,8 @@ export default function App() {
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection' || i.category === 'customer_advance').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
     { id: 'rental_settlements', label: 'Kiralık Araçlar', badge: dbRentalSettlements.length, icon: FileSpreadsheet },
-    { id: 'hal_saha', label: 'Hal Saha', badge: dbHalEntries.length, icon: Building2 },
+    { id: 'trip_settlements', label: 'Filo', badge: dbTripPlates.length, icon: List },
+    { id: 'hal_saha', label: 'Sefer ve tahsilat', badge: dbHalEntries.length, icon: Building2 },
     { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
     { id: 'users', label: 'Kullanıcılar', badge: portalUsers.length, icon: ShieldCheck },
   ];
@@ -6288,8 +6330,9 @@ export default function App() {
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
     { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses', 'income_report'] },
-    { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements'] },
+    { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements', 'trip_settlements'] },
     { id: 'fleet', label: 'Araç', itemIds: ['fleet', 'profitability', 'plate_rentals'] },
+    { id: 'hal', label: 'Hal saha', itemIds: ['hal_saha'] },
     { id: 'people', label: 'İnsan ve yetki', itemIds: ['employees', 'users'] }
   ].map(g => ({ ...g, items: g.itemIds.map(id => menuById[id]).filter(item => item && canViewMod(item.id)) }))
     .filter(g => g.items.length);
@@ -6420,6 +6463,45 @@ export default function App() {
                         {group.items.map(item => {
                           const Icon = item.icon;
                           const isActive = activeTab === item.id;
+                          if (item.id === 'trip_settlements') {
+                            const filoMenus = filoVisibleDepots(currentUserRole, filoAssignedDepots, dbFiloDepots);
+                            return (
+                              <div key={item.id} className="space-y-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsFiloMenuOpen(!isFiloMenuOpen)}
+                                  className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold ${
+                                    isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                                    <span>Filo</span>
+                                  </div>
+                                  <ChevronRight className={`w-4 h-4 transition ${isFiloMenuOpen ? 'rotate-90' : ''}`} />
+                                </button>
+                                {isFiloMenuOpen && filoMenus.map(d => {
+                                  const count = (dbTripPlates || []).filter((p: any) => p.depot === d.id && p.is_active !== false).length;
+                                  const on = isActive && filoDepot === d.id;
+                                  return (
+                                    <button
+                                      key={d.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveTab('trip_settlements');
+                                        setFiloDepot(d.id);
+                                        setIsSidebarOpen(false);
+                                      }}
+                                      className={`w-full text-left ml-4 px-3 py-2 rounded-lg font-semibold ${on ? 'bg-[#009fe3] text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                                    >
+                                      {d.label}
+                                      <span className={`float-right text-[10px] ${on ? 'text-white/80' : 'text-slate-400'}`}>{count}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
                           if (item.id === 'rental_settlements') {
                             return (
                               <div key={item.id} className="space-y-0.5">
@@ -6494,19 +6576,6 @@ export default function App() {
                   </div>
                 );
               })}
-              {canViewMod('hal_saha') && (
-                <button
-                  type="button"
-                  onClick={() => { setActiveTab('hal_saha'); setIsSidebarOpen(false); }}
-                  className={`w-full flex items-center gap-3 p-3 rounded-xl font-semibold ${activeTab === 'hal_saha' ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'}`}
-                >
-                  <Building2 className={`w-4 h-4 ${activeTab === 'hal_saha' ? 'text-[#009fe3]' : 'text-slate-400'}`} />
-                  Hal saha
-                  {dbHalEntries.length > 0 && (
-                    <span className="ml-auto text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md">{dbHalEntries.length}</span>
-                  )}
-                </button>
-              )}
             </nav>
             <div className="p-4 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-400 text-center">
               Tazeyol ERP v3.2 • Soğuk Zincir Lojistiği
@@ -6735,7 +6804,7 @@ export default function App() {
 
             {(() => {
               const isHalKasaOpen = (e: any) => /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
-              const isHalCariOnly = (e: any) => /\[(AKTARIM-CARI|DRIVE-GIRIS)\]/.test(String(e.notes || ''));
+              const isHalCariOnly = (e: any) => /\[(AKTARIM-CARI|DRIVE-GIRIS|MERKEZ-TAHSIL)\]/.test(String(e.notes || ''));
               const seferTutari = (dbHalEntries || []).reduce((s: number, e: any) => {
                 if (e.kind !== 'sefer') return s;
                 const bedel = cleanNumber(e.bedel);
@@ -8416,6 +8485,22 @@ export default function App() {
         )}
 
         {/* 8. ARAÇ FİLOSU */}
+        {activeTab === 'trip_settlements' && canViewMod('trip_settlements') && (
+          <TripSettlementsPage
+            depot={filoDepot}
+            plates={dbTripPlates}
+            rows={dbTripSettlements}
+            isAdmin={isAdmin}
+            canEditModule={canEditMod('trip_settlements')}
+            role={currentUserRole}
+            cleanNumber={cleanNumber}
+            depots={filoVisibleDepots(currentUserRole, filoAssignedDepots, dbFiloDepots)}
+            allDepots={mergeFiloDepots(dbFiloDepots)}
+            onSelectDepot={setFiloDepot}
+            onReload={loadPortalData}
+          />
+        )}
+
         {activeTab === 'hal_saha' && canViewMod('hal_saha') && (
           <HalSahaPage
             firms={dbHalFirms}
@@ -8475,7 +8560,7 @@ export default function App() {
                 <div>
                   <h3 className="font-bold text-lg text-slate-900">Öz Mal Araç Karlılık</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Ayın ilk haftasında bir önceki ay kapanır. Ciro, yakıt ve HGS diğer portaldan elle girilir; maaş+prim, SGK, sigorta/kasko/MTV/muayene ve bakım-lastik (yıllık÷12) sistemden gelir.
+                    Ayın ilk haftasında bir önceki ay kapanır. Alkan öz mal ciro ve yakıt yalnızca Filo’dan gelir; HGS burada elle girilir. Maaş+prim, SGK, sigorta/kasko/MTV/muayene ve bakım-lastik (yıllık÷12) sistemden gelir.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -8613,8 +8698,8 @@ export default function App() {
                       <th className="py-3 px-3">Tip</th>
                       <th className="py-3 px-3">Plaka</th>
                       <th className="py-3 px-3">Şoför</th>
-                      <th className="py-3 px-3 text-right">Ciro (elle)</th>
-                      <th className="py-3 px-3 text-right">Yakıt (elle)</th>
+                      <th className="py-3 px-3 text-right">Ciro</th>
+                      <th className="py-3 px-3 text-right">Yakıt</th>
                       <th className="py-3 px-3 text-right">HGS (elle)</th>
                       <th className="py-3 px-3 text-right">Maaş + prim</th>
                       <th className="py-3 px-3 text-right">SGK</th>
@@ -8629,6 +8714,7 @@ export default function App() {
                         r => String(r.plate_number).trim() === item.plate_number && r.year_month === profitMonth
                       );
                       const fmtInput = (n: number) => (n ? String(n) : '');
+                      const fromFilo = alkanFiloPlateKeys(dbTripPlates).has(filoPlateKey(item.plate_number));
                       return (
                         <tr key={item.id || item.plate_number} className={`hover:bg-slate-50 ${item.included ? '' : 'opacity-40'}`}>
                           <td className="py-3 px-3">
@@ -8649,6 +8735,11 @@ export default function App() {
                           </td>
                           <td className="py-3 px-3 font-medium text-slate-700">{item.driver_name || 'Atanmadı'}</td>
                           <td className="py-3 px-3 text-right">
+                            {fromFilo ? (
+                              <span className="block w-28 ml-auto px-2 py-1 rounded bg-slate-100 text-right font-bold" title="Filo Alkan satırından gelir">
+                                {item.invoice_rev ? `${item.invoice_rev.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : '—'}
+                              </span>
+                            ) : (
                             <input
                               type="text"
                               disabled={!isAdmin}
@@ -8657,8 +8748,14 @@ export default function App() {
                               onBlur={e => saveMonthlyProfitInput(item.plate_number, 'invoice_rev', e.target.value)}
                               className="w-28 px-2 py-1 border border-slate-200 rounded text-right font-bold bg-white"
                             />
+                            )}
                           </td>
                           <td className="py-3 px-3 text-right">
+                            {fromFilo ? (
+                              <span className="block w-24 ml-auto px-2 py-1 rounded bg-slate-100 text-right font-bold" title="Filo Alkan satırından gelir">
+                                {item.fuel ? `${item.fuel.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : '—'}
+                              </span>
+                            ) : (
                             <input
                               type="text"
                               disabled={!isAdmin}
@@ -8667,6 +8764,7 @@ export default function App() {
                               onBlur={e => saveMonthlyProfitInput(item.plate_number, 'fuel', e.target.value)}
                               className="w-24 px-2 py-1 border border-slate-200 rounded text-right bg-white"
                             />
+                            )}
                           </td>
                           <td className="py-3 px-3 text-right">
                             <input
@@ -11521,10 +11619,12 @@ export default function App() {
               {portalUsers.map((u: any) => {
                 const liveGroups = normalizeGroups(u.rental_work_groups, u.rental_work_group);
                 const liveAccess = normalizeAccess(u.portal_access);
+                const liveFilo = normalizeGroups(u.filo_depots);
                 const draft = userDrafts[u.id] || {
                   full_name: u.full_name || '',
                   role: u.role as 'admin' | 'reporter' | 'saha',
                   groups: liveGroups,
+                  filoDepots: liveFilo,
                   access: liveAccess
                 };
                 const groups = draft.groups;
@@ -11542,6 +11642,7 @@ export default function App() {
                     full_name: draft.full_name,
                     role: draft.role,
                     rental_work_groups: draft.groups,
+                    filo_depots: draft.filoDepots,
                     portal_access: draft.access
                   });
                   setUserSaveBusyId(null);
@@ -11596,6 +11697,21 @@ export default function App() {
                                 <input type="checkbox" className="hidden" checked={groups.includes(g.id)} onChange={() => {
                                   const next = groups.includes(g.id) ? groups.filter((x: string) => x !== g.id) : [...groups, g.id];
                                   patchDraft({ groups: next });
+                                }} />
+                                {g.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Filo depolar (Ortak tablo otomatik)</div>
+                          <div className="flex flex-wrap gap-2">
+                            {filoWorkDepots(dbFiloDepots).map(g => (
+                              <label key={g.id} className={`text-xs font-semibold px-2 py-1 rounded-lg border cursor-pointer ${(draft.filoDepots || []).includes(g.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white text-slate-600 border-slate-200'}`}>
+                                <input type="checkbox" className="hidden" checked={(draft.filoDepots || []).includes(g.id)} onChange={() => {
+                                  const cur = draft.filoDepots || [];
+                                  const next = cur.includes(g.id) ? cur.filter((x: string) => x !== g.id) : [...cur, g.id];
+                                  patchDraft({ filoDepots: next });
                                 }} />
                                 {g.label}
                               </label>

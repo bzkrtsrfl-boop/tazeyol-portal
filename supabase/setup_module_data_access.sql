@@ -46,6 +46,9 @@ begin
       ('plate_rentals', array['plate_rentals']),
       ('rental_settlements', array['rental_settlements']),
       ('rental_settlement_tariffs', array['rental_settlements']),
+      ('trip_settlements', array['trip_settlements']),
+      ('trip_fleet_plates', array['trip_settlements']),
+      ('trip_filo_depots', array['trip_settlements']),
       ('app_settings', array[]::text[])
     ) as t(tbl, mods)
   loop

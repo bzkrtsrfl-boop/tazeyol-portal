@@ -25,6 +25,7 @@ create table if not exists public.hal_entries (
   created_by uuid references auth.users (id),
   created_at timestamptz not null default now()
 );
+alter table public.hal_entries add column if not exists kasa_invoice_id uuid;
 
 create table if not exists public.hal_handovers (
   id uuid primary key default gen_random_uuid(),

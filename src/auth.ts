@@ -19,7 +19,8 @@ export const PORTAL_MODULES = [
   { id: 'credit_cards', label: 'Kredi kartları' },
   { id: 'general_expenses', label: 'Genel giderler' },
   { id: 'income_report', label: 'Gelir gider raporu' },
-  { id: 'hal_saha', label: 'Hal saha' }
+  { id: 'hal_saha', label: 'Hal saha' },
+  { id: 'trip_settlements', label: 'Filo' }
 ] as const;
 
 export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];
@@ -63,10 +64,11 @@ export const ACCESS_PRESETS: { id: string; label: string; access: Record<string,
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
   { id: 'filo_sadece', label: 'Sadece araç filosu', access: { fleet: 'edit' } },
   { id: 'hal_saha_sadece', label: 'Hal saha giriş (gece sefer yazar)', access: { hal_saha: 'edit' } },
+  { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit' } },
   { id: 'arac', label: 'Araç sorumlusu (filo + plaka + karlılık)', access: { fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
   { id: 'on_muhasebe', label: 'Ön muhasebe', access: {
     sales_customers: 'edit', customers: 'edit', collections: 'edit',
-    subcontractors: 'edit', sub_accounts: 'edit', sub_ibans: 'edit',
+    subcontractors: 'edit', sub_accounts: 'edit', sub_ibans: 'edit', trip_settlements: 'edit',
     payments: 'edit', credit_cards: 'edit', general_expenses: 'edit', employees: 'edit',
     income_report: 'view'
   } }
@@ -76,6 +78,7 @@ export type PortalProfile = {
   role: UserRole;
   rental_work_group: string | null;
   rental_work_groups: string[];
+  filo_depots: string[];
   portal_access: Record<string, AccessLevel>;
   full_name: string | null;
 };
@@ -103,11 +106,11 @@ export function normalizeAccess(raw: any): Record<string, AccessLevel> {
 export async function fetchProfile(userId: string): Promise<PortalProfile | null> {
   let { data, error } = await supabase
     .from('profiles')
-    .select('role, rental_work_group, rental_work_groups, portal_access, full_name')
+    .select('role, rental_work_group, rental_work_groups, filo_depots, portal_access, full_name')
     .eq('id', userId)
     .maybeSingle();
 
-  if (error && /rental_work_groups|portal_access/i.test(error.message || '')) {
+  if (error && /rental_work_groups|portal_access|filo_depots/i.test(error.message || '')) {
     const fallback = await supabase.from('profiles').select('role, rental_work_group, full_name').eq('id', userId).maybeSingle();
     data = fallback.data as any;
     error = fallback.error;
@@ -125,6 +128,7 @@ export async function fetchProfile(userId: string): Promise<PortalProfile | null
       role: data.role,
       rental_work_group: groups[0] || null,
       rental_work_groups: groups,
+      filo_depots: normalizeGroups((data as any).filo_depots),
       portal_access: access,
       full_name: data.full_name || null
     };

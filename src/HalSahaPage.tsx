@@ -20,7 +20,11 @@ function isHalKasaOnly(e: any) {
 }
 
 function isHalCariOnly(e: any) {
-  return /\[(AKTARIM-CARI|DRIVE-GIRIS)\]/.test(String(e.notes || ''));
+  return /\[(AKTARIM-CARI|DRIVE-GIRIS|MERKEZ-TAHSIL)\]/.test(String(e.notes || ''));
+}
+
+function isHalMerkezTahsil(e: any) {
+  return /\[MERKEZ-TAHSIL\]/.test(String(e.notes || '')) || !!e.kasa_invoice_id;
 }
 
 type HalSahaPageProps = {
@@ -246,11 +250,15 @@ export default function HalSahaPage({
     const firmRow = activeFirms.find((f: any) => f.name === firm);
     const prev = editingId ? (entries || []).find((e: any) => String(e.id) === String(editingId)) : null;
     let notesOut = (form.notes || '').trim();
-    const keepTags = ['[DRIVE-GIRIS]', '[KASA-TAHSIL]', '[AKTARIM-KASA]', '[AKTARIM-CARI]'];
+    const keepTags = ['[DRIVE-GIRIS]', '[KASA-TAHSIL]', '[AKTARIM-KASA]', '[AKTARIM-CARI]', '[MERKEZ-TAHSIL]'];
     for (const tag of keepTags) {
       if (prev && String(prev.notes || '').includes(tag) && !notesOut.includes(tag)) {
         notesOut = notesOut ? `${notesOut} ${tag}` : tag;
       }
+    }
+    const toMerkez = canTakeToCash && kind === 'tahsilat' && collected > 0 && (!prev || isHalMerkezTahsil(prev));
+    if (toMerkez && !notesOut.includes('[MERKEZ-TAHSIL]')) {
+      notesOut = notesOut ? `${notesOut} [MERKEZ-TAHSIL]` : '[MERKEZ-TAHSIL]';
     }
     const payload: any = {
       entry_date: form.date || today,
@@ -264,18 +272,72 @@ export default function HalSahaPage({
       collected
     };
     setBusy(true);
-    const q = editingId
-      ? supabase.from('hal_entries').update(payload).eq('id', editingId)
-      : supabase.from('hal_entries').insert([{ ...payload, created_by: (await supabase.auth.getUser()).data.user?.id || null }]);
-    const { error } = await q;
-    setBusy(false);
+    const { data: saved, error } = editingId
+      ? await supabase.from('hal_entries').update(payload).eq('id', editingId).select('id, kasa_invoice_id').maybeSingle()
+      : await supabase.from('hal_entries').insert([{ ...payload, created_by: (await supabase.auth.getUser()).data.user?.id || null }]).select('id, kasa_invoice_id').maybeSingle();
     if (error) {
+      setBusy(false);
+      const noCol = /kasa_invoice_id/i.test(error.message || '');
+      if (noCol) {
+        const retry = editingId
+          ? await supabase.from('hal_entries').update(payload).eq('id', editingId).select('id').maybeSingle()
+          : await supabase.from('hal_entries').insert([{ ...payload, created_by: (await supabase.auth.getUser()).data.user?.id || null }]).select('id').maybeSingle();
+        if (retry.error) {
+          alert('Kayıt yazılamadı. setup_hal_saha.sql dosyasını bir kez Run edin.\n' + retry.error.message);
+          return;
+        }
+        if (toMerkez && retry.data?.id) {
+          const kasaErr = await writeHalKasaInvoice(retry.data.id, collected, payload.entry_date, firm, null);
+          if (kasaErr) alert('Cari yazıldı ama kasa satırı oluşmadı: ' + kasaErr);
+        }
+        setBusy(false);
+        resetForm();
+        setTab('list');
+        await onReload();
+        return;
+      }
       alert('Kayıt yazılamadı. setup_hal_saha.sql dosyasını bir kez Run edin.\n' + error.message);
       return;
     }
+    if (toMerkez && saved?.id) {
+      const kasaErr = await writeHalKasaInvoice(saved.id, collected, payload.entry_date, firm, saved.kasa_invoice_id || null);
+      if (kasaErr) alert('Cari yazıldı ama kasa satırı oluşmadı: ' + kasaErr);
+    }
+    setBusy(false);
     resetForm();
     setTab('list');
     await onReload();
+  };
+
+  const writeHalKasaInvoice = async (entryId: string, amount: number, date: string, firm: string, invoiceId: string | null) => {
+    const no = `Hal tahsilat ${entryId}`;
+    const row: any = {
+      invoice_no: no,
+      direction: 'incoming',
+      category: 'cash_deposit',
+      total_amount: amount,
+      issue_date: date,
+      due_date: date,
+      status: 'paid'
+    };
+    let id = invoiceId;
+    if (id) {
+      const { error } = await supabase.from('invoices').update(row).eq('id', id);
+      if (error) return error.message;
+    } else {
+      const found = await supabase.from('invoices').select('id').eq('invoice_no', no).maybeSingle();
+      if (found.data?.id) {
+        id = found.data.id;
+        const { error } = await supabase.from('invoices').update(row).eq('id', id);
+        if (error) return error.message;
+      } else {
+        const ins = await supabase.from('invoices').insert([row]).select('id').maybeSingle();
+        if (ins.error || !ins.data?.id) return ins.error?.message || 'Kasa satırı açılamadı';
+        id = ins.data.id;
+      }
+    }
+    await supabase.from('hal_entries').update({ kasa_invoice_id: id }).eq('id', entryId);
+    return '';
   };
 
   const removeEntry = async (row: any) => {
@@ -283,7 +345,9 @@ export default function HalSahaPage({
       alert('Saha kaydı silemez. Yanlışsa son 2 gün içinde düzeltin; silmeyi yönetici yapar.');
       return;
     }
-    if (!window.confirm('Bu satır silinsin mi? Diğer sefer portalına işlemişseniz orayı ayrıca düzeltin.')) return;
+    if (!window.confirm('Bu satır silinsin mi? Kasaya yazılmış tahsilat da kasadan düşer.')) return;
+    if (row.kasa_invoice_id) await supabase.from('invoices').delete().eq('id', row.kasa_invoice_id);
+    else if (isHalMerkezTahsil(row)) await supabase.from('invoices').delete().eq('invoice_no', `Hal tahsilat ${row.id}`);
     const { error } = await supabase.from('hal_entries').delete().eq('id', row.id);
     if (error) {
       alert(error.message);
@@ -303,7 +367,7 @@ export default function HalSahaPage({
       date: String(row.entry_date).slice(0, 10),
       firm: row.firm_name || '',
       plate: row.plate || '',
-      notes: String(row.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI)\]/g, '').trim(),
+      notes: String(row.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim(),
       bedel: String(row.bedel || ''),
       vat: !!row.has_vat,
       collected: String(row.collected || '')
@@ -369,7 +433,7 @@ export default function HalSahaPage({
         <div>
           <h3 className="font-bold text-lg text-slate-900">Hal saha</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gece saha sefer ve bedeli buraya yazar. Saha kaydı silemez; yalnız son 2 günü düzeltir. Daha eski satırı yönetici değiştirir veya siler. Diğer sefer portalına otomatik gitmez. Nakit, yönetici merkeze alana kadar şirket kasasına girmez.
+            Gece saha sefer ve nakit tahsilatı personel kasadadır; yönetici Saha kasası’ndan merkeze alır. Ofiste girilen tahsilat (personelin getirdiği veya firmanın doğrudan ödediği) cariden düşer ve şirket kasasına yazılır.
           </p>
         </div>
         <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold">
@@ -445,7 +509,11 @@ export default function HalSahaPage({
           </label>
           <label className="block text-xs font-semibold">Nakit tahsilat
             <input value={form.collected} onChange={e => setForm({ ...form, collected: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg font-bold text-emerald-700" inputMode="decimal" />
-            <span className="text-[10px] text-slate-400 font-normal">Tek satır: hem firmanın carisini düşer hem personel kasaya girer.</span>
+            <span className="text-[10px] text-slate-400 font-normal">
+              {canTakeToCash && kind === 'tahsilat'
+                ? 'Firma carisi düşer, şirket kasasına girer. Personelin sefer satırındaki nakit için burayı kullanmayın; Saha kasası → Merkeze al.'
+                : 'Tek satır: hem firmanın carisini düşer hem personel kasaya girer.'}
+            </span>
           </label>
           <div className="flex gap-2">
             <button type="button" disabled={busy || !canEdit} onClick={saveEntry} className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold disabled:opacity-50">
@@ -478,10 +546,10 @@ export default function HalSahaPage({
                 return (
                   <tr key={e.id} className="hover:bg-slate-50">
                     <td className="py-2 px-3 whitespace-nowrap">{formatDateTR(e.entry_date)}</td>
-                    <td className="py-2 px-3 font-bold">{e.kind === 'tahsilat' ? 'Tahsilat' : 'Sefer'}</td>
+                    <td className="py-2 px-3 font-bold">{e.kind === 'tahsilat' ? (isHalMerkezTahsil(e) ? 'Tahsilat · kasa' : 'Tahsilat') : 'Sefer'}</td>
                     <td className="py-2 px-3 font-semibold">{e.firm_name}</td>
                     <td className="py-2 px-3 font-mono">{e.plate || '—'}</td>
-                    <td className="py-2 px-3 text-slate-500">{String(e.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI)\]/g, '').trim() || '—'}</td>
+                    <td className="py-2 px-3 text-slate-500">{String(e.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim() || '—'}</td>
                     <td className="py-2 px-3 text-right">{tot ? `${money(tot)} ₺` : '—'}</td>
                     <td className="py-2 px-3 text-right text-emerald-700 font-bold">{cleanNumber(e.collected) ? `${money(cleanNumber(e.collected))} ₺` : '—'}</td>
                     {canEdit && (
