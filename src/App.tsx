@@ -46,7 +46,7 @@ import {
   Tag
 } from 'lucide-react';
 import { supabase } from './supabase';
-import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, roleCanView, needsFinanceData, type AccessLevel } from './auth';
+import { fetchProfile, PORTAL_MODULES, ACCESS_PRESETS, normalizeGroups, normalizeAccess, roleCanView, needsFinanceData, displayAccess, type AccessLevel } from './auth';
 import { fetchAllRows, matchCustomer, resolveInvoiceCustomer, invoiceBelongsToCustomer, isLegacyCrcInvoice, retitleInvoiceCustomer, findCrcCustomer, findMigrosCustomer, isCustomerMoneyInvoice, extractSalesInvoiceKeys, type Customer } from './db';
 import {
   normalizeContractorKey,
@@ -82,6 +82,7 @@ import {
   rentalFisFileName
 } from './rentalMath';
 import FleetPage from './FleetPage';
+import HalSahaPage from './HalSahaPage';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function TazeyolBrand() {
@@ -746,7 +747,19 @@ export default function App() {
       setPortalUsersError('Kullanıcı listesi yok. supabase/setup_users.sql dosyasını SQL Editor’da bir kez Run edin.');
       return;
     }
-    setPortalUsers(data || []);
+    let rows = (data || []) as any[];
+    const accessMissing = rows.some((u: any) => u.portal_access == null);
+    if (accessMissing && rows.length) {
+      const { data: extras } = await supabase
+        .from('profiles')
+        .select('id, portal_access, rental_work_groups, rental_work_group, role, full_name');
+      const byId = Object.fromEntries((extras || []).map((p: any) => [p.id, p]));
+      rows = rows.map((u: any) => {
+        const p = byId[u.id];
+        return p ? { ...u, ...p, email: u.email } : u;
+      });
+    }
+    setPortalUsers(rows);
   };
 
   const handleSavePortalUser = async (user: any, patch: {
@@ -1300,13 +1313,16 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'hal_saha' | 'users'
   >('overview');
 
   useEffect(() => {
     if (currentUserRole !== 'saha') return;
     if (canViewMod(activeTab)) return;
-    const order = ['fleet', 'plate_rentals', 'profitability', ...PORTAL_MODULES.map(m => m.id)];
+    const order = [
+      ...(canEditMod('hal_saha') ? ['hal_saha'] : []),
+      'fleet', 'plate_rentals', 'profitability', ...PORTAL_MODULES.map(m => m.id)
+    ];
     const first = order.find(id => canViewMod(id));
     if (first) setActiveTab(first as typeof activeTab);
   }, [currentUserRole, portalAccess, activeTab]);
@@ -1402,6 +1418,10 @@ export default function App() {
   const [dbEmployeeTransactions, setDbEmployeeTransactions] = useState<any[]>([]);
   const [dbCustomers, setDbCustomers] = useState<Customer[]>([]);
   const [dbPlateRentals, setDbPlateRentals] = useState<any[]>([]);
+  const [dbHalFirms, setDbHalFirms] = useState<any[]>([]);
+  const [dbHalEntries, setDbHalEntries] = useState<any[]>([]);
+  const [dbHalHandovers, setDbHalHandovers] = useState<any[]>([]);
+  const [dbHalPlates, setDbHalPlates] = useState<any[]>([]);
   const emptyPlateRentalForm = {
     plate: '',
     owner_name: '',
@@ -1529,11 +1549,15 @@ export default function App() {
         monthlyInputData,
         plateRentalData,
         rentalSettlementData,
-        rentalTariffData
+        rentalTariffData,
+        halFirmData,
+        halEntryData,
+        halHandoverData,
+        halPlateData
       ] = await Promise.all([
         loadIf(want('payments'), 'payment_batches'),
         loadIf(want('payments') || want('subcontractors'), 'advance_installments'),
-        loadIf(want('fleet') || want('profitability') || want('plate_rentals'), 'vehicles', { column: 'id', ascending: true }),
+        loadIf(want('fleet') || want('profitability') || want('plate_rentals') || want('hal_saha'), 'vehicles', { column: 'id', ascending: true }),
         loadIf(finance, 'invoices', { column: 'created_at', ascending: false }),
         loadIf(want('employees') || want('profitability'), 'employees', { column: 'id', ascending: true }),
         loadIf(want('subcontractors') || want('sub_accounts') || want('payments') || want('employees'), 'advance_payments', { column: 'created_at', ascending: false }),
@@ -1546,7 +1570,11 @@ export default function App() {
         loadIf(want('profitability'), 'vehicle_monthly_inputs'),
         loadIf(want('plate_rentals'), 'plate_rentals', { column: 'renewal_date', ascending: true }),
         loadIf(want('rental_settlements'), 'rental_settlements', { column: 'year_month', ascending: false }),
-        loadIf(want('rental_settlements'), 'rental_settlement_tariffs', { column: 'province', ascending: true })
+        loadIf(want('rental_settlements'), 'rental_settlement_tariffs', { column: 'province', ascending: true }),
+        loadIf(want('hal_saha'), 'hal_firms', { column: 'name', ascending: true }),
+        loadIf(want('hal_saha'), 'hal_entries', { column: 'entry_date', ascending: false }),
+        loadIf(want('hal_saha'), 'hal_handovers', { column: 'hand_date', ascending: false }),
+        loadIf(want('hal_saha'), 'hal_plates', { column: 'sort_order', ascending: true })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -1564,6 +1592,10 @@ export default function App() {
       setDbPlateRentals(plateRentalData);
       setDbRentalSettlements(rentalSettlementData);
       setDbRentalTariffs(rentalTariffData);
+      setDbHalFirms(halFirmData);
+      setDbHalEntries(halEntryData);
+      setDbHalHandovers(halHandoverData);
+      setDbHalPlates(halPlateData);
 
       const crcCard = isAdmin ? findCrcCustomer(customerData as Customer[]) : null;
       if (crcCard) {
@@ -2126,7 +2158,15 @@ export default function App() {
 
   // PERSONEL MODALI (EKLE / DÜZENLE + PRİM ALANI DAHİL)
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
-  const [editingEmployeeId, setEditingEmployeeId] = useState<number | null>(null);
+  const [editingEmployeeId, setEditingEmployeeId] = useState<number | string | null>(null);
+  const emptyEmpTx = {
+    type: 'bonus' as 'bonus' | 'advance' | 'installment_advance',
+    date: new Date().toISOString().split('T')[0],
+    title: '',
+    amount: '',
+    inst: '1'
+  };
+  const [newEmpTx, setNewEmpTx] = useState(emptyEmpTx);
  const [employeeFormData, setEmployeeFormData] = useState({
     fullName: '',
     roleTitle: 'Kamyon Şoförü / Dağıtım',
@@ -5472,30 +5512,48 @@ export default function App() {
     title: string,
     totalAmount: number,
     installments: number = 1,
-    txDate?: string
+    txDate?: string,
+    silent?: boolean
   ) => {
+    if (!canEditMod('employees')) {
+      alert('Bu hesap personel primi yazamaz. Yönetici ile girin.');
+      return false;
+    }
     if (!empId || !title.trim() || totalAmount <= 0) {
       alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
-      return;
+      return false;
     }
     const instCount = Math.max(1, Number(installments) || 1);
     const monthlyCut = type === 'installment_advance' ? Math.round(totalAmount / instCount) : totalAmount;
     const finalDate = txDate || new Date().toISOString().split('T')[0];
+    const row: any = {
+      employee_id: empId,
+      type,
+      title: title.trim(),
+      total_amount: totalAmount,
+      installment_count: instCount,
+      monthly_cut: monthlyCut,
+      transaction_date: finalDate
+    };
 
     try {
-      const { error } = await supabase.from('employee_transactions').insert([{
-        employee_id: empId,
-        type: type,
-        title: title.trim(),
-        total_amount: totalAmount,
-        installment_count: instCount,
-        monthly_cut: monthlyCut,
-        transaction_date: finalDate
-      }]);
+      let { error } = await supabase.from('employee_transactions').insert([row]);
+      if (error && /transaction_date|could not find/i.test(error.message || '')) {
+        const slim = { ...row };
+        delete slim.transaction_date;
+        const retry = await supabase.from('employee_transactions').insert([slim]);
+        error = retry.error;
+      }
       if (error) throw error;
+      setNewEmpTx({ ...emptyEmpTx, date: finalDate });
       await loadPortalData();
+      if (!silent) {
+        alert(type === 'bonus' ? 'Prim kaydedildi.' : type === 'advance' ? 'Avans kaydedildi.' : 'Taksitli avans kaydedildi.');
+      }
+      return true;
     } catch (err: any) {
-      alert('İşlem eklenemedi: ' + err.message);
+      alert('İşlem eklenemedi: ' + (err.message || ''));
+      return false;
     }
   };
 
@@ -5514,8 +5572,17 @@ export default function App() {
   // 18. PERSONEL EKLEME & DÜZENLEME FORMU (PRİM / EK MASRAF DESTEKLİ)
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canEditMod('employees')) return;
+    if (!canEditMod('employees')) {
+      alert('Bu hesap personel kaydı yazamaz. Yönetici ile girin.');
+      return;
+    }
     if (!employeeFormData.fullName.trim()) return;
+    const pendingAmt = cleanNumber(newEmpTx.amount);
+    const pendingTitle = (newEmpTx.title || '').trim();
+    if (editingEmployeeId && pendingAmt > 0 && !pendingTitle) {
+      alert('Prim / avans tutarı yazıldı. Kaydolması için açıklama da yazın, sonra “Hareketi kaydet” veya Kaydet deyin.');
+      return;
+    }
 
     try {
     const bonusAmt = cleanNumber(employeeFormData.monthlyBonus);
@@ -5554,16 +5621,29 @@ export default function App() {
       error = retry.error;
     }
     if (error) throw error;
+    if (editingEmployeeId && pendingTitle && pendingAmt > 0) {
+      const txOk = await handleAddEmployeeTransaction(
+        editingEmployeeId,
+        newEmpTx.type,
+        pendingTitle,
+        pendingAmt,
+        Number(newEmpTx.inst) || 1,
+        newEmpTx.date,
+        true
+      );
+      if (!txOk) return;
+    }
     alert(
       missingColumn
         ? 'Personel kaydedildi. İşe girişin kalması için setup_employee_sgk.sql dosyasını SQL Editor’da bir kez Run deyin.'
         : editingEmployeeId
-          ? 'Personel bilgileri ve prim başarıyla güncellendi!'
+          ? 'Personel kartı kaydedildi.'
           : 'Yeni personel başarıyla kaydedildi!'
     );
 
       setIsEmployeeModalOpen(false);
       setEditingEmployeeId(null);
+      setNewEmpTx(emptyEmpTx);
       setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', employerSgk: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '', hireDate: '' });
       loadPortalData();
     } catch (err: any) {
@@ -6144,6 +6224,7 @@ export default function App() {
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection' || i.category === 'customer_advance').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
     { id: 'rental_settlements', label: 'Kiralık Araçlar', badge: dbRentalSettlements.length, icon: FileSpreadsheet },
+    { id: 'hal_saha', label: 'Hal Saha', badge: dbHalEntries.length, icon: Building2 },
     { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
     { id: 'users', label: 'Kullanıcılar', badge: portalUsers.length, icon: ShieldCheck },
   ];
@@ -6357,6 +6438,19 @@ export default function App() {
                   </div>
                 );
               })}
+              {canViewMod('hal_saha') && (
+                <button
+                  type="button"
+                  onClick={() => { setActiveTab('hal_saha'); setIsSidebarOpen(false); }}
+                  className={`w-full flex items-center gap-3 p-3 rounded-xl font-semibold ${activeTab === 'hal_saha' ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'}`}
+                >
+                  <Building2 className={`w-4 h-4 ${activeTab === 'hal_saha' ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                  Hal saha
+                  {dbHalEntries.length > 0 && (
+                    <span className="ml-auto text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md">{dbHalEntries.length}</span>
+                  )}
+                </button>
+              )}
             </nav>
             <div className="p-4 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-400 text-center">
               Tazeyol ERP v3.2 • Soğuk Zincir Lojistiği
@@ -6582,6 +6676,51 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {(() => {
+              const isHalKasaOpen = (e: any) => /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
+              const isHalCariOnly = (e: any) => /\[(AKTARIM-CARI|DRIVE-GIRIS)\]/.test(String(e.notes || ''));
+              const seferTutari = (dbHalEntries || []).reduce((s: number, e: any) => {
+                if (e.kind !== 'sefer') return s;
+                const bedel = cleanNumber(e.bedel);
+                return s + (e.has_vat ? Math.round(bedel * 1.2 * 100) / 100 : bedel);
+              }, 0);
+              const nakitCari = (dbHalEntries || []).filter((e: any) => !isHalKasaOpen(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
+              const nakitKasa = (dbHalEntries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
+              const teslim = (dbHalHandovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
+              const halCariKalan = Math.round((seferTutari - nakitCari) * 100) / 100;
+              const personelKasa = Math.round((nakitKasa - teslim) * 100) / 100;
+              return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab('hal_saha')}
+                className="bg-white px-4 py-3.5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-200 hover:shadow-md transition"
+              >
+                <span className="text-[11px] text-rose-700 font-semibold tracking-wider uppercase flex items-center gap-1">
+                  <Building2 className="w-3.5 h-3.5" /> Hal cari kalan
+                </span>
+                <div className="text-xl font-black text-rose-800 mt-1 tabular-nums">
+                  {halCariKalan.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </div>
+                <span className="text-[11px] text-slate-400 mt-0.5 block">Anlık hal alacağı · sefer − tahsilat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('hal_saha')}
+                className="bg-amber-50 px-4 py-3.5 rounded-2xl border border-amber-100 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition"
+              >
+                <span className="text-[11px] text-amber-900 font-semibold tracking-wider uppercase flex items-center gap-1">
+                  <Wallet className="w-3.5 h-3.5" /> Personel kasa
+                </span>
+                <div className="text-xl font-black text-amber-950 mt-1 tabular-nums">
+                  {personelKasa.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                </div>
+                <span className="text-[11px] text-amber-800/70 mt-0.5 block">Saha üzerindeki nakit · merkeze henüz alınmadı</span>
+              </button>
+            </div>
+              );
+            })()}
 
             {(() => {
               const girdi = Math.max(0, totalCollectedCash);
@@ -7746,6 +7885,7 @@ export default function App() {
                 onClick={() => {
                   setEditingEmployeeId(null);
                   setEmployeeFormData({ fullName: '', roleTitle: 'Kamyon Şoförü / Dağıtım', baseSalary: '', employerSgk: '', phone: '', iban: '', monthlyBonus: '', bonusDescription: '', monthlyAdvance: '', advanceDescription: '', hireDate: '' });
+                  setNewEmpTx(emptyEmpTx);
                   setIsEmployeeModalOpen(true);
                 }}
                 className="bg-[#009fe3] hover:bg-[#0087c2] text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 shadow-sm transition"
@@ -7987,6 +8127,7 @@ export default function App() {
                     monthlyAdvance: String(emp.monthly_advance || ''),
                    advanceDescription: emp.advance_description || ''
                     });
+                          setNewEmpTx(emptyEmpTx);
                           setIsEmployeeModalOpen(true);
                         }}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
@@ -8219,6 +8360,20 @@ export default function App() {
         )}
 
         {/* 8. ARAÇ FİLOSU */}
+        {activeTab === 'hal_saha' && canViewMod('hal_saha') && (
+          <HalSahaPage
+            firms={dbHalFirms}
+            entries={dbHalEntries}
+            handovers={dbHalHandovers}
+            plates={dbHalPlates}
+            canEdit={canEditMod('hal_saha')}
+            canTakeToCash={isAdmin}
+            formatDateTR={formatDateTR}
+            cleanNumber={cleanNumber}
+            onReload={loadPortalData}
+          />
+        )}
+
         {activeTab === 'fleet' && (
           <FleetPage
             vehicles={dbVehicles}
@@ -8983,10 +9138,17 @@ export default function App() {
                       <span className="text-sm font-bold text-slate-800 block">Yeni hareket ekle</span>
                       <span className="text-xs text-slate-500">Prim, münferit avans veya taksitli avans. Taksit sayısı yalnızca taksitli avansta kullanılır.</span>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div
+                      className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+                      onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                    >
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">İşlem türü</label>
-                        <select id="new_tx_type" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white font-medium">
+                        <select
+                          value={newEmpTx.type}
+                          onChange={e => setNewEmpTx({ ...newEmpTx, type: e.target.value as typeof newEmpTx.type })}
+                          className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white font-medium"
+                        >
                           <option value="bonus">Sefer / prim (maaşa ek)</option>
                           <option value="advance">Münferit avans (tek sefer kesilir)</option>
                           <option value="installment_advance">Taksitli avans (aylara bölünür)</option>
@@ -8995,23 +9157,39 @@ export default function App() {
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">Tarih</label>
                         <input
-                          id="new_tx_date"
                           type="date"
-                          defaultValue={new Date().toISOString().split('T')[0]}
+                          value={newEmpTx.date}
+                          onChange={e => setNewEmpTx({ ...newEmpTx, date: e.target.value })}
                           className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white font-medium text-slate-700"
                         />
                       </div>
                       <div className="sm:col-span-2">
                         <label className="block text-xs font-semibold text-slate-600 mb-1">Açıklama</label>
-                        <input id="new_tx_title" type="text" placeholder="Örn: Ankara seferi, ramazan avansı" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm" />
+                        <input
+                          type="text"
+                          value={newEmpTx.title}
+                          onChange={e => setNewEmpTx({ ...newEmpTx, title: e.target.value })}
+                          placeholder="Örn: Ankara seferi, ramazan avansı"
+                          className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm"
+                        />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">Tutar (TL)</label>
-                        <input id="new_tx_amount" type="text" placeholder="5000" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800" />
+                        <input
+                          type="text"
+                          value={newEmpTx.amount}
+                          onChange={e => setNewEmpTx({ ...newEmpTx, amount: e.target.value })}
+                          placeholder="5000"
+                          className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800"
+                        />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">Taksit sayısı</label>
-                        <select id="new_tx_inst" className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white">
+                        <select
+                          value={newEmpTx.inst}
+                          onChange={e => setNewEmpTx({ ...newEmpTx, inst: e.target.value })}
+                          className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white"
+                        >
                           <option value="1">1 (tek sefer)</option>
                           <option value="2">2 ay</option>
                           <option value="3">3 ay</option>
@@ -9024,26 +9202,15 @@ export default function App() {
                     <button
                       type="button"
                       onClick={async () => {
-                        const dateEl = document.getElementById('new_tx_date') as HTMLInputElement;
-                        const typeEl = document.getElementById('new_tx_type') as HTMLSelectElement;
-                        const titleEl = document.getElementById('new_tx_title') as HTMLInputElement;
-                        const amountEl = document.getElementById('new_tx_amount') as HTMLInputElement;
-                        const instEl = document.getElementById('new_tx_inst') as HTMLSelectElement;
-
-                        const dVal = dateEl?.value || new Date().toISOString().split('T')[0];
-                        const tVal = typeEl.value as any;
-                        const titleVal = titleEl.value;
-                        const amtVal = cleanNumber(amountEl.value);
-                        const instVal = Number(instEl.value) || 1;
-
-                        if (!titleVal || amtVal <= 0) {
-                          alert('Lütfen geçerli bir açıklama ve 0\'dan büyük bir tutar girin.');
-                          return;
-                        }
-                        await handleAddEmployeeTransaction(editingEmployeeId, tVal, titleVal, amtVal, instVal, dVal);
-                        titleEl.value = '';
-                        amountEl.value = '';
-                        instEl.value = '1';
+                        if (!editingEmployeeId) return;
+                        await handleAddEmployeeTransaction(
+                          editingEmployeeId,
+                          newEmpTx.type,
+                          newEmpTx.title,
+                          cleanNumber(newEmpTx.amount),
+                          Number(newEmpTx.inst) || 1,
+                          newEmpTx.date
+                        );
                       }}
                       className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold transition"
                     >
@@ -11249,7 +11416,7 @@ export default function App() {
                   <h3 className="font-bold text-slate-900">Kullanıcı yetkileri</h3>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-3xl">
                     <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın. Otomatik açılmazsa aynı bilgileri Authentication → Users → Add user içine bir kez girersiniz; yetki yine bu listeden verilir.
-                    <b>Yönetici</b> her şey. <b>Rapor</b> görür işlem yok. <b>Personel</b> yalnız işaretlenen menüler. Yalnız filo için: Personel oluştur → şablon <b>Sadece araç filosu</b> (kiralık grup gerekmez).
+                    Her satırda menüler <b>Kapalı / Görür / İşler</b> olarak görünür: yönetici tümünde İşler, rapor tümünde Görür (kilitli). Personelde her menü ayrı seçilir. Gece saha için Hal saha = İşler.
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -11379,35 +11546,45 @@ export default function App() {
                             ))}
                           </div>
                         </div>
-                        <div>
-                          <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Menüler · kapalı / görür / işler</div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                            {PORTAL_MODULES.map(m => (
-                              <label key={m.id} className="flex items-center justify-between gap-2 text-[11px] px-2 py-1 rounded-lg bg-slate-50">
-                                <span className="text-slate-700">{m.label}</span>
-                                <select
-                                  value={access[m.id] || ''}
-                                  onChange={e => {
-                                    const next = { ...access };
-                                    const level = e.target.value as '' | AccessLevel;
-                                    if (!level) delete next[m.id];
-                                    else next[m.id] = level;
-                                    patchDraft({ access: next });
-                                  }}
-                                  className="text-[11px] font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white"
-                                >
-                                  <option value="">Kapalı</option>
-                                  <option value="view">Görür</option>
-                                  <option value="edit">İşler</option>
-                                </select>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
                       </>
                     )}
-                    {draft.role === 'reporter' && <p className="text-[11px] text-slate-500">Tüm menüler açık, kayıt düğmeleri kapalı.</p>}
-                    {draft.role === 'admin' && <p className="text-[11px] text-slate-500">Tüm menüler ve işlemler açık.</p>}
+                    <div>
+                      <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Menüler · kapalı / görür / işler</div>
+                      <p className="text-[10px] text-slate-500 mb-1">
+                        {draft.role === 'saha'
+                          ? 'Personelde menü kapalıysa o kişi görmez. Gece saha için Hal saha = İşler; yalnız bakacak hesapta Görür veya Kapalı.'
+                          : draft.role === 'reporter'
+                            ? 'Rapor hesabında tüm menüler Görür, kayıt yok. Bu kilit rolün kendisinden gelir.'
+                            : 'Yöneticide tüm menüler İşler. Bu kilit rolün kendisinden gelir.'}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                        {(() => {
+                          const shown = displayAccess(draft.role, access);
+                          const locked = draft.role !== 'saha';
+                          return PORTAL_MODULES.map(m => (
+                            <label key={m.id} className="flex items-center justify-between gap-2 text-[11px] px-2 py-1 rounded-lg bg-slate-50">
+                              <span className="text-slate-700">{m.label}</span>
+                              <select
+                                value={shown[m.id] || ''}
+                                disabled={locked}
+                                onChange={e => {
+                                  const next = { ...access };
+                                  const level = e.target.value as '' | AccessLevel;
+                                  if (!level) delete next[m.id];
+                                  else next[m.id] = level;
+                                  patchDraft({ access: next });
+                                }}
+                                className="text-[11px] font-semibold border border-slate-200 rounded px-1 py-0.5 bg-white disabled:bg-slate-100 disabled:text-slate-500"
+                              >
+                                <option value="">Kapalı</option>
+                                <option value="view">Görür</option>
+                                <option value="edit">İşler</option>
+                              </select>
+                            </label>
+                          ));
+                        })()}
+                      </div>
+                    </div>
                     <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
                       <button
                         type="button"

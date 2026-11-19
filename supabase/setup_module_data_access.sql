@@ -41,7 +41,7 @@ begin
       ('payment_batches', array['payments']),
       ('subcontractors', array['subcontractors','sub_accounts','sub_ibans','payments']),
       ('subcontractor_ledger', array['sub_accounts']),
-      ('vehicles', array['fleet','profitability','plate_rentals']),
+      ('vehicles', array['fleet','profitability','plate_rentals','hal_saha']),
       ('vehicle_monthly_inputs', array['profitability']),
       ('plate_rentals', array['plate_rentals']),
       ('rental_settlements', array['rental_settlements']),

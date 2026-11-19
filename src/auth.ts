@@ -18,7 +18,8 @@ export const PORTAL_MODULES = [
   { id: 'employees', label: 'Personel ve bordro' },
   { id: 'credit_cards', label: 'Kredi kartları' },
   { id: 'general_expenses', label: 'Genel giderler' },
-  { id: 'income_report', label: 'Gelir gider raporu' }
+  { id: 'income_report', label: 'Gelir gider raporu' },
+  { id: 'hal_saha', label: 'Hal saha' }
 ] as const;
 
 export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];
@@ -40,6 +41,20 @@ export function roleCanView(
   return a === 'view' || a === 'edit';
 }
 
+/** Kullanıcılar ekranı: yönetici İşler, rapor Görür, personel kayıtlı yetki. */
+export function displayAccess(
+  role: UserRole | null,
+  stored: Record<string, AccessLevel>
+): Record<string, AccessLevel | ''> {
+  const out: Record<string, AccessLevel | ''> = {};
+  PORTAL_MODULES.forEach(m => {
+    if (role === 'admin') out[m.id] = 'edit';
+    else if (role === 'reporter') out[m.id] = 'view';
+    else out[m.id] = stored[m.id] || '';
+  });
+  return out;
+}
+
 export function needsFinanceData(role: UserRole | null, access: Record<string, AccessLevel>) {
   return FINANCE_DATA_MODULES.some(m => roleCanView(role, access, m));
 }
@@ -47,6 +62,7 @@ export function needsFinanceData(role: UserRole | null, access: Record<string, A
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
   { id: 'filo_sadece', label: 'Sadece araç filosu', access: { fleet: 'edit' } },
+  { id: 'hal_saha_sadece', label: 'Hal saha giriş (gece sefer yazar)', access: { hal_saha: 'edit' } },
   { id: 'arac', label: 'Araç sorumlusu (filo + plaka + karlılık)', access: { fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
   { id: 'on_muhasebe', label: 'Ön muhasebe', access: {
     sales_customers: 'edit', customers: 'edit', collections: 'edit',
