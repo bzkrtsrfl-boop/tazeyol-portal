@@ -877,6 +877,22 @@ export default function App() {
     if (!window.confirm(`${user.email} için şifre değişecek. Bu kişi yeni şifreyle girer. Devam?`)) return;
     setResetPwBusyId(user.id);
     setResetPwOkId(null);
+    const { error: rpcErr } = await supabase.rpc('admin_reset_portal_password', {
+      p_user_id: user.id,
+      p_password: password
+    });
+    if (!rpcErr) {
+      setResetPwBusyId(null);
+      setResetPwById(prev => ({ ...prev, [user.id]: '' }));
+      setResetPwOkId(user.id);
+      return;
+    }
+    const missingRpc = /admin_reset_portal_password|does not exist|schema cache/i.test(rpcErr.message || '');
+    if (!missingRpc) {
+      setResetPwBusyId(null);
+      alert(rpcErr.message);
+      return;
+    }
     const { data, error } = await supabase.functions.invoke('create-portal-user', {
       body: { action: 'reset', user_id: user.id, password }
     });
@@ -884,7 +900,7 @@ export default function App() {
     if (error || data?.error) {
       const msg = await readPortalUserFnError(error, data, 'Şifre yazılamadı.');
       if (isPortalUserFnMissing(msg)) {
-        alert('Şifre sıfırlama portaldan henüz açık değil. Function canlıya alınmalı.');
+        alert('Şifre sıfırlama için setup_portal_password.sql dosyasını SQL Editor’da bir kez Run edin. Sonra tekrar deneyin.');
         return;
       }
       alert(msg);

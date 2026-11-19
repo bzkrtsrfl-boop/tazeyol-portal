@@ -279,8 +279,8 @@ export default function HalSahaPage({
   };
 
   const removeEntry = async (row: any) => {
-    if (!canEdit || locked(row)) {
-      alert('2 günü geçmiş kayıt silinemez.');
+    if (!canTakeToCash) {
+      alert('Saha kaydı silemez. Yanlışsa son 2 gün içinde düzeltin; silmeyi yönetici yapar.');
       return;
     }
     if (!window.confirm('Bu satır silinsin mi? Diğer sefer portalına işlemişseniz orayı ayrıca düzeltin.')) return;
@@ -369,7 +369,7 @@ export default function HalSahaPage({
         <div>
           <h3 className="font-bold text-lg text-slate-900">Hal saha</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gece saha sefer ve bedeli buraya yazar. Girilmiş seferleri her hesap görür; değiştirme yalnızca saha giriş yetkisi ve yöneticide. Diğer sefer portalına otomatik gitmez. Nakit, yönetici merkeze alana kadar şirket kasasına girmez.
+            Gece saha sefer ve bedeli buraya yazar. Saha kaydı silemez; yalnız son 2 günü düzeltir. Daha eski satırı yönetici değiştirir veya siler. Diğer sefer portalına otomatik gitmez. Nakit, yönetici merkeze alana kadar şirket kasasına girmez.
           </p>
         </div>
         <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold">
@@ -487,10 +487,10 @@ export default function HalSahaPage({
                     {canEdit && (
                       <td className="py-2 px-3 text-right whitespace-nowrap">
                         {lock ? <span className="text-[10px] text-slate-400">kilit</span> : (
-                          <>
-                            <button type="button" onClick={() => startEdit(e)} className="p-1 text-blue-600"><Edit2 className="w-3.5 h-3.5 inline" /></button>
-                            <button type="button" onClick={() => removeEntry(e)} className="p-1 text-rose-600"><Trash2 className="w-3.5 h-3.5 inline" /></button>
-                          </>
+                          <button type="button" onClick={() => startEdit(e)} className="p-1 text-blue-600"><Edit2 className="w-3.5 h-3.5 inline" /></button>
+                        )}
+                        {canTakeToCash && (
+                          <button type="button" onClick={() => removeEntry(e)} className="p-1 text-rose-600"><Trash2 className="w-3.5 h-3.5 inline" /></button>
                         )}
                       </td>
                     )}

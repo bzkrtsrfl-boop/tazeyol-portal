@@ -66,10 +66,22 @@ create policy hal_entries_ins on public.hal_entries
   for insert to authenticated with check (public.can_edit_module('hal_saha'));
 create policy hal_entries_upd on public.hal_entries
   for update to authenticated
-  using (public.can_edit_module('hal_saha'))
-  with check (public.can_edit_module('hal_saha'));
+  using (
+    public.is_admin()
+    or (
+      public.can_edit_module('hal_saha')
+      and entry_date >= (current_date - 2)
+    )
+  )
+  with check (
+    public.is_admin()
+    or (
+      public.can_edit_module('hal_saha')
+      and entry_date >= (current_date - 2)
+    )
+  );
 create policy hal_entries_del on public.hal_entries
-  for delete to authenticated using (public.can_edit_module('hal_saha'));
+  for delete to authenticated using (public.is_admin());
 
 create policy hal_handovers_select on public.hal_handovers
   for select to authenticated using (public.can_view_module('hal_saha'));
