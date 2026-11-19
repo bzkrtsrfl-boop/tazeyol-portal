@@ -16,7 +16,13 @@ as $$
         role in ('admin', 'reporter')
         or (
           role = 'saha'
-          and coalesce(portal_access ->> mod, '') in ('view', 'edit')
+          and (
+            coalesce(portal_access ->> mod, '') in ('view', 'edit')
+            or (
+              mod = 'arac_filosu'
+              and coalesce(portal_access ->> 'fleet', '') in ('view', 'edit')
+            )
+          )
         )
       )
   );

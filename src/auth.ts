@@ -39,7 +39,7 @@ export function roleCanView(
 ) {
   if (role === 'admin' || role === 'reporter') return true;
   if (role !== 'saha') return false;
-  const a = access[mod];
+  const a = access[mod] || (mod === 'arac_filosu' ? access.fleet : undefined);
   return a === 'view' || a === 'edit';
 }
 
@@ -63,7 +63,7 @@ export function needsFinanceData(role: UserRole | null, access: Record<string, A
 
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
-  { id: 'filo_sadece', label: 'Sadece iç filo', access: { fleet: 'edit' } },
+  { id: 'filo_sadece', label: 'Sadece iç filo', access: { fleet: 'edit', arac_filosu: 'edit' } },
   { id: 'arac_filosu_sadece', label: 'Araç filosu künye', access: { arac_filosu: 'edit' } },
   { id: 'hal_saha_sadece', label: 'Hal saha giriş (gece sefer yazar)', access: { hal_saha: 'edit' } },
   { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit' } },

@@ -148,3 +148,58 @@ join public.fleet_vehicles f
   on lower(replace(trim(f.plate), ' ', '')) = lower(replace(trim(p.plate), ' ', ''))
 where coalesce(p.depot, '') <> ''
 on conflict (vehicle_id, kind, group_id) do nothing;
+
+-- Eski “Araç filosu” (fleet) yetkisi künye menüsünü de açsın.
+create or replace function public.can_view_module(mod text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles
+    where id = auth.uid()
+      and (
+        role in ('admin', 'reporter')
+        or (
+          role = 'saha'
+          and (
+            coalesce(portal_access ->> mod, '') in ('view', 'edit')
+            or (
+              mod = 'arac_filosu'
+              and coalesce(portal_access ->> 'fleet', '') in ('view', 'edit')
+            )
+          )
+        )
+      )
+  );
+$$;
+
+create or replace function public.can_edit_module(mod text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles
+    where id = auth.uid()
+      and (
+        role = 'admin'
+        or (
+          role = 'saha'
+          and (
+            coalesce(portal_access ->> mod, '') = 'edit'
+            or (
+              mod = 'arac_filosu'
+              and coalesce(portal_access ->> 'fleet', '') = 'edit'
+            )
+          )
+        )
+      )
+  );
+$$;

@@ -1375,13 +1375,14 @@ export default function App() {
     if (mod === 'users') return isAdmin;
     if (isAdmin || isReporter) return true;
     if (mod === 'overview') return false;
-    const a = portalAccess[mod];
+    const a = portalAccess[mod] || (mod === 'arac_filosu' ? portalAccess.fleet : undefined);
     return a === 'view' || a === 'edit';
   };
   const canEditMod = (mod: string) => {
     if (mod === 'users') return isAdmin;
     if (isAdmin) return true;
     if (isReporter) return false;
+    if (mod === 'arac_filosu') return portalAccess.arac_filosu === 'edit' || portalAccess.fleet === 'edit';
     return portalAccess[mod] === 'edit';
   };
 
