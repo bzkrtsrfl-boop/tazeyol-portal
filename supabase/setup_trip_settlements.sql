@@ -128,17 +128,18 @@ drop policy if exists trip_settlements_del on public.trip_settlements;
 create policy trip_fleet_plates_select on public.trip_fleet_plates
   for select to authenticated
   using (
-    public.can_view_module('trip_settlements')
-    and (
-      public.is_admin()
-      or public.is_reporter()
-      or public.can_see_filo_depot(depot)
+    public.is_admin()
+    or public.is_reporter()
+    or public.can_view_module('arac_filosu')
+    or (
+      public.can_view_module('trip_settlements')
+      and public.can_see_filo_depot(depot)
     )
   );
 create policy trip_fleet_plates_write on public.trip_fleet_plates
   for all to authenticated
-  using (public.is_admin())
-  with check (public.is_admin());
+  using (public.is_admin() or public.can_edit_module('arac_filosu'))
+  with check (public.is_admin() or public.can_edit_module('arac_filosu'));
 
 create policy trip_settlements_select on public.trip_settlements
   for select to authenticated

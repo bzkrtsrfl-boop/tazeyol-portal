@@ -20,11 +20,7 @@ as $$
             coalesce(portal_access ->> mod, '') in ('view', 'edit')
             or (
               mod = 'arac_filosu'
-              and (
-                coalesce(portal_access ->> 'fleet', '') in ('view', 'edit')
-                or coalesce(portal_access ->> 'rental_settlements', '') in ('view', 'edit')
-                or coalesce(portal_access ->> 'trip_settlements', '') in ('view', 'edit')
-              )
+              and coalesce(portal_access ->> 'fleet', '') in ('view', 'edit')
             )
           )
         )

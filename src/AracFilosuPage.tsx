@@ -324,20 +324,26 @@ export default function AracFilosuPage({
 
   const syncFiloPlates = async (plate: string, driver: string | null, contractor: string, filoGroups: string[]) => {
     const key = plateKeyArac(plate);
-    const { data: existing } = await supabase.from('trip_fleet_plates').select('id, plate, depot');
+    const { data: existing, error: readErr } = await supabase.from('trip_fleet_plates').select('id, plate, depot');
+    if (readErr) return readErr.message;
     const mine = (existing || []).filter((p: any) => plateKeyArac(p.plate) === key);
     const want = new Set(filoGroups);
     for (const row of mine) {
       if (!want.has(row.depot)) {
-        await supabase.from('trip_fleet_plates').delete().eq('id', row.id);
+        const { error } = await supabase.from('trip_fleet_plates').delete().eq('id', row.id);
+        if (error) return error.message;
       }
     }
     for (const depot of filoGroups) {
       const hit = mine.find((p: any) => p.depot === depot);
       const payload = { plate: key, driver, contractor_name: contractor, depot, is_active: true };
-      if (hit) await supabase.from('trip_fleet_plates').update(payload).eq('id', hit.id);
-      else await supabase.from('trip_fleet_plates').insert([payload]);
+      const q = hit
+        ? supabase.from('trip_fleet_plates').update(payload).eq('id', hit.id)
+        : supabase.from('trip_fleet_plates').insert([payload]);
+      const { error } = await q;
+      if (error) return error.message;
     }
+    return null;
   };
 
   const save = async () => {
@@ -347,10 +353,6 @@ export default function AracFilosuPage({
     const contractor_name = form.contractor_name.trim();
     if (!plate || !contractor_name || !form.job_code || !form.place_code || !form.vehicle_type || !form.cooling) {
       alert('Plaka, ruhsat sahibi, iş/yer kodu, tip ve soğutma zorunlu.');
-      return;
-    }
-    if (!form.filoGroups.length && !form.kiralikGroups.length) {
-      alert('En az bir mutabakat grubu seçin.');
       return;
     }
     const keepSeq = editingId
@@ -416,7 +418,7 @@ export default function AracFilosuPage({
       }
       vehicleId = data.id;
     }
-    if (isAdmin) {
+    if (canEdit) {
       await supabase.from('fleet_vehicle_assignments').delete().eq('vehicle_id', vehicleId);
       const rows = [
         ...form.filoGroups.map(group_id => ({ vehicle_id: vehicleId, kind: 'filo', group_id })),
@@ -430,12 +432,13 @@ export default function AracFilosuPage({
           return;
         }
       }
-      await syncFiloPlates(plate, payload.driver_name, contractor_name, form.filoGroups);
-    } else {
-      await supabase.from('trip_fleet_plates').update({
-        driver: payload.driver_name,
-        contractor_name
-      }).eq('plate', plate);
+      const syncErr = await syncFiloPlates(plate, payload.driver_name, contractor_name, form.filoGroups);
+      if (syncErr) {
+        setBusy(false);
+        alert('Künye kaydedildi ama Filo plakası yazılamadı. setup_arac_filosu.sql dosyasını Run edin.\n' + syncErr);
+        await onReload();
+        return;
+      }
     }
     setBusy(false);
     setOpen(false);
@@ -484,7 +487,7 @@ export default function AracFilosuPage({
         <div>
           <h3 className="font-bold text-lg text-slate-900">Araç Filosu</h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Tüm plakalar burada tanımlanır, sonra Filo ve kiralık mutabakatına bağlanır. Listeye plaka ekleme/silme yalnız yönetici. İşler yetkisi Değiştir ile künyeyi günceller.
+            Tüm plakalar burada tanımlanır. İşler Değiştir ile künyeyi ve Filo/kiralık grubunu günceller; grup seçmeden de kaydedebilir. Plaka ekleme/silme yalnız yönetici.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -690,24 +693,25 @@ export default function AracFilosuPage({
               </label>
             </div>
             <div className="text-xs space-y-2">
-              <div className="font-bold text-slate-600">Filo mutabakatı (birden fazla)</div>
+              <div className="font-bold text-slate-600">Filo mutabakatı (isteğe bağlı)</div>
               <div className="flex flex-wrap gap-2">
-                {catalog.map(d => (
-                  <label key={d.id} className={`px-2 py-1 rounded-lg border font-semibold ${isAdmin ? 'cursor-pointer' : 'cursor-default opacity-80'} ${form.filoGroups.includes(d.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white'}`}>
-                    <input type="checkbox" className="hidden" disabled={!isAdmin} checked={form.filoGroups.includes(d.id)} onChange={() => isAdmin && setForm({ ...form, filoGroups: toggle(form.filoGroups, d.id) })} />
-                    {d.label}{isFiloSharedDepot(d) ? ' · ortak' : ''}
+                {catalog.filter(d => !isFiloSharedDepot(d) && d.id !== 'gross').map(d => (
+                  <label key={d.id} className={`px-2 py-1 rounded-lg border font-semibold ${canEdit ? 'cursor-pointer' : 'cursor-default opacity-80'} ${form.filoGroups.includes(d.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white'}`}>
+                    <input type="checkbox" className="hidden" disabled={!canEdit} checked={form.filoGroups.includes(d.id)} onChange={() => canEdit && setForm({ ...form, filoGroups: toggle(form.filoGroups, d.id) })} />
+                    {d.label}
                   </label>
                 ))}
               </div>
-              <div className="font-bold text-slate-600 pt-1">Kiralık mutabakatı (birden fazla)</div>
+              <div className="font-bold text-slate-600 pt-1">Kiralık mutabakatı (isteğe bağlı)</div>
               <div className="flex flex-wrap gap-2">
                 {RENTAL_WORK_GROUPS.map(g => (
-                  <label key={g.id} className={`px-2 py-1 rounded-lg border font-semibold ${isAdmin ? 'cursor-pointer' : 'cursor-default opacity-80'} ${form.kiralikGroups.includes(g.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white'}`}>
-                    <input type="checkbox" className="hidden" disabled={!isAdmin} checked={form.kiralikGroups.includes(g.id)} onChange={() => isAdmin && setForm({ ...form, kiralikGroups: toggle(form.kiralikGroups, g.id) })} />
+                  <label key={g.id} className={`px-2 py-1 rounded-lg border font-semibold ${canEdit ? 'cursor-pointer' : 'cursor-default opacity-80'} ${form.kiralikGroups.includes(g.id) ? 'bg-[#009fe3] text-white border-[#009fe3]' : 'bg-white'}`}>
+                    <input type="checkbox" className="hidden" disabled={!canEdit} checked={form.kiralikGroups.includes(g.id)} onChange={() => canEdit && setForm({ ...form, kiralikGroups: toggle(form.kiralikGroups, g.id) })} />
                     {g.label}
                   </label>
                 ))}
               </div>
+              <p className="text-[11px] text-slate-500">Hiç işaretlemeden Kaydet olur. İşaretlenen grup Filo veya kiralık listesine düşer.</p>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => setOpen(false)} className="px-3 py-2 rounded-xl border text-xs font-bold">Vazgeç</button>

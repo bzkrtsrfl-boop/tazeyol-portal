@@ -169,11 +169,7 @@ as $$
             coalesce(portal_access ->> mod, '') in ('view', 'edit')
             or (
               mod = 'arac_filosu'
-              and (
-                coalesce(portal_access ->> 'fleet', '') in ('view', 'edit')
-                or coalesce(portal_access ->> 'rental_settlements', '') in ('view', 'edit')
-                or coalesce(portal_access ->> 'trip_settlements', '') in ('view', 'edit')
-              )
+              and coalesce(portal_access ->> 'fleet', '') in ('view', 'edit')
             )
           )
         )
@@ -200,14 +196,30 @@ as $$
             coalesce(portal_access ->> mod, '') = 'edit'
             or (
               mod = 'arac_filosu'
-              and (
-                coalesce(portal_access ->> 'fleet', '') = 'edit'
-                or coalesce(portal_access ->> 'rental_settlements', '') = 'edit'
-                or coalesce(portal_access ->> 'trip_settlements', '') = 'edit'
-              )
+              and coalesce(portal_access ->> 'fleet', '') = 'edit'
             )
           )
         )
       )
   );
 $$;
+
+drop policy if exists trip_fleet_plates_select on public.trip_fleet_plates;
+drop policy if exists trip_fleet_plates_write on public.trip_fleet_plates;
+
+create policy trip_fleet_plates_select on public.trip_fleet_plates
+  for select to authenticated
+  using (
+    public.is_admin()
+    or public.is_reporter()
+    or public.can_view_module('arac_filosu')
+    or (
+      public.can_view_module('trip_settlements')
+      and public.can_see_filo_depot(depot)
+    )
+  );
+
+create policy trip_fleet_plates_write on public.trip_fleet_plates
+  for all to authenticated
+  using (public.is_admin() or public.can_edit_module('arac_filosu'))
+  with check (public.is_admin() or public.can_edit_module('arac_filosu'));

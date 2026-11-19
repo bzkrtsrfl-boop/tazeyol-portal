@@ -38,9 +38,8 @@ export function moduleAccessLevel(
 ): AccessLevel | '' {
   const direct = access[mod];
   if (direct === 'view' || direct === 'edit') return direct;
-  if (mod === 'arac_filosu') {
-    const from = access.fleet || access.rental_settlements || access.trip_settlements;
-    if (from === 'view' || from === 'edit') return from;
+  if (mod === 'arac_filosu' && (access.fleet === 'view' || access.fleet === 'edit')) {
+    return access.fleet;
   }
   return '';
 }
@@ -75,11 +74,11 @@ export function needsFinanceData(role: UserRole | null, access: Record<string, A
 }
 
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
-  { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit', arac_filosu: 'edit' } },
+  { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
   { id: 'filo_sadece', label: 'Sadece iç filo', access: { fleet: 'edit', arac_filosu: 'edit' } },
   { id: 'arac_filosu_sadece', label: 'Araç filosu künye', access: { arac_filosu: 'edit' } },
   { id: 'hal_saha_sadece', label: 'Hal saha giriş (gece sefer yazar)', access: { hal_saha: 'edit' } },
-  { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit', arac_filosu: 'edit' } },
+  { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit' } },
   { id: 'arac', label: 'Araç sorumlusu (künye + iç filo + plaka + karlılık)', access: { arac_filosu: 'edit', fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
   { id: 'on_muhasebe', label: 'Ön muhasebe', access: {
     sales_customers: 'edit', customers: 'edit', collections: 'edit',

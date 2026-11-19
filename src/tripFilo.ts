@@ -90,12 +90,9 @@ export function filoDepotSlug(label: string) {
 
 export function filoVisibleDepots(role: string | null, assigned: string[], rows?: any[] | null) {
   const all = mergeFiloDepots(rows);
-  const work = all.filter(d => !isFiloSharedDepot(d));
-  const shared = all.filter(d => isFiloSharedDepot(d));
-  if (role === 'admin' || role === 'reporter') return [...work, ...shared];
-  const mine = work.filter(d => assigned.includes(d.id));
-  if (!mine.length) return assigned.includes(FILO_ORTAK_ID) ? shared : [];
-  return [...mine, ...shared];
+  const work = all.filter(d => !isFiloSharedDepot(d) && d.id !== 'gross');
+  if (role === 'admin' || role === 'reporter') return work;
+  return work.filter(d => assigned.includes(d.id));
 }
 
 /** Ayın 5'inde kapanır: Ekim satırı 5 Kasım'dan itibaren saha yazamaz. */

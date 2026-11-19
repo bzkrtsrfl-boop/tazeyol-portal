@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Edit2, Trash2, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Edit2, Search, Trash2, X } from 'lucide-react';
 import { supabase } from './supabase';
 import {
   filoDepotLabel,
@@ -41,6 +41,10 @@ export default function TripSettlementsPage({
 }: Props) {
   const catalog = mergeFiloDepots(allDepots);
   const visible = depots?.length ? depots : catalog;
+  const topDepots = catalog.filter(d => d.id === 'omerli' || d.id === 'konacik' || d.id === 'pelitli');
+  const topCards = (role === 'admin' || role === 'reporter')
+    ? topDepots
+    : topDepots.filter(d => visible.some(v => v.id === d.id));
   const todayYm = new Date().toISOString().slice(0, 7);
   const [ym, setYm] = useState(todayYm);
   const [busy, setBusy] = useState(false);
@@ -50,6 +54,14 @@ export default function TripSettlementsPage({
   const [editingPlateId, setEditingPlateId] = useState<string | null>(null);
   const [depotName, setDepotName] = useState('');
   const [depotEdits, setDepotEdits] = useState<Record<string, string>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [contractorFilter, setContractorFilter] = useState('');
+
+  useEffect(() => {
+    setSelectedId(null);
+    setDrafts({});
+  }, [depot, ym]);
 
   const money = (n: number) => (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const sahaLocked = role === 'saha' && tripMonthLockedForSaha(ym);
@@ -80,9 +92,24 @@ export default function TripSettlementsPage({
       });
   }, [depotPlates, monthByPlate]);
 
+  const contractors = useMemo(() => {
+    const names = [...new Set(listed.map(it => String(it.plate.contractor_name || '').trim()).filter(Boolean))];
+    return names.sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [listed]);
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLocaleUpperCase('tr-TR');
+    return listed.filter(it => {
+      if (contractorFilter && String(it.plate.contractor_name || '').trim() !== contractorFilter) return false;
+      if (!term) return true;
+      const blob = `${it.plate.plate || ''} ${it.plate.driver || ''} ${it.plate.contractor_name || ''}`.toLocaleUpperCase('tr-TR');
+      return blob.includes(term);
+    });
+  }, [listed, search, contractorFilter]);
+
   const groups = useMemo(() => {
-    const map = new Map<string, typeof listed>();
-    listed.forEach(item => {
+    const map = new Map<string, typeof filtered>();
+    filtered.forEach(item => {
       const k = String(item.plate.contractor_name || '').trim() || '—';
       const arr = map.get(k) || [];
       arr.push(item);
@@ -94,24 +121,29 @@ export default function TripSettlementsPage({
       fuel: items.reduce((s, it) => s + cleanNumber(it.row?.fuel_amount), 0),
       total: items.reduce((s, it) => s + cleanNumber(it.row?.total_amount), 0)
     }));
-  }, [listed, cleanNumber]);
+  }, [filtered, cleanNumber]);
 
-  const depotOrder = useMemo(() => visible.map(d => d.id), [visible]);
   const labelOf = (id: string) => filoDepotLabel(id, catalog);
+  const topIds = useMemo(() => new Set(topCards.map(d => d.id)), [topCards]);
 
   const monthDepotTotals = useMemo(() => {
     const map: Record<string, { fuel: number; total: number }> = {};
-    depotOrder.forEach(id => { map[id] = { fuel: 0, total: 0 }; });
+    topCards.forEach(d => { map[d.id] = { fuel: 0, total: 0 }; });
     (rows || []).forEach((r: any) => {
       if (String(r.year_month || '').slice(0, 7) !== ym) return;
       const d = String(r.depot || '');
+      if (!topIds.has(d)) return;
       if (!map[d]) map[d] = { fuel: 0, total: 0 };
       map[d].fuel += cleanNumber(r.fuel_amount);
       map[d].total += cleanNumber(r.total_amount);
     });
     const grand = Object.values(map).reduce((a, v) => ({ fuel: a.fuel + v.fuel, total: a.total + v.total }), { fuel: 0, total: 0 });
     return { map, grand };
-  }, [rows, ym, depotOrder, cleanNumber]);
+  }, [rows, ym, topCards, topIds, cleanNumber]);
+
+  const selected = listed.find(it => it.plate.id === selectedId) || null;
+  const selectedKey = selected ? String(selected.plate.plate || '').toUpperCase().replace(/\s+/g, '') : '';
+  const entryCls = 'w-full px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-sm font-semibold text-right tabular-nums disabled:bg-slate-100 disabled:border-slate-200';
 
   const valFor = (plate: string, field: 'fuel' | 'total', current: any) => {
     const d = drafts[plate];
@@ -295,30 +327,13 @@ export default function TripSettlementsPage({
   );
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-      <div className="flex flex-col sm:flex-row justify-between gap-3 pb-4 border-b border-slate-100">
-        <div>
-          <h3 className="font-bold text-lg text-slate-900">Filo · {labelOf(depot)}</h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Saha yakıt ve toplam yazar; sonraki ayın 5’inde kilitlenir. Alkan satırındaki yakıt ve toplam, Öz mal kârlılığa gider ve orada elle değiştirilmez.
-          </p>
-          {sahaLocked && <p className="text-xs text-amber-800 mt-1 font-semibold">Bu ay kilitli (ayın 5’i geçti). Yalnız görüntü.</p>}
-        </div>
-        <div className="flex flex-wrap gap-2 items-end">
-          <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold">
-            Ay
-            <input type="month" value={ym} onChange={e => { setYm(e.target.value); setDrafts({}); }} className="bg-transparent outline-none font-bold" />
-          </label>
-          {isAdmin && (
-            <button type="button" onClick={() => setTab(tab === 'tanim' ? 'list' : 'tanim')} className="px-3 py-2 rounded-xl border text-xs font-bold">
-              {tab === 'tanim' ? 'Listeye dön' : 'Plaka ve depolar'}
-            </button>
-          )}
-        </div>
-      </div>
-
+    <div className="space-y-3">
       {tab === 'tanim' && isAdmin && (
-        <div className="space-y-3">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="flex justify-end">
+            <button type="button" onClick={() => setTab('list')} className="px-3 py-1.5 rounded-lg border text-xs font-bold">Listeye dön</button>
+          </div>
+          <div className="space-y-3">
           <div className="p-3 rounded-xl bg-slate-50 border space-y-2">
             <div className="text-xs font-bold text-slate-700">Depolar</div>
             <div className="space-y-2">
@@ -407,98 +422,162 @@ export default function TripSettlementsPage({
             </table>
             <p className="text-[11px] text-slate-500 mt-2">Sarı satır: depo yok. Plakayı Araç Filosu’ndan tanımlayıp depoya atayın.</p>
           </div>
+          </div>
         </div>
       )}
 
       {tab === 'list' && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-xs">
-            {depotOrder.map(id => {
-              const t = monthDepotTotals.map[id] || { fuel: 0, total: 0 };
-              const on = id === depot;
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+            {topCards.map(d => {
+              const t = monthDepotTotals.map[d.id] || { fuel: 0, total: 0 };
+              const on = d.id === depot;
               return (
                 <div
-                  key={id}
+                  key={d.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => onSelectDepot?.(id)}
-                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelectDepot?.(id); }}
-                  className={`border rounded-xl p-3 text-left ${onSelectDepot ? 'cursor-pointer' : ''} ${on ? 'border-slate-900 ring-1 ring-slate-900' : 'border-slate-200'}`}
+                  onClick={() => onSelectDepot?.(d.id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelectDepot?.(d.id); }}
+                  className={`bg-white rounded-2xl p-3 text-left border ${onSelectDepot ? 'cursor-pointer' : ''} ${on ? 'border-slate-900 ring-1 ring-slate-900' : 'border-slate-200'}`}
                 >
-                  <span className="text-slate-500 font-semibold block">{labelOf(id)}{on ? ' · bu depo' : ''}</span>
+                  <span className="text-slate-500 font-semibold block">{d.label}{on ? ' · bu depo' : ''}</span>
                   <div className="mt-1 text-slate-500">Yakıt <span className="font-black text-slate-900">{money(t.fuel)} ₺</span></div>
                   <div className="text-slate-500">Toplam <span className="font-black text-slate-900">{money(t.total)} ₺</span></div>
                 </div>
               );
             })}
-            <div className="border rounded-xl p-3 bg-slate-900 text-white col-span-2 sm:col-span-1">
+            <div className="rounded-2xl p-3 bg-slate-900 text-white">
               <span className="text-slate-300 font-semibold block">Genel toplam</span>
               <div className="mt-1 text-slate-300">Yakıt <span className="font-black text-white">{money(monthDepotTotals.grand.fuel)} ₺</span></div>
               <div className="text-slate-300">Toplam <span className="font-black text-white">{money(monthDepotTotals.grand.total)} ₺</span></div>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 font-bold">
-                <tr>
-                  <th className="py-2 px-3">Plaka</th>
-                  <th className="py-2 px-3">Şoför</th>
-                  <th className="py-2 px-3">Alt yüklenici</th>
-                  <th className="py-2 px-3 text-right">Yakıt</th>
-                  <th className="py-2 px-3 text-right">Toplam</th>
-                  <th className="py-2 px-3 text-right">Gnl. toplam</th>
-                  {canWriteMonth && <th className="py-2 px-3" />}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {groups.map(g => g.items.map((it, idx) => {
-                  const key = String(it.plate.plate || '').toUpperCase().replace(/\s+/g, '');
-                  return (
-                    <tr key={it.plate.id} className="hover:bg-slate-50">
-                      <td className="py-2 px-3 font-mono font-bold whitespace-nowrap">{it.plate.plate}</td>
-                      <td className="py-2 px-3">{it.plate.driver || '—'}</td>
-                      <td className="py-2 px-3 font-semibold">
-                        {it.plate.contractor_name}
-                        {isAlkanContractor(it.plate.contractor_name) ? (
-                          <span className="ml-1 text-[10px] font-bold text-emerald-700">kârlılık</span>
-                        ) : null}
-                      </td>
-                      <td className="py-2 px-3 text-right">
-                        {canWriteMonth ? (
-                          <input
-                            value={valFor(key, 'fuel', it.row)}
-                            onChange={e => setDrafts(prev => ({ ...prev, [key]: { fuel: e.target.value, total: prev[key]?.total ?? valFor(key, 'total', it.row) } }))}
-                            className="w-28 ml-auto block px-2 py-1 border rounded text-right font-bold"
-                            inputMode="decimal"
-                          />
-                        ) : (cleanNumber(it.row?.fuel_amount) ? `${money(cleanNumber(it.row?.fuel_amount))} ₺` : '—')}
-                      </td>
-                      <td className="py-2 px-3 text-right">
-                        {canWriteMonth ? (
-                          <input
-                            value={valFor(key, 'total', it.row)}
-                            onChange={e => setDrafts(prev => ({ ...prev, [key]: { total: e.target.value, fuel: prev[key]?.fuel ?? valFor(key, 'fuel', it.row) } }))}
-                            className="w-28 ml-auto block px-2 py-1 border rounded text-right font-bold"
-                            inputMode="decimal"
-                          />
-                        ) : (cleanNumber(it.row?.total_amount) ? `${money(cleanNumber(it.row?.total_amount))} ₺` : '—')}
-                      </td>
-                      <td className="py-2 px-3 text-right text-slate-500">{idx === 0 ? `${money(g.total)} ₺` : ''}</td>
-                      {canWriteMonth && (
-                        <td className="py-2 px-3 text-right">
-                          <button type="button" disabled={busy} onClick={() => void saveLine(it.plate)} className="px-2 py-1 rounded-lg bg-slate-900 text-white text-[10px] font-bold">Kaydet</button>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                }))}
-                {!listed.length && (
-                  <tr><td colSpan={7} className="py-8 text-center text-slate-400">
-                    {isFiloSharedDepot(depot) ? 'Ortak plaka yok. Yönetici tanımlardan Ortak atar.' : 'Bu depoda plaka yok. Yönetici Liste plakalarını depoya atar.'}
-                  </td></tr>
+          {sahaLocked && (
+            <div className="text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5">
+              Bu ay kilitli (ayın 5’i geçti). Saha yalnız görür; yönetici yazabilir.
+            </div>
+          )}
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] gap-3 items-start">
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center">
+                <input type="month" value={ym} onChange={e => { setYm(e.target.value); setDrafts({}); }} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold" />
+                <div className="relative flex-1 min-w-[140px]">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-2" />
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Plaka / yüklenici" className="w-full pl-7 pr-2 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                </div>
+                <select value={contractorFilter} onChange={e => setContractorFilter(e.target.value)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white max-w-[180px]">
+                  <option value="">Alt yüklenici</option>
+                  {contractors.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+                {isAdmin && (
+                  <button type="button" onClick={() => setTab('tanim')} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
+                    Plaka ve depolar
+                  </button>
                 )}
-              </tbody>
-            </table>
+              </div>
+              <div className="overflow-auto max-h-[70vh]">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-slate-500 font-bold">
+                    <tr>
+                      <th className="py-2 px-3">Plaka</th>
+                      <th className="py-2 px-3">Alt yüklenici</th>
+                      <th className="py-2 px-3 text-right">Yakıt</th>
+                      <th className="py-2 px-3 text-right">Toplam</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {!filtered.length && (
+                      <tr>
+                        <td colSpan={4} className="py-10 text-center text-slate-500">
+                          {isFiloSharedDepot(depot) ? 'Ortak plaka yok. Yönetici Plaka ve depolar’dan atar.' : 'Bu depoda plaka yok. Yönetici Araç Filosu’ndan depoya atar.'}
+                        </td>
+                      </tr>
+                    )}
+                    {groups.map(g => g.items.map((it, idx) => {
+                      const on = selectedId === it.plate.id;
+                      const fuelN = cleanNumber(it.row?.fuel_amount);
+                      const totalN = cleanNumber(it.row?.total_amount);
+                      return (
+                        <React.Fragment key={it.plate.id}>
+                          {idx === 0 && (
+                            <tr className="bg-slate-50"><td colSpan={4} className="py-1 px-3 text-[10px] font-bold tracking-wide text-slate-500">{g.name}</td></tr>
+                          )}
+                          <tr
+                            onClick={() => setSelectedId(it.plate.id)}
+                            className={`cursor-pointer ${on ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
+                          >
+                            <td className="py-2 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">{it.plate.plate}</td>
+                            <td className="py-2 px-3 font-semibold text-slate-800">
+                              {it.plate.contractor_name}
+                              <span className="block text-[10px] font-medium text-slate-400">{it.plate.driver || '—'}</span>
+                            </td>
+                            <td className="py-2 px-3 text-right tabular-nums">{fuelN ? `${money(fuelN)} ₺` : '—'}</td>
+                            <td className="py-2 px-3 text-right font-bold tabular-nums whitespace-nowrap">{totalN ? `${money(totalN)} ₺` : '—'}</td>
+                          </tr>
+                        </React.Fragment>
+                      );
+                    }))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 min-h-[420px]">
+              {!selected && (
+                <div className="h-full flex items-center justify-center text-sm text-slate-400 px-6 text-center">
+                  Soldan plaka satırına tıklayın. Yakıt ve toplam sağda açılır; menü kapanmaz.
+                </div>
+              )}
+              {selected && (
+                <div className="space-y-4">
+                  <div className="flex justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{labelOf(depot)}</div>
+                      <div className="font-mono font-black text-lg">{selected.plate.plate}</div>
+                      <div className="text-sm font-semibold text-slate-700">{selected.plate.contractor_name}</div>
+                      <div className="text-[11px] text-slate-500 mt-1">Şoför: {selected.plate.driver || '—'}</div>
+                      {isAlkanContractor(selected.plate.contractor_name) && (
+                        <div className="text-[11px] font-semibold text-emerald-700 mt-1">Alkan · kaydedince öz mal kârlılığa gider</div>
+                      )}
+                    </div>
+                    <button type="button" onClick={() => setSelectedId(null)} className="text-slate-400 h-7"><X className="w-4 h-4" /></button>
+                  </div>
+                  {sahaLocked && !isAdmin && (
+                    <div className="text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">Bu ay kilitli. Yalnız görüntü.</div>
+                  )}
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-amber-800 mb-2">Saha girişi</div>
+                    <div className="grid grid-cols-1 gap-2">
+                      <label className="block">
+                        <span className="text-[10px] font-bold text-slate-500">Yakıt ₺</span>
+                        <input
+                          value={valFor(selectedKey, 'fuel', selected.row)}
+                          disabled={!canWriteMonth}
+                          onChange={e => setDrafts(prev => ({ ...prev, [selectedKey]: { fuel: e.target.value, total: prev[selectedKey]?.total ?? valFor(selectedKey, 'total', selected.row) } }))}
+                          className={entryCls}
+                          inputMode="decimal"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] font-bold text-slate-500">Toplam ₺</span>
+                        <input
+                          value={valFor(selectedKey, 'total', selected.row)}
+                          disabled={!canWriteMonth}
+                          onChange={e => setDrafts(prev => ({ ...prev, [selectedKey]: { total: e.target.value, fuel: prev[selectedKey]?.fuel ?? valFor(selectedKey, 'fuel', selected.row) } }))}
+                          className={entryCls}
+                          inputMode="decimal"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  {canWriteMonth && (
+                    <button type="button" disabled={busy} onClick={() => void saveLine(selected.plate)} className="w-full px-4 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-bold">
+                      Kaydet
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}
