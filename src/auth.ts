@@ -6,7 +6,8 @@ export type AccessLevel = 'view' | 'edit';
 export const PORTAL_MODULES = [
   { id: 'rental_settlements', label: 'Kiralık araç mutabakatı' },
   { id: 'plate_rentals', label: 'Belge plaka kiraları' },
-  { id: 'fleet', label: 'Araç filosu' },
+  { id: 'fleet', label: 'İç filo' },
+  { id: 'arac_filosu', label: 'Araç filosu' },
   { id: 'profitability', label: 'Öz mal karlılık' },
   { id: 'sales_customers', label: 'Satış faturaları' },
   { id: 'customers', label: 'Müşteri kartları' },
@@ -62,10 +63,11 @@ export function needsFinanceData(role: UserRole | null, access: Record<string, A
 
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
-  { id: 'filo_sadece', label: 'Sadece araç filosu', access: { fleet: 'edit' } },
+  { id: 'filo_sadece', label: 'Sadece iç filo', access: { fleet: 'edit' } },
+  { id: 'arac_filosu_sadece', label: 'Araç filosu künye', access: { arac_filosu: 'edit' } },
   { id: 'hal_saha_sadece', label: 'Hal saha giriş (gece sefer yazar)', access: { hal_saha: 'edit' } },
   { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit' } },
-  { id: 'arac', label: 'Araç sorumlusu (filo + plaka + karlılık)', access: { fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
+  { id: 'arac', label: 'Araç sorumlusu (künye + iç filo + plaka + karlılık)', access: { arac_filosu: 'edit', fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
   { id: 'on_muhasebe', label: 'Ön muhasebe', access: {
     sales_customers: 'edit', customers: 'edit', collections: 'edit',
     subcontractors: 'edit', sub_accounts: 'edit', sub_ibans: 'edit', trip_settlements: 'edit',

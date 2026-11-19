@@ -11,7 +11,9 @@ export const FILO_ORTAK_ID = 'ortak';
 export const FILO_DEPOTS: FiloDepot[] = [
   { id: 'omerli', label: 'Ömerli Depo', is_shared: false, sort_order: 1 },
   { id: 'konacik', label: 'Konacık Depo', is_shared: false, sort_order: 2 },
-  { id: 'pelitli', label: 'Peltili Depo', is_shared: false, sort_order: 3 }
+  { id: 'pelitli', label: 'Pelitli Depo', is_shared: false, sort_order: 3 },
+  { id: 'gross', label: 'Gross Filo', is_shared: false, sort_order: 4 },
+  { id: 'izmir', label: 'İzmir Depo', is_shared: false, sort_order: 5 }
 ];
 
 export const FILO_ORTAK: FiloDepot = { id: FILO_ORTAK_ID, label: 'Ortak', is_shared: true, sort_order: 100 };

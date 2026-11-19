@@ -29,7 +29,9 @@ create table if not exists public.trip_filo_depots (
 insert into public.trip_filo_depots (id, label, is_shared, sort_order) values
   ('omerli', 'Ömerli Depo', false, 1),
   ('konacik', 'Konacık Depo', false, 2),
-  ('pelitli', 'Peltili Depo', false, 3),
+  ('pelitli', 'Pelitli Depo', false, 3),
+  ('gross', 'Gross Filo', false, 4),
+  ('izmir', 'İzmir Depo', false, 5),
   ('ortak', 'Ortak', true, 100)
 on conflict (id) do nothing;
 

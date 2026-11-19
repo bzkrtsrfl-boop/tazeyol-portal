@@ -83,6 +83,7 @@ import {
   rentalFisFileName
 } from './rentalMath';
 import FleetPage from './FleetPage';
+import AracFilosuPage from './AracFilosuPage';
 import HalSahaPage from './HalSahaPage';
 import TripSettlementsPage from './TripSettlementsPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
@@ -713,7 +714,7 @@ export default function App() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoginError('');
+      setLoginError('');
     setLoginBusy(true);
     try {
       const email = loginUsername.trim().toLowerCase();
@@ -727,7 +728,7 @@ export default function App() {
           setLoginError('E-posta henüz onaylanmamış. Supabase → Authentication → Users içinde kullanıcıya tıklayıp onaylayın (Confirm / Auto Confirm).');
         } else if (msg.includes('invalid login')) {
           setLoginError('E-posta veya şifre eşleşmedi. Users listesindeki tam e-postayı yazın; şifreyi Users ekranından sıfırlayabilirsiniz.');
-        } else {
+    } else {
           setLoginError(error?.message || 'Hatalı e-posta veya şifre girdiniz!');
         }
         return;
@@ -812,7 +813,7 @@ export default function App() {
       return false;
     }
     if (nextRole === 'saha' && nextAccess.trip_settlements && !nextFilo.length) {
-      alert('Filo yetkisi varsa en az bir depo işaretleyin (Ömerli / Konacık / Peltili). Ortak tablo otomatik görünür.');
+      alert('Filo yetkisi varsa en az bir depo işaretleyin. Ortak tablo otomatik görünür.');
       return false;
     }
     if (user.id === currentUserId && nextRole !== 'admin') {
@@ -1387,7 +1388,7 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
   >('overview');
 
   useEffect(() => {
@@ -1395,7 +1396,7 @@ export default function App() {
     if (canViewMod(activeTab)) return;
     const order = [
       ...(canEditMod('hal_saha') ? ['hal_saha'] : []),
-      'fleet', 'plate_rentals', 'profitability', ...PORTAL_MODULES.map(m => m.id)
+      'arac_filosu', 'fleet', 'plate_rentals', 'profitability', ...PORTAL_MODULES.map(m => m.id)
     ];
     const first = order.find(id => canViewMod(id));
     if (first) setActiveTab(first as typeof activeTab);
@@ -1499,6 +1500,10 @@ export default function App() {
   const [dbTripSettlements, setDbTripSettlements] = useState<any[]>([]);
   const [dbTripPlates, setDbTripPlates] = useState<any[]>([]);
   const [dbFiloDepots, setDbFiloDepots] = useState<any[]>([]);
+  const [dbAracVehicles, setDbAracVehicles] = useState<any[]>([]);
+  const [dbAracAssignments, setDbAracAssignments] = useState<any[]>([]);
+  const [dbAracJobs, setDbAracJobs] = useState<any[]>([]);
+  const [dbAracPlaces, setDbAracPlaces] = useState<any[]>([]);
   const emptyPlateRentalForm = {
     plate: '',
     owner_name: '',
@@ -1638,7 +1643,11 @@ export default function App() {
         halPlateData,
         tripSettlementData,
         tripPlateData,
-        filoDepotData
+        filoDepotData,
+        aracVehicleData,
+        aracAssignData,
+        aracJobData,
+        aracPlaceData
       ] = await Promise.all([
         loadIf(want('payments'), 'payment_batches'),
         loadIf(want('payments') || want('subcontractors'), 'advance_installments'),
@@ -1647,7 +1656,7 @@ export default function App() {
         loadIf(want('employees') || want('profitability'), 'employees', { column: 'id', ascending: true }),
         loadIf(want('subcontractors') || want('sub_accounts') || want('payments') || want('employees'), 'advance_payments', { column: 'created_at', ascending: false }),
         loadIf(want('credit_cards'), 'credit_cards', { column: 'due_date', ascending: true }),
-        loadIf(want('subcontractors') || want('sub_accounts') || want('sub_ibans') || want('payments'), 'subcontractors', { column: 'name', ascending: true }),
+        loadIf(want('subcontractors') || want('sub_accounts') || want('sub_ibans') || want('payments') || want('arac_filosu'), 'subcontractors', { column: 'name', ascending: true }),
         loadIf(want('sub_accounts'), 'subcontractor_ledger'),
         loadIf(want('employees'), 'employee_transactions', { column: 'created_at', ascending: false }),
         loadIf(want('customers') || want('sales_customers') || want('collections'), 'customers', { column: 'name', ascending: true }),
@@ -1662,7 +1671,11 @@ export default function App() {
         loadIf(want('hal_saha'), 'hal_plates', { column: 'sort_order', ascending: true }),
         loadIf(want('trip_settlements'), 'trip_settlements', { column: 'year_month', ascending: false }),
         loadIf(want('trip_settlements') || want('profitability'), 'trip_fleet_plates', { column: 'plate', ascending: true }),
-        loadIf(want('trip_settlements') || isAdmin, 'trip_filo_depots', { column: 'sort_order', ascending: true })
+        loadIf(want('trip_settlements') || want('arac_filosu') || isAdmin, 'trip_filo_depots', { column: 'sort_order', ascending: true }),
+        loadIf(want('arac_filosu'), 'fleet_vehicles', { column: 'plate', ascending: true }),
+        loadIf(want('arac_filosu'), 'fleet_vehicle_assignments'),
+        loadIf(want('arac_filosu') || isAdmin, 'fleet_code_jobs', { column: 'sort_order', ascending: true }),
+        loadIf(want('arac_filosu') || isAdmin, 'fleet_code_places', { column: 'sort_order', ascending: true })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -1687,6 +1700,10 @@ export default function App() {
       setDbTripSettlements(tripSettlementData);
       setDbTripPlates(tripPlateData);
       setDbFiloDepots(filoDepotData);
+      setDbAracVehicles(aracVehicleData);
+      setDbAracAssignments(aracAssignData);
+      setDbAracJobs(aracJobData);
+      setDbAracPlaces(aracPlaceData);
 
       const crcCard = isAdmin ? findCrcCustomer(customerData as Customer[]) : null;
       if (crcCard) {
@@ -2137,15 +2154,15 @@ export default function App() {
       if (cardErr) throw cardErr;
 
       if (cashAmt > 0) {
-        await supabase.from('invoices').insert([{
+      await supabase.from('invoices').insert([{
           invoice_no: `KART ÖDEME - ${card.card_name} ****${String(card.last_four_digits || '').replace(/\D/g, '').slice(-4)} [${card.bank_name}] nakit ödeme yapıldı (${typeLabel})`,
-          direction: 'incoming',
-          category: 'credit_card_payment',
+        direction: 'incoming',
+        category: 'credit_card_payment',
           total_amount: cashAmt,
-          issue_date: todayStr,
-          due_date: todayStr,
-          status: 'paid'
-        }]);
+        issue_date: todayStr,
+        due_date: todayStr,
+        status: 'paid'
+      }]);
       }
 
       alert(`Kart ekstresi güncellendi.${cashAmt > 0 ? ` Kasadan ${cashAmt.toLocaleString('tr-TR')} ₺ düşüldü.` : ' Kasaya dokunulmadı (şahsi).'}${remainingAmt > 0 ? `\nKalan ekstre: ${remainingAmt.toLocaleString('tr-TR')} ₺` : ''}`);
@@ -2487,18 +2504,18 @@ export default function App() {
 
       const parsedRows = rawRows.map((row: any) => {
         const invNo = String(
-          row['Fatura no'] ||
-          row['Fatura No'] ||
-          row['Fatura Numarası'] ||
-          row['Belge No'] ||
+          row['Fatura no'] || 
+          row['Fatura No'] || 
+          row['Fatura Numarası'] || 
+          row['Belge No'] || 
           ''
         ).trim();
         const excelCust = String(
-          row['Müşteri'] ||
-          row['Cari'] ||
-          row['Unvan'] ||
-          row['Firma Adı'] ||
-          row['Alıcı'] ||
+          row['Müşteri'] || 
+          row['Cari'] || 
+          row['Unvan'] || 
+          row['Firma Adı'] || 
+          row['Alıcı'] || 
           row['Müşteri Adı'] ||
           ''
         ).trim();
@@ -2768,7 +2785,7 @@ export default function App() {
       const driver = veh.driver_name
         ? dbEmployees.find(emp => namesMatch(emp.full_name, veh.driver_name))
         : null;
-      if (driver) {
+        if (driver) {
         const hire = sanitizeDate(driver.hire_date);
         const share = hire ? employmentShareForMonth(hire, profitMonth) : { factor: 1 };
         if (share.factor > 0) {
@@ -2890,7 +2907,7 @@ export default function App() {
   };
 
   const totalOpenSalesAllTime = dbInvoices
-    .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
+      .filter(i => (i.direction === 'outgoing' || i.category === 'freight_sales') && i.status !== 'paid')
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
   // ÖDENMEMİŞ TAŞERON BORÇLARI (Vadeler ödendikçe buradan düşer)
@@ -3655,8 +3672,8 @@ export default function App() {
       if (inv.iban && String(inv.iban).trim().length > 10) foundIban = String(inv.iban).trim();
       else if (inv.contractor_iban && String(inv.contractor_iban).trim().length > 10) foundIban = String(inv.contractor_iban).trim();
     }
-    if (!foundIban || foundIban === 'IBAN Eksik') {
-      const found = dbSubcontractors.find(sub => {
+            if (!foundIban || foundIban === 'IBAN Eksik') {
+              const found = dbSubcontractors.find(sub => {
         const names = [sub.name, sub.company_name].filter(Boolean);
         return names.some(n => contractorRecordsMatch(contractorName, n));
       });
@@ -4071,7 +4088,7 @@ export default function App() {
   const subcontractorCariRows = useMemo(() => {
     return (dbSubcontractors || []).map((sub: any) => {
       const acc = contractorAccountsBySubId.get(String(sub.id)) || buildContractorAccount(sub);
-      return {
+        return {
         ...sub,
         computedTax: sub.tax_no || sub.tax_number || '',
         totalInvoice: acc.totalInvoice,
@@ -4293,7 +4310,7 @@ export default function App() {
         return matchesSearch && matchesStatus;
       })
       .sort((a: any, b: any) => {
-        let comparison = 0;
+      let comparison = 0;
         if (subSortField === 'invoice_no') {
           const nameA = (a.invoice_no || '').split(' - ')[1] || a.invoice_no || '';
           const nameB = (b.invoice_no || '').split(' - ')[1] || b.invoice_no || '';
@@ -4442,7 +4459,7 @@ export default function App() {
         cur.term2Ids.push(l.lineId);
         cur.term2Amount += l.netAmount;
         cur.term2Cut += l.advanceCut || 0;
-      } else {
+            } else {
         cur.term1Ids.push(l.lineId);
         cur.term1Amount += l.netAmount;
         cur.term1Cut += l.advanceCut || 0;
@@ -4748,8 +4765,8 @@ export default function App() {
         const updates: any = {};
         if (terms.term1) updates.term1_status = 'paid';
         if (terms.term2) updates.term2_status = 'paid';
-        const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
-        const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
+              const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
+              const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
         if (isT1Paid && isT2Paid) updates.status = 'paid';
         await supabase.from('invoices').update(updates).eq('id', invoiceId);
       }
@@ -4936,12 +4953,12 @@ export default function App() {
         await supabase.from('payment_batches').insert([batchPayload]);
       }
       alert(`${date} tarihli ${toInsert.length} ödeme yazıldı.${updated ? `\n${updated} satır Excel netine güncellendi.` : ''}${skipped ? `\n${skipped} satır zaten doğruydu.` : ''}${closed ? `\n${invYm} faturalarında ${closed} vade kapatıldı.` : ''}`);
-      loadPortalData();
-    } catch (err: any) {
+          loadPortalData();
+        } catch (err: any) {
       alert('Ödeme Excel yükleme hatası: ' + err.message);
     } finally {
       e.target.value = '';
-    }
+        }
   };
 
   // 11. HAKEDİŞ SATIRINDA ESNEK VADE ÖDEME (1. Vade / 2. Vade / Tümü)
@@ -4994,15 +5011,15 @@ export default function App() {
           return false;
         });
         if (!already) {
-          await supabase.from('invoices').insert([{
+      await supabase.from('invoices').insert([{
             invoice_no: `ÖDEME - ${inv.invoice_no} (${term === 'term1' ? '1 nci ödeme' : term === 'term2' ? '2 nci ödeme' : 'Tamamı'})`,
-            direction: 'incoming',
-            category: 'subcontractor_paid_outflow',
-            total_amount: payAmt,
-            issue_date: todayStr,
-            due_date: todayStr,
-            status: 'paid'
-          }]);
+        direction: 'incoming',
+        category: 'subcontractor_paid_outflow',
+        total_amount: payAmt,
+        issue_date: todayStr,
+        due_date: todayStr,
+        status: 'paid'
+      }]);
         }
       }
 
@@ -5624,13 +5641,13 @@ export default function App() {
     const monthlyCut = type === 'installment_advance' ? Math.round(totalAmount / instCount) : totalAmount;
     const finalDate = txDate || new Date().toISOString().split('T')[0];
     const row: any = {
-      employee_id: empId,
+        employee_id: empId,
       type,
-      title: title.trim(),
-      total_amount: totalAmount,
-      installment_count: instCount,
-      monthly_cut: monthlyCut,
-      transaction_date: finalDate
+        title: title.trim(),
+        total_amount: totalAmount,
+        installment_count: instCount,
+        monthly_cut: monthlyCut,
+        transaction_date: finalDate
     };
 
     try {
@@ -5701,7 +5718,7 @@ export default function App() {
     };
       
     const savePayload = async (data: typeof payload) => {
-      if (editingEmployeeId) {
+    if (editingEmployeeId) {
         return supabase.from('employees').update(data).eq('id', editingEmployeeId);
       }
       return supabase.from('employees').insert([data]);
@@ -5717,7 +5734,7 @@ export default function App() {
       const retry = await savePayload(fallback);
       error = retry.error;
     }
-    if (error) throw error;
+        if (error) throw error;
     if (editingEmployeeId && pendingTitle && pendingAmt > 0) {
       const txOk = await handleAddEmployeeTransaction(
         editingEmployeeId,
@@ -6315,7 +6332,8 @@ export default function App() {
     { id: 'sub_ibans', label: 'Alt Yüklenici Tanımları', badge: dbSubcontractors.length, icon: Wallet },
     { id: 'employees', label: 'Personel & Bordro', badge: dbEmployees.length, icon: UserCheck },
     { id: 'credit_cards', label: 'Kredi Kartları', badge: dbCreditCards.length, icon: CreditCard },
-    { id: 'fleet', label: 'Araç Filosu', badge: dbVehicles.length, icon: Truck },
+    { id: 'arac_filosu', label: 'Araç Filosu', badge: dbAracVehicles.length, icon: Truck },
+    { id: 'fleet', label: 'İç Filo', badge: dbVehicles.length, icon: Truck },
     { id: 'profitability', label: 'Öz Mal Karlılık & Maliyet', badge: dbProfitability.length, icon: BarChart3 },
     { id: 'income_report', label: 'Gelir Gider Raporu', icon: FileText },
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection' || i.category === 'customer_advance').length, icon: Coins },
@@ -6331,7 +6349,7 @@ export default function App() {
   const sidebarGroups = [
     { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses', 'income_report'] },
     { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements', 'trip_settlements'] },
-    { id: 'fleet', label: 'Araç', itemIds: ['fleet', 'profitability', 'plate_rentals'] },
+    { id: 'fleet', label: 'Araç', itemIds: ['arac_filosu', 'fleet', 'profitability', 'plate_rentals'] },
     { id: 'hal', label: 'Hal saha', itemIds: ['hal_saha'] },
     { id: 'people', label: 'İnsan ve yetki', itemIds: ['employees', 'users'] }
   ].map(g => ({ ...g, items: g.itemIds.map(id => menuById[id]).filter(item => item && canViewMod(item.id)) }))
@@ -6427,7 +6445,7 @@ export default function App() {
           <div className="relative w-80 bg-white h-full shadow-2xl flex flex-col z-10 animate-in slide-in-from-left duration-200">
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <button type="button" onClick={() => { setActiveTab(canViewMod('overview') ? 'overview' : (canViewMod('rental_settlements') ? 'rental_settlements' : (sidebarItems[0]?.id as any) || 'overview')); setIsSidebarOpen(false); }} className="text-left" title="Ana ekran">
-                <TazeyolBrand />
+              <TazeyolBrand />
               </button>
               <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700">
                 <X className="w-5 h-5" />
@@ -6461,8 +6479,8 @@ export default function App() {
                     {groupOpen && (
                       <div className="space-y-0.5 mt-0.5">
                         {group.items.map(item => {
-                          const Icon = item.icon;
-                          const isActive = activeTab === item.id;
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
                           if (item.id === 'trip_settlements') {
                             const filoMenus = filoVisibleDepots(currentUserRole, filoAssignedDepots, dbFiloDepots);
                             return (
@@ -6542,33 +6560,33 @@ export default function App() {
                               </div>
                             );
                           }
-                          return (
-                            <button
-                              key={item.id}
+                return (
+                  <button
+                    key={item.id}
                               type="button"
-                              onClick={() => {
+                    onClick={() => {
                                 if (item.id === 'sales_customers') {
                                   setSalesSearchQuery('');
                                   setSalesStatusFilter('all');
                                 }
                                 if (item.id === 'general_expenses') setExpenseStatusFilter('unpaid');
-                                setActiveTab(item.id as any);
-                                setIsSidebarOpen(false);
-                              }}
+                      setActiveTab(item.id as any);
+                      setIsSidebarOpen(false);
+                    }}
                               className={`w-full flex items-center justify-between p-3 rounded-xl font-semibold ${
                                 isActive ? 'bg-blue-50 text-[#009fe3] font-bold border border-blue-200' : 'text-slate-600 hover:bg-slate-50'
                               }`}
                             >
-                              <div className="flex items-center gap-3">
-                                <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
-                                <span>{item.label}</span>
-                              </div>
-                              {item.badge !== undefined && (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-blue-200 text-blue-800' : 'bg-slate-100 text-slate-500'}`}>
-                                  {item.badge}
-                                </span>
-                              )}
-                            </button>
+                    <div className="flex items-center gap-3">
+                      <Icon className={`w-4 h-4 ${isActive ? 'text-[#009fe3]' : 'text-slate-400'}`} />
+                      <span>{item.label}</span>
+                    </div>
+                    {item.badge !== undefined && (
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-blue-200 text-blue-800' : 'bg-slate-100 text-slate-500'}`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
                           );
                         })}
                       </div>
@@ -6622,7 +6640,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div
+                <div 
                   onClick={() => { setExpenseStatusFilter('unpaid'); setActiveTab('general_expenses'); }}
                   className="bg-white p-3.5 rounded-xl border border-rose-200 shadow-xs cursor-pointer hover:bg-rose-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
@@ -6684,12 +6702,12 @@ export default function App() {
                         </span>
                       </div>
                     )}
-                  </div>
                 </div>
               </div>
+            </div>
 
               {plateRenewalAlerts.length > 0 && (
-                <button
+    <button
                   type="button"
                   onClick={() => setActiveTab('plate_rentals')}
                   className="w-full flex items-center gap-3 px-3.5 py-2 bg-white rounded-xl border border-rose-200 text-left hover:bg-rose-50/60 transition"
@@ -6707,9 +6725,9 @@ export default function App() {
                     {plateRenewalAlerts.length > 3 ? ` · +${plateRenewalAlerts.length - 3}` : ''}
                   </span>
                   <span className="text-[11px] font-semibold text-rose-600 shrink-0 hidden sm:inline">Belge plakalarına git →</span>
-                </button>
+    </button>
               )}
-            </div>
+        </div>
 
             <p className="text-[11px] text-slate-400">
               Dönem üst çubuktan: {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'}. Tahsilat ve Girdi−Çıktı bu aralığa göre. Kasa bakiyesi ve bekleyen alacak bugünkü gerçek rakamdır.
@@ -6721,7 +6739,7 @@ export default function App() {
                 </span>
                 <div className="text-2xl font-bold text-emerald-600 mt-2">
                   +{totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </div>
+        </div>
                 <span className="text-xs text-slate-400 mt-1 block">
                   {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'} · o aralıkta kasaya giren
                 </span>
@@ -6740,13 +6758,13 @@ export default function App() {
                 <span className="text-xs text-slate-400 mt-1 block">
                   Bugünkü kalan: fatura − avans − tahsilat. Ödendi işareti kasaya yazılmaz.
                 </span>
-              </button>
+          </button>
 
               <div className="bg-[#009fe3] text-white p-5 rounded-2xl shadow-sm relative overflow-hidden">
                 <div className="flex justify-between items-start gap-2">
-                  <button
+          <button  
                     type="button"
-                    onClick={() => {
+            onClick={() => {
                       setCashLedgerFrom(cashStartDate);
                       setCashLedgerTo(new Date().toISOString().split('T')[0]);
                       setIsCashLedgerOpen(true);
@@ -6766,10 +6784,10 @@ export default function App() {
                     <span className="text-[11px] text-blue-100/90 mt-0.5 block">
                       sonrası +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
                     </span>
-                  </button>
+          </button>
                   {isAdmin && (
                     <div className="flex gap-1 shrink-0">
-                    <button 
+          <button  
                       onClick={async (e) => {
                         e.stopPropagation();
                         const raw = window.prompt(
@@ -6790,17 +6808,17 @@ export default function App() {
                       }}
                       className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded text-[10px] font-bold transition">
                       Açılış
-                    </button>
-                    <button 
+          </button>
+          <button  
                       onClick={(e) => { e.stopPropagation(); setIsCashDepositModalOpen(true); }}
                       className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded text-[10px] font-bold transition flex items-center gap-1">
                       <Plus className="w-3 h-3" /> Para Ekle
-                    </button>
-                    </div>
-                  )}
-                </div>
+          </button>
+      </div>
+    )}
+  </div>
+</div>
               </div>
-            </div>
 
             {(() => {
               const isHalKasaOpen = (e: any) => /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
@@ -6840,7 +6858,7 @@ export default function App() {
                 </span>
                 <div className="text-xl font-black text-amber-950 mt-1 tabular-nums">
                   {personelKasa.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                </div>
+              </div>
                 <span className="text-[11px] text-amber-800/70 mt-0.5 block">Saha üzerindeki nakit · merkeze henüz alınmadı</span>
               </button>
             </div>
@@ -6878,9 +6896,9 @@ export default function App() {
                   <div className="flex items-center gap-2 text-emerald-700">
                     <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
                       <ArrowDownLeft className="w-4 h-4" />
-                    </span>
+                </span>
                     <span className="text-xs font-bold uppercase tracking-wider">Girdi</span>
-                  </div>
+              </div>
                   <p className="mt-2 text-xl font-black text-emerald-800 tabular-nums">
                     {girdi.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                   </p>
@@ -6890,9 +6908,9 @@ export default function App() {
                   <div className="flex items-center gap-2 text-rose-700">
                     <span className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center">
                       <ArrowUpRight className="w-4 h-4" />
-                    </span>
+                  </span>
                     <span className="text-xs font-bold uppercase tracking-wider">Çıktı</span>
-                  </div>
+                </div>
                   <p className="mt-2 text-xl font-black text-rose-800 tabular-nums">
                     {cikti.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                   </p>
@@ -7164,7 +7182,7 @@ export default function App() {
             )}
           </div>
         )}
-
+        
         {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           
@@ -7266,7 +7284,7 @@ export default function App() {
                 <option value="paid">✅ Sadece Tahsil Edilenler</option>
               </select>
             </div>
-            {(() => {
+        {(() => {
           const uncollected = displayedSalesList.filter((i: any) => i.status !== 'paid');
           const totalUncollectedAmt = uncollected.reduce((acc: number, cur: any) => acc + cleanNumber(cur.total_amount), 0);
           return (
@@ -7342,9 +7360,9 @@ export default function App() {
                       <td className="py-3 px-3 text-center">
                         {sale.status === 'paid' ? (
                           <div className="flex flex-col items-center gap-1">
-                            <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-1 rounded-full">
+                          <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2.5 py-1 rounded-full">
                               Mutabakat kapalı
-                            </span>
+                          </span>
                             {isAdmin && (
                               <button
                                 type="button"
@@ -7358,13 +7376,13 @@ export default function App() {
                         ) : (
                           isAdmin && (
                             <div className="flex flex-col items-center gap-1">
-                              <button
+                            <button 
                                 type="button"
-                                onClick={() => handleOpenReceiptFromSale(sale)}
+                              onClick={() => handleOpenReceiptFromSale(sale)}
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm transition"
                               >
                                 <Coins className="w-3.5 h-3.5" /> Cari ödeme
-                              </button>
+                            </button>
                               <button
                                 type="button"
                                 onClick={() => handleSetSalePaidStatus(sale, 'paid')}
@@ -7458,8 +7476,8 @@ export default function App() {
                 <div className="mt-1 text-lg font-black text-indigo-800">
                   {visibleHakedisRows.totals.term2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-              </div>
-            </div>
+          </div>
+        </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
@@ -7684,7 +7702,7 @@ export default function App() {
                     <FileUp className="w-4 h-4" /> IBAN Exceli Yükle
                     <input type="file" accept=".xlsx,.xls" onChange={handleImportSubIbanExcel} className="hidden" />
                   </label>
-                  <button
+                  <button 
                     onClick={() => {
                       setEditingSubIbanId(null);
                       setSubIbanFormData({ name: '', iban: '', phone: '', tax_no: '' });
@@ -7738,7 +7756,7 @@ export default function App() {
                             title="Peşin veya taksitli avans">
                             Avans
                           </button>
-                          <button
+                          <button 
                             onClick={() => {
                               setEditingSubIbanId(s.id);
                               setSubIbanFormData({
@@ -7752,7 +7770,7 @@ export default function App() {
                             className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition" title="Düzenle">
                             <Edit2 className="w-4 h-4" />
                           </button>
-                          <button
+                          <button 
                             onClick={async () => {
                               if (window.confirm(`${s.name} kartı silinsin mi? Faturalar durur; banka talimatında IBAN eşleşmez.`)) {
                                 await supabase.from('subcontractors').delete().eq('id', s.id);
@@ -7872,7 +7890,7 @@ export default function App() {
                         {bankContractorRows.length > 0 && bankContractorRows.every(r => r.lineIds.every(id => bankSelectedLines[id])) ? 'Bırak' : 'Tümü'}
                       </button>
                     </th>
-                    <th
+                    <th 
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
                         if (bankSortField === 'contractorName') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
@@ -7883,7 +7901,7 @@ export default function App() {
                     </th>
                     <th className="py-3 px-3">Faturalar</th>
                     <th className="py-3 px-3">Bu talimatta</th>
-                    <th
+                    <th 
                       className="py-3 px-3 cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
                         if (bankSortField === 'dueDate') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
@@ -7901,7 +7919,7 @@ export default function App() {
                     >
                       IBAN {bankSortField === 'iban' ? (bankSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
-                    <th
+                    <th 
                       className="py-3 px-3 text-right cursor-pointer select-none hover:text-blue-600 transition-colors"
                       onClick={() => {
                         if (bankSortField === 'amount') setBankSortOrder(bankSortOrder === 'asc' ? 'desc' : 'asc');
@@ -7938,7 +7956,7 @@ export default function App() {
                     return (
                       <tr key={row.groupKey} className={`hover:bg-slate-50 transition ${isChecked ? 'bg-blue-50/60' : ''}`}>
                         <td className="py-3 px-3 text-center">
-                          <input
+                          <input 
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => handleToggleBankContractor(row.lineIds, [...row.term1Ids, ...row.term2Ids])}
@@ -7950,18 +7968,18 @@ export default function App() {
                           {row.invoiceNos.length} fatura
                           <span className="block text-[10px] text-slate-400 truncate max-w-[280px]" title={row.invoiceNos.join(' · ')}>
                             {row.invoiceNos.slice(0, 2).join(' · ')}{row.invoiceNos.length > 2 ? '…' : ''}
-                          </span>
+                      </span>
                         </td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           <div className="flex flex-wrap gap-1">
                             {modeBtn('term1', '1 nci', row.has1)}
                             {modeBtn('term2', '2 nci', row.has2)}
                             {modeBtn('both', 'Tamamı', row.has1 && row.has2)}
-                          </div>
+                  </div>
                           <span className="block text-[10px] text-slate-400 mt-1">
                             1 nci {row.term1Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} · 2 nci {row.term2Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
                           </span>
-                        </td>
+                </td>
                         <td className={`py-3 px-3 whitespace-nowrap ${overdue ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
                           {formatDateTR(row.dueDate)}
                         </td>
@@ -8215,7 +8233,7 @@ export default function App() {
                     </div>
                   </td>
 
-                  <td className="py-3 px-3 text-center space-x-1.5">
+                    <td className="py-3 px-3 text-center space-x-1.5">
                       <button
                         type="button"
                         onClick={() => openPayrollReport(emp)}
@@ -8273,7 +8291,7 @@ export default function App() {
                         <Trash2 className="w-4 h-4" />
                       </button>
                         </>
-                      )}
+                  )}
                     </td>
                 </tr>
               ))}
@@ -8403,23 +8421,23 @@ export default function App() {
                       {rows.length === 0 ? (
                         <tr><td colSpan={7} className="py-8 text-center text-slate-400">Bu filtrede kart yok.</td></tr>
                       ) : rows.map((cc, idx) => {
-                        const stmtAmt = cleanNumber(cc.statement_amount);
-                        const minAmt = cleanNumber(cc.min_payment_amount);
-                        const hasDebt = stmtAmt > 0;
+                const stmtAmt = cleanNumber(cc.statement_amount);
+                const minAmt = cleanNumber(cc.min_payment_amount);
+                const hasDebt = stmtAmt > 0;
                         const diff = dueDiff(cc);
                         const isPersonal = cc.card_kind === 'personal' || /şahsi|sahsi|kişisel|kisisel/i.test(String(cc.card_name || ''));
                         const accent = bankAccent(cc.bank_name);
                         const open = cardMenuId === (cc.id ?? idx);
-                        return (
+                return (
                           <tr key={cc.id || idx} className={`hover:bg-slate-50 ${hasDebt && diff < 0 ? 'bg-rose-50/40' : hasDebt && diff <= 3 ? 'bg-amber-50/30' : ''}`}>
                             <td className="py-3 px-3">
                               <div className="flex items-center gap-2">
                                 <span className={`w-1.5 h-8 rounded-full shrink-0 ${accent.bar}`} />
-                                <div>
+                    <div>
                                   <div className="font-bold text-slate-900 text-sm">{cc.card_name}</div>
                                   {cc.last_four_digits ? <div className="text-[10px] text-slate-400 font-mono">•••• {cc.last_four_digits}</div> : null}
-                                </div>
-                              </div>
+                      </div>
+                        </div>
                             </td>
                             <td className="py-3 px-3">
                               <span className={`inline-flex px-2 py-0.5 rounded-md text-[11px] font-bold border ${accent.chip}`}>{cc.bank_name || '-'}</span>
@@ -8436,48 +8454,48 @@ export default function App() {
                               {hasDebt ? (
                                 <div className="text-[10px] text-slate-500">
                                   {diff < 0 ? `${Math.abs(diff)} gün gecikti` : diff === 0 ? 'Bugün' : `${diff} gün kaldı`}
-                                </div>
+                        </div>
                               ) : null}
                             </td>
                             <td className="py-3 px-3 text-right relative">
-                              {isAdmin && (
-                                <>
-                                  <button
-                                    type="button"
+                    {isAdmin && (
+                            <>
+                              <button
+                                type="button"
                                     onClick={() => setCardMenuId(open ? null : (cc.id ?? idx))}
                                     className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600"
                                     title="İşlemler"
                                   >
                                     <MoreHorizontal className="w-4 h-4" />
-                                  </button>
+                              </button>
                                   {open && (
                                     <div className="absolute right-3 top-12 z-20 w-44 bg-white border border-slate-200 rounded-xl shadow-lg py-1 text-left">
                                       {hasDebt && (
                                         <>
                                           <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50" onClick={() => { setCardMenuId(null); handlePayCreditCard(cc, 'full'); }}>Tamamını öde</button>
-                                          {minAmt > 0 && minAmt < stmtAmt && (
+                              {minAmt > 0 && minAmt < stmtAmt && (
                                             <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50" onClick={() => { setCardMenuId(null); handlePayCreditCard(cc, 'min'); }}>Asgariyi öde</button>
-                                          )}
-                                        </>
-                                      )}
+                              )}
+                            </>
+                          )}
                                       <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => { setCardMenuId(null); openEditCreditCardModal(cc); }}>Düzenle / ekstre</button>
                                       <button type="button" className="w-full px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50" onClick={async () => {
                                         setCardMenuId(null);
                                         if (!window.confirm(`${cc.card_name} kartını silmek istiyor musunuz?`)) return;
-                                        await supabase.from('credit_cards').delete().eq('id', cc.id);
-                                        loadPortalData();
+                                await supabase.from('credit_cards').delete().eq('id', cc.id);
+                                loadPortalData();
                                       }}>Sil</button>
-                                    </div>
-                                  )}
+                      </div>
+                    )}
                                 </>
                               )}
                             </td>
                           </tr>
-                        );
-                      })}
+                );
+              })}
                     </tbody>
                   </table>
-                </div>
+            </div>
                 </>
               );
             })()}
@@ -8515,36 +8533,50 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'arac_filosu' && canViewMod('arac_filosu') && (
+          <AracFilosuPage
+            vehicles={dbAracVehicles}
+            assignments={dbAracAssignments}
+            jobs={dbAracJobs}
+            places={dbAracPlaces}
+            subcontractors={dbSubcontractors}
+            filoDepots={mergeFiloDepots(dbFiloDepots)}
+            isAdmin={isAdmin}
+            canEdit={canEditMod('arac_filosu')}
+            onReload={loadPortalData}
+          />
+        )}
+
         {activeTab === 'fleet' && (
           <FleetPage
             vehicles={dbVehicles}
             invoices={dbInvoices}
             canEdit={canEditMod('fleet')}
             onAdd={() => {
-              setEditingVehicleId(null);
-              setVehicleFormData({
-                plateNumber: '',
-                driverName: '',
-                brandModel: '',
-                documentIncluded: 'VAR',
-                trackingSystem: 'Var',
-                fuelSystem: 'UTTS',
-                hgsSystem: 'SHELL',
+                    setEditingVehicleId(null);
+                    setVehicleFormData({
+                      plateNumber: '',
+                      driverName: '',
+                      brandModel: '',
+                      documentIncluded: 'VAR',
+                      trackingSystem: 'Var',
+                      fuelSystem: 'UTTS',
+                      hgsSystem: 'SHELL',
                 vehicleType: 'Kamyon',
-                ownershipType: 'Öz Mal',
+                      ownershipType: 'Öz Mal',
                 isActive: true,
-                nextInspectionDate: '',
-                inspectionCost: '',
-                insuranceCompany: '',
-                insuranceCost: '',
-                insuranceStartDate: '',
-                kaskoCompany: '',
-                kaskoCost: '',
-                kaskoStartDate: '',
-                lastMtvCost: ''
-              });
-              setIsVehicleModalOpen(true);
-            }}
+                      nextInspectionDate: '',
+                      inspectionCost: '',
+                      insuranceCompany: '',
+                      insuranceCost: '',
+                      insuranceStartDate: '',
+                      kaskoCompany: '',
+                      kaskoCost: '',
+                      kaskoStartDate: '',
+                      lastMtvCost: ''
+                    });
+                    setIsVehicleModalOpen(true);
+                  }}
             onEdit={openEditVehicleModal}
             cleanNumber={cleanNumber}
             formatDateTR={formatDateTR}
@@ -8649,7 +8681,7 @@ export default function App() {
                   Excel
                 </button>
                 </div>
-              </div>
+            </div>
 
               {(() => {
                 const included = dbProfitability.filter(p => p.included);
@@ -8665,35 +8697,35 @@ export default function App() {
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam ciro</span>
                   <span className="text-2xl font-black text-slate-900 mt-1 block">
                     {money(totalRev)} ₺
-                  </span>
-                </div>
+                </span>
+              </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Toplam gider</span>
                   <span className="text-2xl font-black text-rose-600 mt-1 block">
                     {money(totalCost)} ₺
-                  </span>
-                </div>
+                </span>
+              </div>
                 <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
                   <span className="text-xs font-bold text-blue-800 uppercase tracking-wider block">Net kâr / zarar</span>
                   <span className={`text-2xl font-black mt-1 block ${totalNet >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {money(totalNet)} ₺
-                  </span>
-                </div>
+                </span>
+              </div>
                 <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
                   <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">Karlılık oranı</span>
                   <span className={`text-2xl font-black mt-1 block ${marginColor}`}>
                     {marginPct == null ? '—' : `%${marginPct.toLocaleString('tr-TR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`}
-                  </span>
+                </span>
                   <span className="text-[10px] text-slate-500 mt-1 block">Net kâr ÷ ciro (bu ay, dahil araçlar)</span>
-                </div>
               </div>
+            </div>
                 );
               })()}
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
-                    <tr>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                  <tr>
                       <th className="py-3 px-3">Bu ay</th>
                       <th className="py-3 px-3">Tip</th>
                       <th className="py-3 px-3">Plaka</th>
@@ -8706,18 +8738,18 @@ export default function App() {
                       <th className="py-3 px-3 text-right">Sabit / ay</th>
                       <th className="py-3 px-3 text-right">Bakım / ay</th>
                       <th className="py-3 px-3 text-right">Net kâr</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
                     {dbProfitability.map(item => {
                       const stored = monthlyInputRows.find(
                         r => String(r.plate_number).trim() === item.plate_number && r.year_month === profitMonth
                       );
                       const fmtInput = (n: number) => (n ? String(n) : '');
                       const fromFilo = alkanFiloPlateKeys(dbTripPlates).has(filoPlateKey(item.plate_number));
-                      return (
+                    return (
                         <tr key={item.id || item.plate_number} className={`hover:bg-slate-50 ${item.included ? '' : 'opacity-40'}`}>
-                          <td className="py-3 px-3">
+                        <td className="py-3 px-3">
                             <input
                               type="checkbox"
                               checked={item.included}
@@ -8725,7 +8757,7 @@ export default function App() {
                               onChange={e => saveMonthlyProfitInput(item.plate_number, 'included', e.target.checked)}
                               title="Bu ay kârlılığa dahil et"
                             />
-                          </td>
+                        </td>
                           <td className="py-3 px-3 text-slate-600">{item.vehicleType}</td>
                           <td
                             onClick={() => openVehicle360(item.vehicle)}
@@ -8738,7 +8770,7 @@ export default function App() {
                             {fromFilo ? (
                               <span className="block w-28 ml-auto px-2 py-1 rounded bg-slate-100 text-right font-bold" title="Filo Alkan satırından gelir">
                                 {item.invoice_rev ? `${item.invoice_rev.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : '—'}
-                              </span>
+                          </span>
                             ) : (
                             <input
                               type="text"
@@ -8748,13 +8780,13 @@ export default function App() {
                               onBlur={e => saveMonthlyProfitInput(item.plate_number, 'invoice_rev', e.target.value)}
                               className="w-28 px-2 py-1 border border-slate-200 rounded text-right font-bold bg-white"
                             />
-                            )}
-                          </td>
+                          )}
+                        </td>
                           <td className="py-3 px-3 text-right">
                             {fromFilo ? (
                               <span className="block w-24 ml-auto px-2 py-1 rounded bg-slate-100 text-right font-bold" title="Filo Alkan satırından gelir">
                                 {item.fuel ? `${item.fuel.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : '—'}
-                              </span>
+                          </span>
                             ) : (
                             <input
                               type="text"
@@ -8764,9 +8796,9 @@ export default function App() {
                               onBlur={e => saveMonthlyProfitInput(item.plate_number, 'fuel', e.target.value)}
                               className="w-24 px-2 py-1 border border-slate-200 rounded text-right bg-white"
                             />
-                            )}
-                          </td>
-                          <td className="py-3 px-3 text-right">
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right">
                             <input
                               type="text"
                               disabled={!isAdmin}
@@ -8775,10 +8807,10 @@ export default function App() {
                               onBlur={e => saveMonthlyProfitInput(item.plate_number, 'hgs', e.target.value)}
                               className="w-24 px-2 py-1 border border-slate-200 rounded text-right bg-white"
                             />
-                          </td>
+                        </td>
                           <td className="py-3 px-3 text-right text-slate-700" title={`Maaş ${item.driver_sal.toLocaleString('tr-TR')} + prim ${item.bonus.toLocaleString('tr-TR')}`}>
                             {item.payroll.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                          </td>
+                        </td>
                           <td className="py-3 px-3 text-right text-slate-700">{item.sgk.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
                           <td className="py-3 px-3 text-right text-slate-700" title={`Sigorta ${item.insurance_m.toFixed(0)} + kasko ${item.kasko_m.toFixed(0)} + MTV ${item.mtv_m.toFixed(0)} + muayene ${item.inspection_m.toFixed(0)}`}>
                             {item.fixed_monthly.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
@@ -8792,17 +8824,17 @@ export default function App() {
                           <td className={`py-3 px-3 text-right font-black ${item.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {item.netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                           </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
               <p className="text-[11px] text-slate-400">Listede yalnızca filoda Aktif işaretli öz mal kamyonet, kamyon ve TIR görünür. Binek ve dorse burada yer almaz. “Bu ay” kutusu kamyonet gibi araçları bazı aylar toplamdan çıkarır. Bakım ve lastik, o yılın toplamının 12’ye bölümüdür; faturanın kesildiği aya tam yazılmaz.</p>
               {dbProfitability.length === 0 && (
                 <p className="text-sm text-slate-500">Gösterilecek araç yok. Filoda tipi Kamyonet/Kamyon/TIR, sahiplik Öz Mal ve durum Aktif olsun.</p>
               )}
-            </div>
+          </div>
         )}
 
         {activeTab === 'income_report' && (() => {
@@ -8868,16 +8900,16 @@ export default function App() {
             }
           };
           return (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
-              <div>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-5 border-b border-slate-100 gap-4">
+                <div>
                 <h3 className="font-bold text-lg text-slate-900">Genel Gelir Gider</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Üstteki tarih aralığı ile ana sayfa Girdi−Çıktı aynı rakamlar. Kasaya giren / çıkan nakit; fatura cirosu değil.
                 </p>
-              </div>
+                </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button
+                  <button
                   type="button"
                   disabled={incomePdfBusy}
                   onClick={exportPdf}
@@ -8885,7 +8917,7 @@ export default function App() {
                 >
                   <Download className="w-4 h-4" />
                   {incomePdfBusy ? 'PDF hazırlanıyor…' : 'PDF'}
-                </button>
+                  </button>
                 <button
                   type="button"
                   onClick={exportExcel}
@@ -8894,8 +8926,8 @@ export default function App() {
                   <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                   Excel
                 </button>
-              </div>
-            </div>
+                      </div>
+                      </div>
             <div className="rounded-2xl bg-slate-50 border border-slate-100 p-5 flex flex-col sm:flex-row items-center gap-8">
               <div className="relative w-36 h-36 shrink-0">
                 <div
@@ -8907,14 +8939,14 @@ export default function App() {
                   <span className={`text-sm font-black leading-tight ${periodProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                     {periodProfit >= 0 ? '+' : ''}{money(periodProfit)}
                   </span>
+                    </div>
                 </div>
-              </div>
               <div className="flex-1 w-full space-y-5">
                 <div>
                   <div className="flex justify-between items-baseline text-xs font-bold mb-1.5">
                     <span className="text-emerald-700 uppercase tracking-wider">Girdi</span>
                     <span className="text-emerald-800 text-sm tabular-nums">{money(girdi)} ₺</span>
-                  </div>
+              </div>
                   <div className="h-4 rounded-full bg-slate-200 overflow-hidden">
                     <div className="h-full rounded-full bg-emerald-500" style={{ width: `${(girdi / barMax) * 100}%` }} />
                   </div>
@@ -8947,7 +8979,7 @@ export default function App() {
                         <td className="py-2 px-3 whitespace-nowrap">{l.date}</td>
                         <td className="py-2 px-3">{l.title}</td>
                         <td className="py-2 px-3 text-right font-bold text-emerald-700">{money(l.amount)} ₺</td>
-                      </tr>
+                        </tr>
                     ))}
                     {!inLines.length && (
                       <tr><td colSpan={3} className="py-6 px-3 text-center text-slate-400">Bu aralıkta kasa girişi yok.</td></tr>
@@ -8958,16 +8990,16 @@ export default function App() {
             </div>
             <div>
               <h4 className="text-sm font-bold text-slate-800 mb-2">Giderler ({outLines.length})</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
-                    <tr>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
+                  <tr>
                       <th className="py-2 px-3">Tarih</th>
                       <th className="py-2 px-3">Açıklama</th>
                       <th className="py-2 px-3 text-right">Tutar</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
                     {outLines.map((l, i) => (
                       <tr key={'out-' + i}>
                         <td className="py-2 px-3 whitespace-nowrap">{l.date}</td>
@@ -8978,10 +9010,10 @@ export default function App() {
                     {!outLines.length && (
                       <tr><td colSpan={3} className="py-6 px-3 text-center text-slate-400">Bu aralıkta kasa çıkışı yok.</td></tr>
                     )}
-                  </tbody>
-                </table>
-              </div>
+                </tbody>
+              </table>
             </div>
+          </div>
           </div>
           );
         })()}
@@ -9353,9 +9385,9 @@ export default function App() {
                         </select>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
+                        <button
+                          type="button"
+                          onClick={async () => {
                         if (!editingEmployeeId) return;
                         await handleAddEmployeeTransaction(
                           editingEmployeeId,
@@ -9369,7 +9401,7 @@ export default function App() {
                       className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold transition"
                     >
                       Hareketi kaydet
-                    </button>
+                        </button>
                   </div>
                   {/* 2. KAYITLI CARİ HAREKETLER LİSTESİ */}
                   {(() => {
@@ -9669,7 +9701,7 @@ export default function App() {
                 <input type="text" placeholder="Örn: Ahmet Aksu" value={subIbanFormData.name} onChange={e => setSubIbanFormData({ ...subIbanFormData, name: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
+              <div>
                   <label className="block font-semibold text-slate-700 mb-1">Vergi no</label>
                   <input type="text" value={subIbanFormData.tax_no} onChange={e => setSubIbanFormData({ ...subIbanFormData, tax_no: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono" />
                 </div>
@@ -10149,7 +10181,7 @@ export default function App() {
                     ))}
                   </select>
                 ) : (
-                  <input type="text" value={newReceiptFormData.customerName} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, customerName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
+                <input type="text" value={newReceiptFormData.customerName} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, customerName: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" required />
                 )}
               </div>
               <div>
@@ -10163,9 +10195,9 @@ export default function App() {
                 <label className="block font-semibold text-slate-700 mb-1">Dekont / açıklama</label>
                 <input type="text" placeholder="Örn: Migros Kasım 1. hafta avans" value={newReceiptFormData.receiptNo} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, receiptNo: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg" />
               </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Tutar (TL)</label>
-                <input type="text" value={newReceiptFormData.amount} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, amount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-emerald-600 text-sm" required />
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Tutar (TL)</label>
+                  <input type="text" value={newReceiptFormData.amount} onChange={e => setNewReceiptFormData({ ...newReceiptFormData, amount: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg font-bold text-emerald-600 text-sm" required />
               </div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsNewReceiptModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
@@ -11399,8 +11431,8 @@ export default function App() {
               </div>
               <button type="submit" className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl">Kaydet</button>
             </form>
-          </div>
-        )}
+    </div>
+ )}
 
 {/* MODAL: ALT YÜKLENİCİ CARİ DETAYI VE AVANS YÖNETİMİ */}
   {selectedSubcontractorForDetail && (
@@ -11453,7 +11485,7 @@ export default function App() {
 
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle</span>
+            <span className="font-bold text-slate-800 block">➕ Yeni Cari Hareket Ekle</span>
               {isAdmin && (
                 <button
                   type="button"
@@ -11794,9 +11826,9 @@ export default function App() {
                   </div>
                 );
               })}
-            </div>
-          </div>
-        )}
+      </div>
+    </div>
+  )}
   </main>
       <footer className="bg-white border-t border-slate-200 px-4 py-3 text-[10px] text-slate-500 leading-relaxed">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">

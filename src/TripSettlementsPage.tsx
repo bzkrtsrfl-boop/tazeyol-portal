@@ -405,7 +405,7 @@ export default function TripSettlementsPage({
                 ))}
               </tbody>
             </table>
-            <p className="text-[11px] text-slate-500 mt-2">Sarı satır: depo yok. Liste’den gelen plakaları Ömerli / Konacık / Peltili / Ortak’a atayın.</p>
+            <p className="text-[11px] text-slate-500 mt-2">Sarı satır: depo yok. Plakayı Araç Filosu’ndan tanımlayıp depoya atayın.</p>
           </div>
         </div>
       )}

@@ -34,8 +34,8 @@ export default function FleetPage({
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
       <div className="flex justify-between items-center pb-5 border-b border-slate-100">
         <div>
-          <h3 className="font-bold text-lg text-slate-900">Araç Filosu ({vehicles.length} Araç)</h3>
-          <p className="text-xs text-slate-500 mt-0.5">Sürücü, muayene, sigorta, kasko ve otomatik MTV bildirimleri.</p>
+          <h3 className="font-bold text-lg text-slate-900">İç Filo ({vehicles.length} Araç)</h3>
+          <p className="text-xs text-slate-500 mt-0.5">Şirket öz malı: sürücü, muayene, sigorta, kasko ve MTV. Tüm plakaların künyesi Araç Filosu’ndadır.</p>
         </div>
         {canEdit && (
           <button
