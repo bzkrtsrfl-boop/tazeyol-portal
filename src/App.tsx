@@ -88,6 +88,7 @@ import HalSahaPage from './HalSahaPage';
 import TripSettlementsPage from './TripSettlementsPage';
 import DisAlimPage from './DisAlimPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
+import { SortTh, sortByColumn, type ColumnSort } from './columnSort';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function PortalTechFooter() {
@@ -1459,6 +1460,9 @@ export default function App() {
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState('all');
   const [expenseSortField, setExpenseSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
   const [expenseSortOrder, setExpenseSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [incomeInSort, setIncomeInSort] = useState<ColumnSort>({ field: 'date', dir: 'asc' });
+  const [incomeOutSort, setIncomeOutSort] = useState<ColumnSort>({ field: 'date', dir: 'asc' });
+  const [collectionSort, setCollectionSort] = useState<ColumnSort>({ field: 'date', dir: 'desc' });
   const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
   const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('asc');
   const [cardDueFilter, setCardDueFilter] = useState<'all' | 'week' | 'overdue' | 'clear'>('all');
@@ -8924,22 +8928,23 @@ export default function App() {
           const girdiShare = flowTotal > 0 ? (girdi / flowTotal) * 100 : 50;
           const barMax = Math.max(girdi, cikti, 1);
           const rangeLabel = filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'Tüm dönem';
-          const inLines = periodIncomeRows
-            .slice()
-            .sort((a: any, b: any) => String(a.issue_date).localeCompare(String(b.issue_date)))
-            .map((inv: any) => ({
-              date: formatDateTR(inv.issue_date),
-              title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gelir'),
-              amount: cleanNumber(inv.total_amount)
-            }));
-          const outLines = periodExpenseRows
-            .slice()
-            .sort((a: any, b: any) => String(a.issue_date).localeCompare(String(b.issue_date)))
-            .map((inv: any) => ({
-              date: formatDateTR(inv.issue_date),
-              title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gider'),
-              amount: cleanNumber(inv.total_amount)
-            }));
+          const cashLineGetters = {
+            date: (l: { sortDate: string }) => l.sortDate,
+            title: (l: { title: string }) => l.title,
+            amount: (l: { amount: number }) => l.amount
+          };
+          const inLines = sortByColumn(periodIncomeRows.map((inv: any) => ({
+            date: formatDateTR(inv.issue_date),
+            sortDate: sanitizeDate(inv.issue_date) || '',
+            title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gelir'),
+            amount: cleanNumber(inv.total_amount)
+          })), incomeInSort, cashLineGetters);
+          const outLines = sortByColumn(periodExpenseRows.map((inv: any) => ({
+            date: formatDateTR(inv.issue_date),
+            sortDate: sanitizeDate(inv.issue_date) || '',
+            title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gider'),
+            amount: cleanNumber(inv.total_amount)
+          })), incomeOutSort, cashLineGetters);
           const exportExcel = () => {
             exportAoaExcel([
               ['Tazeyol ERP — Genel Gelir Gider'],
@@ -9047,9 +9052,9 @@ export default function App() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                     <tr>
-                      <th className="py-2 px-3">Tarih</th>
-                      <th className="py-2 px-3">Açıklama</th>
-                      <th className="py-2 px-3 text-right">Tutar</th>
+                      <SortTh label="Tarih" field="date" sort={incomeInSort} onSort={setIncomeInSort} />
+                      <SortTh label="Açıklama" field="title" sort={incomeInSort} onSort={setIncomeInSort} />
+                      <SortTh label="Tutar" field="amount" sort={incomeInSort} onSort={setIncomeInSort} align="right" firstDir="desc" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -9073,9 +9078,9 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                      <th className="py-2 px-3">Tarih</th>
-                      <th className="py-2 px-3">Açıklama</th>
-                      <th className="py-2 px-3 text-right">Tutar</th>
+                      <SortTh label="Tarih" field="date" sort={incomeOutSort} onSort={setIncomeOutSort} />
+                      <SortTh label="Açıklama" field="title" sort={incomeOutSort} onSort={setIncomeOutSort} />
+                      <SortTh label="Tutar" field="amount" sort={incomeOutSort} onSort={setIncomeOutSort} align="right" firstDir="desc" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -9120,18 +9125,23 @@ export default function App() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-4">Makbuz / Dekont No</th>
-                    <th className="py-3 px-4">Tahsilat Tarihi</th>
+                    <SortTh className="py-3 px-4" label="Makbuz / Dekont No" field="title" sort={collectionSort} onSort={setCollectionSort} />
+                    <SortTh className="py-3 px-4" label="Tahsilat Tarihi" field="date" sort={collectionSort} onSort={setCollectionSort} firstDir="desc" />
                     <th className="py-3 px-4">Durum</th>
-                    <th className="py-3 px-4 text-right">Tahsil Edilen Tutar</th>
+                    <SortTh className="py-3 px-4" label="Tahsil Edilen Tutar" field="amount" sort={collectionSort} onSort={setCollectionSort} align="right" firstDir="desc" />
                     {isAdmin && <th className="py-3 px-4 text-center">İşlem</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {cashInRows
-                    .filter(i => i.category !== 'cash_deposit' && isDateInRange(i.issue_date))
-                    .sort((a, b) => String(sanitizeDate(b.issue_date)).localeCompare(String(sanitizeDate(a.issue_date))))
-                    .map((item) => {
+                  {sortByColumn(
+                    cashInRows.filter(i => i.category !== 'cash_deposit' && isDateInRange(i.issue_date)),
+                    collectionSort,
+                    {
+                      title: (i: any) => String(i.invoice_no || ''),
+                      date: (i: any) => sanitizeDate(i.issue_date),
+                      amount: (i: any) => cleanNumber(i.total_amount)
+                    }
+                  ).map((item) => {
                     const lockedBank = String(item.id || '').startsWith('migros_bank_');
                     return (
                     <tr key={String(item.id)} className="hover:bg-slate-50 transition">

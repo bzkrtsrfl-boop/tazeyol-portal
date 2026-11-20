@@ -74,6 +74,15 @@ export default function HalSahaPage({
   const [newPlate, setNewPlate] = useState({ plate: '', note: '' });
   const [busy, setBusy] = useState(false);
   const [handoverAmt, setHandoverAmt] = useState('');
+  const [listSort, setListSort] = useState<{ field: 'date' | 'note' | 'amount'; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
+  const [kasaSort, setKasaSort] = useState<{ field: 'date' | 'note' | 'amount'; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
+  const toggleSort = (
+    cur: { field: 'date' | 'note' | 'amount'; dir: 'asc' | 'desc' },
+    field: 'date' | 'note' | 'amount'
+  ) => (cur.field === field ? { field, dir: (cur.dir === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' } : { field, dir: field === 'date' ? 'desc' as const : 'asc' as const });
+  const sortMark = (cur: { field: string; dir: string }, field: string) =>
+    cur.field !== field ? ' ↕' : cur.dir === 'asc' ? ' ↑' : ' ↓';
+  const thSort = 'py-2 px-3 cursor-pointer select-none hover:text-blue-600';
   const definedPlates = [...(plates || [])]
     .filter((p: any) => p.is_active !== false)
     .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.plate).localeCompare(String(b.plate), 'tr'));
@@ -92,8 +101,17 @@ export default function HalSahaPage({
       ? monthEntries.filter((e: any) => e.firm_name === firmFilter)
       : monthEntries
     ).filter((e: any) => !isHalKasaOnly(e));
-    return [...rows].sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)));
-  }, [monthEntries, firmFilter]);
+    const noteOf = (e: any) => String(e.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim();
+    const amtOf = (e: any) => (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0) + cleanNumber(e.collected);
+    return [...rows].sort((a, b) => {
+      let cmp = 0;
+      if (listSort.field === 'note') cmp = noteOf(a).localeCompare(noteOf(b), 'tr', { sensitivity: 'base' });
+      else if (listSort.field === 'amount') cmp = amtOf(a) - amtOf(b);
+      else cmp = String(a.entry_date || '').localeCompare(String(b.entry_date || ''));
+      if (cmp === 0) cmp = String(a.entry_date || '').localeCompare(String(b.entry_date || ''));
+      return listSort.dir === 'asc' ? cmp : -cmp;
+    });
+  }, [monthEntries, firmFilter, listSort, cleanNumber]);
 
   const kasaDefter = useMemo(() => {
     const nakit = (entries || [])
@@ -116,8 +134,16 @@ export default function HalSahaPage({
       inAmt: 0,
       outAmt: cleanNumber(h.amount)
     }));
-    return [...nakit, ...cikis].sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  }, [entries, handovers, cleanNumber]);
+    const rows = [...nakit, ...cikis];
+    return rows.sort((a, b) => {
+      let cmp = 0;
+      if (kasaSort.field === 'note') cmp = String(a.note || '').localeCompare(String(b.note || ''), 'tr', { sensitivity: 'base' });
+      else if (kasaSort.field === 'amount') cmp = (a.inAmt || a.outAmt) - (b.inAmt || b.outAmt);
+      else cmp = String(a.date || '').localeCompare(String(b.date || ''));
+      if (cmp === 0) cmp = String(a.date || '').localeCompare(String(b.date || ''));
+      return kasaSort.dir === 'asc' ? cmp : -cmp;
+    });
+  }, [entries, handovers, cleanNumber, kasaSort]);
 
   const cari = useMemo(() => {
     const names = activeFirms.map((f: any) => f.name);
@@ -552,12 +578,12 @@ export default function HalSahaPage({
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold">
               <tr>
-                <th className="py-2 px-3">Tarih</th>
+                <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'date'))}>Tarih{sortMark(listSort, 'date')}</th>
                 <th className="py-2 px-3">İşlem</th>
                 <th className="py-2 px-3">Firma</th>
                 <th className="py-2 px-3">Plaka</th>
-                <th className="py-2 px-3">Açıklama</th>
-                <th className="py-2 px-3 text-right">Sefer</th>
+                <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'note'))}>Açıklama{sortMark(listSort, 'note')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setListSort(s => toggleSort(s, 'amount'))}>Sefer / nakit{sortMark(listSort, 'amount')}</th>
                 <th className="py-2 px-3 text-right">Nakit</th>
                 {canEdit && <th className="py-2 px-3" />}
               </tr>
@@ -706,11 +732,11 @@ export default function HalSahaPage({
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 font-bold">
                 <tr>
-                  <th className="py-2 px-3">Tarih</th>
+                  <th className={thSort} onClick={() => setKasaSort(s => toggleSort(s, 'date'))}>Tarih{sortMark(kasaSort, 'date')}</th>
                   <th className="py-2 px-3">İşlem</th>
                   <th className="py-2 px-3">Kim</th>
-                  <th className="py-2 px-3">Not</th>
-                  <th className="py-2 px-3 text-right">Giren</th>
+                  <th className={thSort} onClick={() => setKasaSort(s => toggleSort(s, 'note'))}>Not{sortMark(kasaSort, 'note')}</th>
+                  <th className={`${thSort} text-right`} onClick={() => setKasaSort(s => toggleSort(s, 'amount'))}>Giren{sortMark(kasaSort, 'amount')}</th>
                   <th className="py-2 px-3 text-right">Çıkan</th>
                 </tr>
               </thead>
