@@ -10,6 +10,7 @@ export const PORTAL_MODULES = [
   { id: 'arac_filosu', label: 'Araç filosu' },
   { id: 'profitability', label: 'Öz mal karlılık' },
   { id: 'sales_customers', label: 'Satış faturaları' },
+  { id: 'dis_alim', label: 'Dış alım mutabakatı' },
   { id: 'customers', label: 'Müşteri kartları' },
   { id: 'collections', label: 'Müşteri tahsilatları' },
   { id: 'subcontractors', label: 'Hakediş faturaları' },
@@ -27,7 +28,7 @@ export const PORTAL_MODULES = [
 export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];
 
 export const FINANCE_DATA_MODULES: PortalModuleId[] = [
-  'sales_customers', 'collections', 'customers', 'general_expenses',
+  'sales_customers', 'dis_alim', 'collections', 'customers', 'general_expenses',
   'employees', 'payments', 'credit_cards', 'subcontractors', 'sub_accounts',
   'income_report', 'profitability'
 ];
@@ -81,7 +82,7 @@ export const ACCESS_PRESETS: { id: string; label: string; access: Record<string,
   { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit' } },
   { id: 'arac', label: 'Araç sorumlusu (künye + iç filo + plaka + karlılık)', access: { arac_filosu: 'edit', fleet: 'edit', plate_rentals: 'edit', profitability: 'edit' } },
   { id: 'on_muhasebe', label: 'Ön muhasebe', access: {
-    sales_customers: 'edit', customers: 'edit', collections: 'edit',
+    sales_customers: 'edit', dis_alim: 'edit', customers: 'edit', collections: 'edit',
     subcontractors: 'edit', sub_accounts: 'edit', sub_ibans: 'edit', trip_settlements: 'edit',
     payments: 'edit', credit_cards: 'edit', general_expenses: 'edit', employees: 'edit',
     income_report: 'view'

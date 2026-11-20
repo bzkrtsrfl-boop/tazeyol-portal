@@ -38,6 +38,7 @@ begin
   for rec in
     select * from (values
       ('invoices', array['sales_customers','collections','customers','general_expenses','employees','payments','credit_cards','subcontractors','sub_accounts','income_report','profitability']),
+      ('dis_alim_lines', array['dis_alim']),
       ('customers', array['sales_customers','collections','customers']),
       ('employees', array['employees','profitability']),
       ('employee_transactions', array['employees']),

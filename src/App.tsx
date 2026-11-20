@@ -86,9 +86,19 @@ import FleetPage from './FleetPage';
 import AracFilosuPage from './AracFilosuPage';
 import HalSahaPage from './HalSahaPage';
 import TripSettlementsPage from './TripSettlementsPage';
+import DisAlimPage from './DisAlimPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
+function PortalTechFooter() {
+  return (
+    <footer className="bg-slate-50 border-t border-slate-200 px-4 py-6 text-center">
+      <p className="text-xs text-slate-400">© 2024 <span className="font-semibold text-slate-500">Flee Aero</span>. Tüm hakları saklıdır.</p>
+      <p className="text-[11px] text-slate-300 mt-1">Powered by Flee Aero Technology</p>
+    </footer>
+  );
+}
+
 function TazeyolBrand() {
   return (
     <div className="flex items-center gap-2.5">
@@ -297,7 +307,9 @@ function rentalFisMarkup(row: any) {
     ['Yakıt oranı / birim', `${Number(row?.fuel_rate) || 0}  ·  ${moneyHtml(row?.fuel_unit_price)}`],
     ['KM / gün / uğrama-nokta', `${(Number(row?.total_km) || 0).toLocaleString('tr-TR')}  ·  ${Number(row?.work_days) || 0}  ·  ${Number(row?.stop_count) || 0}`],
     ['Yakıt geliri', moneyHtml(t.fuelIncome)],
-    ['Uğrama / ek iş / HGS', moneyHtml((Number(row?.visit_prime) || 0) + (Number(row?.extra_work) || 0) + (Number(row?.hgs) || 0))],
+    ['Uğrama', moneyHtml(row?.visit_prime)],
+    ['Ek', moneyHtml(row?.extra_work)],
+    ['HGS', moneyHtml(row?.hgs)],
     ['Yakıt kesintisi', moneyHtml(row?.fuel_charge)],
     ['Brüt hakediş', moneyHtml(t.brut)],
     ['KDV %20', moneyHtml(t.kdv)],
@@ -1388,7 +1400,7 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'dis_alim' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
   >('overview');
 
   useEffect(() => {
@@ -1504,6 +1516,7 @@ export default function App() {
   const [dbAracAssignments, setDbAracAssignments] = useState<any[]>([]);
   const [dbAracJobs, setDbAracJobs] = useState<any[]>([]);
   const [dbAracPlaces, setDbAracPlaces] = useState<any[]>([]);
+  const [dbDisAlimLines, setDbDisAlimLines] = useState<any[]>([]);
   const emptyPlateRentalForm = {
     plate: '',
     owner_name: '',
@@ -1647,7 +1660,8 @@ export default function App() {
         aracVehicleData,
         aracAssignData,
         aracJobData,
-        aracPlaceData
+        aracPlaceData,
+        disAlimData
       ] = await Promise.all([
         loadIf(want('payments'), 'payment_batches'),
         loadIf(want('payments') || want('subcontractors'), 'advance_installments'),
@@ -1675,7 +1689,8 @@ export default function App() {
         loadIf(want('arac_filosu'), 'fleet_vehicles', { column: 'plate', ascending: true }),
         loadIf(want('arac_filosu'), 'fleet_vehicle_assignments'),
         loadIf(want('arac_filosu') || isAdmin, 'fleet_code_jobs', { column: 'sort_order', ascending: true }),
-        loadIf(want('arac_filosu') || isAdmin, 'fleet_code_places', { column: 'sort_order', ascending: true })
+        loadIf(want('arac_filosu') || isAdmin, 'fleet_code_places', { column: 'sort_order', ascending: true }),
+        loadIf(want('dis_alim'), 'dis_alim_lines', { column: 'invoice_date', ascending: false })
       ]);
 
       setDbPaymentBatches(batchData);
@@ -1704,6 +1719,7 @@ export default function App() {
       setDbAracAssignments(aracAssignData);
       setDbAracJobs(aracJobData);
       setDbAracPlaces(aracPlaceData);
+      setDbDisAlimLines(disAlimData);
 
       const crcCard = isAdmin ? findCrcCustomer(customerData as Customer[]) : null;
       if (crcCard) {
@@ -6253,7 +6269,8 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-slate-900 flex flex-col">
+        <div className="flex-1 flex items-center justify-center p-4">
         <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6">
           <div className="text-center space-y-2">
             <div className="inline-block"><TazeyolBrand /></div>
@@ -6307,6 +6324,8 @@ export default function App() {
             </button>
           </form>
         </div>
+        </div>
+        <PortalTechFooter />
       </div>
     );
   }
@@ -6326,6 +6345,7 @@ export default function App() {
     { id: 'overview', label: 'Genel Görünüm', icon: LayoutDashboard },
     { id: 'customers', label: 'Müşteri Kartları', badge: dbCustomers.length, icon: Contact },
     { id: 'sales_customers', label: 'Satış Faturaları', badge: salesDetailedList.length, icon: TrendingUp },
+    { id: 'dis_alim', label: 'Dış Alım Mutabakatı', badge: dbDisAlimLines.length, icon: FileSpreadsheet },
     { id: 'subcontractors', label: 'Hakediş Faturaları', badge: dbInvoices.filter(i => i.category === 'subcontractor_invoice').length, icon: Users },
     { id: 'sub_accounts', label: 'Cari Kartları', badge: dbSubcontractors.length, icon: Building2 },
     { id: 'payments', label: 'Banka Ödeme Talimatı', icon: FileCheck2 },
@@ -6347,7 +6367,7 @@ export default function App() {
   const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
-    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses', 'income_report'] },
+    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'dis_alim', 'collections', 'customers', 'credit_cards', 'general_expenses', 'income_report'] },
     { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements', 'trip_settlements'] },
     { id: 'fleet', label: 'Araç', itemIds: ['arac_filosu', 'fleet', 'profitability', 'plate_rentals'] },
     { id: 'hal', label: 'Hal saha', itemIds: ['hal_saha'] },
@@ -7183,6 +7203,22 @@ export default function App() {
           </div>
         )}
         
+        {activeTab === 'dis_alim' && canViewMod('dis_alim') && (
+          <div className="space-y-3">
+            <div>
+              <h3 className="font-bold text-lg text-slate-900">Dış Alım Mutabakatı</h3>
+              <p className="text-xs text-slate-500 mt-0.5">Dış alım %10 · yansıtma %5. Birebir faturalar ilgili cariye; nakliye payı onay sonrası normal Migros’a. Dış Alım carisine yüzde yazılmaz.</p>
+            </div>
+            <DisAlimPage
+              rows={dbDisAlimLines}
+              canEdit={canEditMod('dis_alim')}
+              cleanNumber={cleanNumber}
+              formatDateTR={formatDateTR}
+              onReload={loadPortalData}
+            />
+          </div>
+        )}
+
         {activeTab === 'sales_customers' && (
         <div className="space-y-4">
           
@@ -11332,7 +11368,9 @@ export default function App() {
                     ['Yakıt oranı / birim', `${cleanNumber(r.fuel_rate)} · ${money(cleanNumber(r.fuel_unit_price))}`],
                     ['KM / gün / nokta', `${cleanNumber(r.total_km).toLocaleString('tr-TR')} · ${cleanNumber(r.work_days)} · ${cleanNumber(r.stop_count)}`],
                     ['Yakıt geliri', money(t.fuelIncome)],
-                    ['Uğraş / ek / HGS', money(cleanNumber(r.visit_prime) + cleanNumber(r.extra_work) + cleanNumber(r.hgs))],
+                    ['Uğrama', money(cleanNumber(r.visit_prime))],
+                    ['Ek', money(cleanNumber(r.extra_work))],
+                    ['HGS', money(cleanNumber(r.hgs))],
                     ['Yakıt kesintisi', money(cleanNumber(r.fuel_charge))],
                     ['Brüt / KDV / tevkifat', `${money(t.brut)} · ${money(t.kdv)} · ${money(t.stoppage)}`]
                   ].map(([k, v], i) => (
@@ -11844,12 +11882,7 @@ export default function App() {
     </div>
   )}
   </main>
-      <footer className="bg-white border-t border-slate-200 px-4 py-3 text-[10px] text-slate-500 leading-relaxed">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-          <span><b className="text-slate-700">{COMPANY_IDENTITY.legalName}</b> · {COMPANY_IDENTITY.address}</span>
-          <span>{COMPANY_IDENTITY.district} · {COMPANY_IDENTITY.phone} · {COMPANY_IDENTITY.tagline}</span>
-        </div>
-      </footer>
+      <PortalTechFooter />
 </div>
   );
 } 
