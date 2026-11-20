@@ -99,6 +99,30 @@ function PortalTechFooter() {
   );
 }
 
+const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
+  office_expense: 'Ofis & Kırtasiye',
+  rent_utility: 'Kira, elektrik, su, doğalgaz',
+  software_telecom: 'Yazılım, bilişim & araç takip',
+  advocate_consulting: 'Avukat / hukuk & danışmanlık',
+  cargo_stationery: 'Kargo, noter & resmi evrak',
+  hamaliye_labor: 'Hamaliye / Harcırah / İşçilik',
+  general_expense: 'Genel şirket masrafı',
+  owner_personal: 'Şirket dışı harcama',
+  maintenance: 'Tamir / bakım / servis',
+  tires: 'Lastik / yedek parça',
+  general_fuel: 'Genel akaryakıt / mazot',
+  traffic_fines: 'Trafik cezası',
+  insurance_inspection: 'Muayene, sigorta & kasko',
+  hgs: 'HGS / OGS',
+  taxes_sgk: 'Devlet / vergi / SGK',
+  opening_balance: 'Kasa açılış / dengeleme',
+  bank_commission: 'Banka masrafı & komisyon'
+};
+
+function expenseCategoryLabel(cat: string) {
+  return EXPENSE_CATEGORY_LABELS[cat] || 'Gider';
+}
+
 function TazeyolBrand() {
   return (
     <div className="flex items-center gap-2.5">
@@ -1432,6 +1456,7 @@ export default function App() {
   const [empSortOrder, setEmpSortOrder] = useState<'asc' | 'desc'>('asc');
   const [expenseSearchTerm, setExpenseSearchTerm] = useState('');
   const [expenseStatusFilter, setExpenseStatusFilter] = useState<'all' | 'unpaid' | 'paid'>('unpaid');
+  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState('all');
   const [expenseSortField, setExpenseSortField] = useState<'invoice_no' | 'issue_date' | 'total_amount'>('issue_date');
   const [expenseSortOrder, setExpenseSortOrder] = useState<'asc' | 'desc'>('desc');
   const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
@@ -3077,7 +3102,8 @@ export default function App() {
       if (cat === 'credit_card_payment') return 'Kredi kartı nakit ödeme';
       if (cat === 'taxes_sgk') return 'SGK / vergi';
       if (cat === 'traffic_fines') return 'Trafik cezası';
-      return 'Gider';
+      if (cat === 'hamaliye_labor') return 'Hamaliye / Harcırah / İşçilik';
+      return expenseCategoryLabel(cat);
     };
     type CashLine = {
       id: any;
@@ -4406,10 +4432,13 @@ export default function App() {
         if (expenseStatusFilter === 'paid') return i.status === 'paid';
         return true;
       })
+      .filter((i: any) => expenseCategoryFilter === 'all' || i.category === expenseCategoryFilter)
       .filter((i: any) => {
         if (!term) return true;
+        const catLabel = expenseCategoryLabel(String(i.category || '')).toLocaleLowerCase('tr-TR');
         return String(i.invoice_no || '').toLocaleLowerCase('tr-TR').includes(term)
-          || String(i.category || '').toLocaleLowerCase('tr-TR').includes(term);
+          || String(i.category || '').toLocaleLowerCase('tr-TR').includes(term)
+          || catLabel.includes(term);
       })
       .sort((a: any, b: any) => {
         let cmp = 0;
@@ -4422,7 +4451,7 @@ export default function App() {
         }
         return expenseSortOrder === 'asc' ? cmp : -cmp;
       });
-  }, [dbInvoices, expenseSearchTerm, expenseStatusFilter, expenseSortField, expenseSortOrder, filterStartDate, filterEndDate]);
+  }, [dbInvoices, expenseSearchTerm, expenseStatusFilter, expenseCategoryFilter, expenseSortField, expenseSortOrder, filterStartDate, filterEndDate]);
 
   const displayBankTermLines = allDecoratedBankLines;
 
@@ -9158,7 +9187,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-100 gap-4">
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Genel Giderler & Tedarikçi Borçları</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Bakım, yedek parça, lastik, vergi ve fiili masraf dökümü.</p>
+                <p className="text-xs text-slate-500 mt-0.5">Bakım, yedek parça, lastik, vergi, hamaliye/harcırah/işçilik ve fiili masraf dökümü.</p>
               </div>
               {isAdmin && (
                 <button 
@@ -9197,6 +9226,29 @@ export default function App() {
                 </svg>
               </div>
               <select
+                value={expenseCategoryFilter}
+                onChange={(e: any) => setExpenseCategoryFilter(e.target.value)}
+                className="w-full sm:w-56 text-xs px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-700 focus:outline-none focus:border-blue-500"
+              >
+                <option value="all">Tüm gider türleri</option>
+                <option value="hamaliye_labor">Hamaliye / Harcırah / İşçilik</option>
+                <option value="office_expense">Ofis & Kırtasiye</option>
+                <option value="rent_utility">Kira, elektrik, su</option>
+                <option value="software_telecom">Yazılım / bilişim</option>
+                <option value="advocate_consulting">Avukat / danışmanlık</option>
+                <option value="cargo_stationery">Kargo / noter</option>
+                <option value="general_expense">Genel şirket masrafı</option>
+                <option value="owner_personal">Şirket dışı harcama</option>
+                <option value="maintenance">Tamir / bakım</option>
+                <option value="tires">Lastik / yedek parça</option>
+                <option value="general_fuel">Akaryakıt</option>
+                <option value="traffic_fines">Trafik cezası</option>
+                <option value="insurance_inspection">Muayene / sigorta</option>
+                <option value="hgs">HGS / OGS</option>
+                <option value="taxes_sgk">Vergi / SGK</option>
+                <option value="bank_commission">Banka masrafı</option>
+              </select>
+              <select
                 value={expenseStatusFilter}
                 onChange={(e: any) => setExpenseStatusFilter(e.target.value)}
                 className="w-full sm:w-52 text-xs px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-700 focus:outline-none focus:border-blue-500"
@@ -9220,6 +9272,7 @@ export default function App() {
                     >
                       Açıklama / Belge {expenseSortField === 'invoice_no' ? (expenseSortOrder === 'asc' ? '↑' : '↓') : '↕'}
                     </th>
+                    <th className="py-3 px-4">Tür</th>
                     <th
                       className="py-3 px-4 cursor-pointer select-none hover:text-blue-600"
                       onClick={() => {
@@ -9245,7 +9298,7 @@ export default function App() {
                 <tbody className="divide-y divide-slate-100">
                   {visibleGeneralExpenses.length === 0 && (
                     <tr>
-                      <td colSpan={isAdmin ? 5 : 4} className="py-8 px-4 text-center text-slate-400">
+                      <td colSpan={isAdmin ? 6 : 5} className="py-8 px-4 text-center text-slate-400">
                         {expenseStatusFilter === 'unpaid' ? 'Ödenecek gider yok.' : 'Kayıt yok.'}
                       </td>
                     </tr>
@@ -9253,6 +9306,7 @@ export default function App() {
                   {visibleGeneralExpenses.map((item) => (
                     <tr key={item.id} className="hover:bg-slate-50 transition">
                       <td className="py-3 px-4 font-medium text-slate-800">{item.invoice_no}</td>
+                      <td className="py-3 px-4 text-slate-500">{expenseCategoryLabel(String(item.category || ''))}</td>
                       <td className="py-3 px-4 text-slate-600">{formatDateTR(item.issue_date)}</td>
                       <td className="py-3 px-4">
                         <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-semibold ${item.status === 'paid' ? (isExpensePaidByCard(item) ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800') : 'bg-rose-100 text-rose-800'}`}>
@@ -9796,6 +9850,7 @@ export default function App() {
               <option value="software_telecom">Yazılım, Bilişim & Araç Takip (Arvento vb.)</option>
               <option value="advocate_consulting">Avukat / Hukuk & Danışmanlık</option>
               <option value="cargo_stationery">Kargo, Noter & Resmi Evrak</option>
+              <option value="hamaliye_labor">Hamaliye / Harcırah / İşçilik</option>
               <option value="general_expense">Genel Şirket Masrafı (Diğer)</option>
             </optgroup>
 

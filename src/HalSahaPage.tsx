@@ -27,6 +27,11 @@ function isHalMerkezTahsil(e: any) {
   return /\[MERKEZ-TAHSIL\]/.test(String(e.notes || '')) || !!e.kasa_invoice_id;
 }
 
+function asUuidOrNull(id: any) {
+  const s = String(id || '');
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s) ? s : null;
+}
+
 type HalSahaPageProps = {
   firms: any[];
   entries: any[];
@@ -142,7 +147,6 @@ export default function HalSahaPage({
   const nakitToplanan = (entries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
   const teslim = (handovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
   const personelKasa = Math.round((nakitToplanan - teslim) * 100) / 100;
-  const ayKasaTahsilat = monthEntries.filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
   const aySefer = monthEntries.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
 
   const locked = (row: any) => !canTakeToCash && daysAgo(String(row.entry_date).slice(0, 10)) > 2;
@@ -336,7 +340,8 @@ export default function HalSahaPage({
         id = ins.data.id;
       }
     }
-    await supabase.from('hal_entries').update({ kasa_invoice_id: id }).eq('id', entryId);
+    const linkId = asUuidOrNull(id);
+    if (linkId) await supabase.from('hal_entries').update({ kasa_invoice_id: linkId }).eq('id', entryId);
     return '';
   };
 
@@ -386,29 +391,47 @@ export default function HalSahaPage({
     if (!window.confirm(`${money(amt)} ₺ merkez kasaya alınsın mı? Saha personel kasa kalanı bu kadar düşer.`)) return;
     setBusy(true);
     const handDate = today;
-    const { data: inv, error: invErr } = await supabase.from('invoices').insert([{
-      invoice_no: `Hal saha teslim ${handDate}`,
-      direction: 'incoming',
-      category: 'cash_deposit',
-      total_amount: amt,
-      issue_date: handDate,
-      due_date: handDate,
-      status: 'paid'
-    }]).select('id').maybeSingle();
-    if (invErr) {
-      setBusy(false);
-      alert('Kasa yazılamadı: ' + invErr.message);
-      return;
+    const invoiceNo = `Hal saha teslim ${handDate} ${amt}`;
+    let invId: any = null;
+    let existing = await supabase.from('invoices').select('id, total_amount').eq('invoice_no', invoiceNo).maybeSingle();
+    if (!existing.data) {
+      const oldNo = await supabase.from('invoices').select('id, total_amount').eq('invoice_no', `Hal saha teslim ${handDate}`).maybeSingle();
+      if (oldNo.data && Number(oldNo.data.total_amount) === amt) existing = oldNo;
     }
-    const { error } = await supabase.from('hal_handovers').insert([{
+    if (existing.data?.id) {
+      invId = existing.data.id;
+    } else {
+      const { data: inv, error: invErr } = await supabase.from('invoices').insert([{
+        invoice_no: invoiceNo,
+        direction: 'incoming',
+        category: 'cash_deposit',
+        total_amount: amt,
+        issue_date: handDate,
+        due_date: handDate,
+        status: 'paid'
+      }]).select('id').maybeSingle();
+      if (invErr) {
+        setBusy(false);
+        alert('Kasa yazılamadı: ' + invErr.message);
+        return;
+      }
+      invId = inv?.id;
+    }
+    const handPayload: any = {
       hand_date: handDate,
       amount: amt,
       note: 'Merkez kasa teslimi',
-      invoice_id: inv?.id || null,
+      invoice_id: asUuidOrNull(invId),
       created_by: (await supabase.auth.getUser()).data.user?.id || null
-    }]);
+    };
+    let { error } = await supabase.from('hal_handovers').insert([handPayload]);
+    if (error && /uuid/i.test(error.message || '')) {
+      const retry = await supabase.from('hal_handovers').insert([{ ...handPayload, invoice_id: null }]);
+      error = retry.error;
+    }
     setBusy(false);
     if (error) {
+      if (invId && !existing.data?.id) await supabase.from('invoices').delete().eq('id', invId);
       alert('Teslim kaydı yazılamadı: ' + error.message);
       return;
     }
@@ -652,10 +675,22 @@ export default function HalSahaPage({
         <div className="space-y-3">
           <p className="text-[11px] text-slate-500">Personel kasa, Excel Tahsilatlar defteri + bundan sonraki tek satırlı gece girişleridir. Hareketlerdeki firma tahsilatı caridir; burada tekrarlanmaz.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
-            <div className="border rounded-xl p-4 flex justify-between bg-amber-50 border-amber-100"><span className="text-xs text-amber-900">Personel kasa kalanı</span><b className="text-amber-900 text-lg">{money(personelKasa)} ₺</b></div>
-            <div className="border rounded-xl p-4 flex justify-between"><span className="text-xs text-slate-500">Merkeze teslim (tüm dönem)</span><b>{money(teslim)} ₺</b></div>
-            <div className="border rounded-xl p-4 flex justify-between bg-emerald-50 border-emerald-100"><span className="text-xs text-emerald-800">Bu ay saha kasasına nakit</span><b className="text-emerald-800">{money(ayKasaTahsilat)} ₺</b></div>
-            <div className="border rounded-xl p-4 flex justify-between"><span className="text-xs text-slate-500">Bu ay sefer / cari kalan</span><b>{money(aySefer)} / {money(genel.kalan)} ₺</b></div>
+            <div className="border rounded-xl p-4 flex justify-between items-center bg-amber-50 border-amber-100 min-h-[72px]">
+              <span className="text-xs font-semibold text-amber-900">Personel kasa bakiyesi</span>
+              <b className="text-amber-900 text-lg tabular-nums">{money(personelKasa)} ₺</b>
+            </div>
+            <div className="border rounded-xl p-4 flex justify-between items-center bg-emerald-50 border-emerald-100 min-h-[72px]">
+              <span className="text-xs font-semibold text-emerald-800">Mevcut ay tahsilatları</span>
+              <b className="text-emerald-800 text-lg tabular-nums">{money(genel.tahsilat)} ₺</b>
+            </div>
+            <div className="border border-slate-200 rounded-xl p-4 flex justify-between items-center min-h-[72px] bg-white">
+              <span className="text-xs font-semibold text-slate-500">Mevcut ay sefer toplamı</span>
+              <b className="text-slate-900 text-lg tabular-nums">{money(aySefer)} ₺</b>
+            </div>
+            <div className="border rounded-xl p-4 flex justify-between items-center bg-rose-50 border-rose-200 min-h-[72px]">
+              <span className="text-xs font-semibold text-rose-800">Kalan toplam alacak</span>
+              <b className="text-rose-700 text-lg tabular-nums">{money(genel.kalan)} ₺</b>
+            </div>
           </div>
           {canTakeToCash && (
             <div className="flex gap-2 items-end pt-2 max-w-xl">
