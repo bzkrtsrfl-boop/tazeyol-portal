@@ -20,6 +20,7 @@ export const PORTAL_MODULES = [
   { id: 'employees', label: 'Personel ve bordro' },
   { id: 'credit_cards', label: 'Kredi kartları' },
   { id: 'general_expenses', label: 'Genel giderler' },
+  { id: 'monthly_view', label: 'Aylık görünüm' },
   { id: 'income_report', label: 'Gelir gider raporu' },
   { id: 'hal_saha', label: 'Hal saha' },
   { id: 'trip_settlements', label: 'Filo' }
@@ -30,7 +31,7 @@ export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];
 export const FINANCE_DATA_MODULES: PortalModuleId[] = [
   'sales_customers', 'dis_alim', 'collections', 'customers', 'general_expenses',
   'employees', 'payments', 'credit_cards', 'subcontractors', 'sub_accounts',
-  'income_report', 'profitability'
+  'income_report', 'monthly_view', 'profitability'
 ];
 
 export function moduleAccessLevel(
@@ -85,6 +86,7 @@ export const ACCESS_PRESETS: { id: string; label: string; access: Record<string,
     sales_customers: 'edit', dis_alim: 'edit', customers: 'edit', collections: 'edit',
     subcontractors: 'edit', sub_accounts: 'edit', sub_ibans: 'edit', trip_settlements: 'edit',
     payments: 'edit', credit_cards: 'edit', general_expenses: 'edit', employees: 'edit',
+    monthly_view: 'view',
     income_report: 'view'
   } }
 ];

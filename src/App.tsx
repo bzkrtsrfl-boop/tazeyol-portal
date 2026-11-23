@@ -89,6 +89,7 @@ import TripSettlementsPage from './TripSettlementsPage';
 import DisAlimPage from './DisAlimPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
 import { SortTh, sortByColumn, type ColumnSort } from './columnSort';
+import MonthlyViewPage from './MonthlyViewPage';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
 function PortalTechFooter() {
@@ -120,8 +121,49 @@ const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   bank_commission: 'Banka masrafı & komisyon'
 };
 
+function normalizeExpenseCategory(cat: string) {
+  const raw = String(cat || '').trim();
+  if (EXPENSE_CATEGORY_LABELS[raw]) return raw;
+  const c = raw.toLocaleLowerCase('tr-TR');
+  if (['fuel', 'yakit', 'yakıt', 'mazot', 'akaryakit', 'akaryakıt', 'general_fuel'].includes(c)) return 'general_fuel';
+  if (['vergi', 'sgk', 'tax', 'taxes', 'mtv', 'vergi_sgk', 'taxes_sgk'].includes(c)) return 'taxes_sgk';
+  return '';
+}
+
 function expenseCategoryLabel(cat: string) {
-  return EXPENSE_CATEGORY_LABELS[cat] || 'Gider';
+  const n = normalizeExpenseCategory(cat) || cat;
+  return EXPENSE_CATEGORY_LABELS[n] || 'Gider';
+}
+
+function normalizeGiderTitle(no: string) {
+  return String(no || '')
+    .replace(/^\[KK\]\s*/i, '')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase('tr-TR');
+}
+
+function dedupeGiderKalemRows(rows: any[], close: (a: number, b: number, t?: number) => boolean) {
+  const kept: any[] = [];
+  rows.forEach(inv => {
+    const cat = normalizeExpenseCategory(inv.category);
+    const d = String(inv.issue_date || '').slice(0, 10);
+    const amt = Number(inv.total_amount) || 0;
+    const title = normalizeGiderTitle(inv.invoice_no);
+    const ix = kept.findIndex(k =>
+      normalizeExpenseCategory(k.category) === cat &&
+      String(k.issue_date || '').slice(0, 10) === d &&
+      close(Number(k.total_amount) || 0, amt, 0.51) &&
+      normalizeGiderTitle(k.invoice_no) === title
+    );
+    if (ix < 0) {
+      kept.push(inv);
+      return;
+    }
+    if (String(inv.invoice_no || '').length > String(kept[ix].invoice_no || '').length) kept[ix] = inv;
+  });
+  return kept;
 }
 
 function TazeyolBrand() {
@@ -1425,7 +1467,7 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'dis_alim' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'dis_alim' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'monthly_view' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
   >('overview');
 
   useEffect(() => {
@@ -1462,6 +1504,7 @@ export default function App() {
   const [expenseSortOrder, setExpenseSortOrder] = useState<'asc' | 'desc'>('desc');
   const [incomeInSort, setIncomeInSort] = useState<ColumnSort>({ field: 'date', dir: 'asc' });
   const [incomeOutSort, setIncomeOutSort] = useState<ColumnSort>({ field: 'date', dir: 'asc' });
+  const [incomeGiderKalemFilter, setIncomeGiderKalemFilter] = useState<string | null>(null);
   const [collectionSort, setCollectionSort] = useState<ColumnSort>({ field: 'date', dir: 'desc' });
   const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
   const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -6391,6 +6434,7 @@ export default function App() {
     { id: 'arac_filosu', label: 'Araç Filosu', badge: dbAracVehicles.length, icon: Truck },
     { id: 'fleet', label: 'İç Filo', badge: dbVehicles.length, icon: Truck },
     { id: 'profitability', label: 'Öz Mal Karlılık & Maliyet', badge: dbProfitability.length, icon: BarChart3 },
+    { id: 'monthly_view', label: 'Aylık görünüm', icon: Calendar },
     { id: 'income_report', label: 'Gelir Gider Raporu', icon: FileText },
     { id: 'collections', label: 'Müşteri Tahsilatları', badge: dbInvoices.filter(i => i.category === 'customer_collection' || i.category === 'customer_advance').length, icon: Coins },
     { id: 'general_expenses', label: 'Genel Giderler & Tedarik', icon: Receipt },
@@ -6403,7 +6447,7 @@ export default function App() {
   const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
-    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'dis_alim', 'collections', 'customers', 'credit_cards', 'general_expenses', 'income_report'] },
+    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'dis_alim', 'collections', 'customers', 'credit_cards', 'general_expenses', 'monthly_view', 'income_report'] },
     { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements', 'trip_settlements'] },
     { id: 'fleet', label: 'Araç', itemIds: ['arac_filosu', 'fleet', 'profitability', 'plate_rentals'] },
     { id: 'hal', label: 'Hal saha', itemIds: ['hal_saha'] },
@@ -8923,6 +8967,14 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === 'monthly_view' && (
+          <MonthlyViewPage
+            invoices={dbInvoices}
+            cleanNumber={cleanNumber}
+            formatDateTR={formatDateTR}
+          />
+        )}
+
         {activeTab === 'income_report' && (() => {
           const money = (n: number) => n.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
           const girdi = Math.max(0, totalCollectedCash);
@@ -8946,8 +8998,44 @@ export default function App() {
             date: formatDateTR(inv.issue_date),
             sortDate: sanitizeDate(inv.issue_date) || '',
             title: String(inv.invoice_no || '').trim() || String(inv.category || 'Gider'),
-            amount: cleanNumber(inv.total_amount)
+            amount: cleanNumber(inv.total_amount),
+            category: String(inv.category || '')
           })), incomeOutSort, cashLineGetters);
+          const giderKalemKayitlar = dedupeGiderKalemRows(
+            (dbInvoices || []).filter((inv: any) => {
+              if (inv.direction === 'outgoing') return false;
+              if (!isDateInRange(inv.issue_date)) return false;
+              const cat = normalizeExpenseCategory(inv.category);
+              return !!cat && cat !== 'opening_balance';
+            }),
+            amountsClose
+          );
+          const giderKalemOzet = (() => {
+            const sums = new Map<string, number>();
+            giderKalemKayitlar.forEach((inv: any) => {
+              const cat = normalizeExpenseCategory(inv.category);
+              if (!cat) return;
+              sums.set(cat, (sums.get(cat) || 0) + cleanNumber(inv.total_amount));
+            });
+            const rows = [...sums.entries()]
+              .map(([cat, amount]) => ({ cat, label: expenseCategoryLabel(cat), amount }))
+              .filter(r => r.amount > 0.009)
+              .sort((a, b) => b.amount - a.amount);
+            const total = rows.reduce((s, r) => s + r.amount, 0);
+            const maxAmt = Math.max(...rows.map(r => r.amount), 1);
+            return { rows, total, maxAmt };
+          })();
+          const giderKalemDetay = (cat: string) => giderKalemKayitlar
+            .filter((inv: any) => normalizeExpenseCategory(inv.category) === cat)
+            .map((inv: any) => ({
+              id: inv.id,
+              date: formatDateTR(inv.issue_date),
+              title: String(inv.invoice_no || '').trim() || expenseCategoryLabel(inv.category),
+              amount: cleanNumber(inv.total_amount),
+              kart: isExpensePaidByCard(inv),
+              odendi: inv.status === 'paid'
+            }))
+            .sort((a: { amount: number }, b: { amount: number }) => b.amount - a.amount);
           const exportExcel = () => {
             exportAoaExcel([
               ['Tazeyol ERP — Genel Gelir Gider'],
@@ -8956,6 +9044,11 @@ export default function App() {
               ['Girdi', totalCollectedCash],
               ['Çıktı', totalPeriodPaidExpenses],
               ['Net', periodProfit],
+              [],
+              ['Genel gider kırılımı'],
+              ['Kalem', 'Tutar'],
+              ...giderKalemOzet.rows.map(r => [r.label, r.amount]),
+              ['Genel gider toplam', giderKalemOzet.total],
               [],
               ['Gelirler'],
               ['Tarih', 'Açıklama', 'Tutar'],
@@ -8992,7 +9085,7 @@ export default function App() {
                 <div>
                 <h3 className="font-bold text-lg text-slate-900">Genel Gelir Gider</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Üstteki tarih aralığı ile ana sayfa Girdi−Çıktı aynı rakamlar. Kasaya giren / çıkan nakit; fatura cirosu değil.
+                  Aylık özet. Üstteki tarih ile ana sayfa Girdi−Çıktı aynı. Nakit; fatura projeye ayrılmaz.
                 </p>
                 </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -9048,6 +9141,144 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            </div>
+            {(() => {
+              const pieColors = ['#2563eb', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4', '#f97316', '#64748b'];
+              let pieAcc = 0;
+              const pieStops = giderKalemOzet.rows.map((r, i) => {
+                const pct = giderKalemOzet.total > 0 ? (r.amount / giderKalemOzet.total) * 100 : 0;
+                const from = pieAcc;
+                pieAcc += pct;
+                return { ...r, color: pieColors[i % pieColors.length], from, to: pieAcc, pct };
+              });
+              const pieCss = pieStops.length
+                ? `conic-gradient(${pieStops.map(s => `${s.color} ${s.from.toFixed(2)}% ${s.to.toFixed(2)}%`).join(', ')})`
+                : '#e2e8f0';
+              const kalanKalem = [
+                { label: 'Alt yüklenici', amount: unpaidSubcontractorNet, color: '#1d4ed8' },
+                { label: 'Devlet / vergi', amount: totalGovernmentPaymentsDebt, color: '#b45309' },
+                { label: 'Açık genel gider', amount: totalGeneralCompanyExpensesDebt, color: '#be123c' },
+                { label: 'Personel', amount: totalEmployeeFutureDebt, color: '#0f766e' }
+              ].filter(k => k.amount > 0.009);
+              const kalanMax = Math.max(...kalanKalem.map(k => k.amount), 1);
+              return (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded-2xl border border-slate-200 p-5 flex flex-col justify-center min-h-[180px]">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Net</span>
+                <div className={`text-3xl sm:text-4xl font-black tabular-nums mt-2 ${periodProfit >= 0 ? 'text-slate-900' : 'text-rose-700'}`}>
+                  {periodProfit >= 0 ? '' : '−'}{money(Math.abs(periodProfit))} ₺
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-slate-400 block">Satışlar</span>
+                    <b className="text-emerald-700 tabular-nums">{money(girdi)} ₺</b>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block">Giderler</span>
+                    <b className="text-rose-700 tabular-nums">{money(cikti)} ₺</b>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-5">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Gider dağılımı</span>
+                <p className="text-[10px] text-slate-400 mt-0.5">Girilen gider faturaları — nakit, kart ve henüz ödenmemiş.</p>
+                <div className="flex items-center gap-4 mt-3">
+                  <div className="w-28 h-28 rounded-full shrink-0 border border-slate-100" style={{ background: pieCss }} />
+                  <div className="flex-1 space-y-1 min-w-0">
+                    {pieStops.slice(0, 6).map(s => (
+                      <div key={s.cat} className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="flex items-center gap-1.5 min-w-0 truncate">
+                          <span className="w-2 h-2 rounded-full shrink-0 inline-block" style={{ background: s.color }} />
+                          <span className="truncate">{s.label}</span>
+                        </span>
+                        <span className="tabular-nums text-slate-600 shrink-0">{s.pct.toFixed(0)}%</span>
+                      </div>
+                    ))}
+                    {!pieStops.length && <span className="text-xs text-slate-400">Bu ay genel gider yok.</span>}
+                  </div>
+                </div>
+              </div>
+              {kalanKalem.length > 0 && (
+                <div className="rounded-2xl border border-slate-200 p-5 lg:col-span-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Açık borçlar (şimdi)</span>
+                  <p className="text-[11px] text-slate-400 mt-0.5 mb-3">Aya göre değil; ödenmemiş kalan. Proje ayrımı yok.</p>
+                  <div className="space-y-2">
+                    {kalanKalem.map(k => (
+                      <div key={k.label}>
+                        <div className="flex justify-between text-[11px] font-semibold mb-1">
+                          <span className="text-slate-700">{k.label}</span>
+                          <span className="tabular-nums">{money(k.amount)} ₺</span>
+                        </div>
+                        <div className="h-3 rounded-full bg-slate-100 overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${Math.max((k.amount / kalanMax) * 100, 3)}%`, background: k.color }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+              );
+            })()}
+            <div>
+              <div className="flex items-end justify-between gap-3 mb-3">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">Genel gider kırılımı</h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Girdiğiniz gider türleri (kasa, kart ve henüz ödenmemiş). Maaş ve taşeron yok. Toplam {money(giderKalemOzet.total)} ₺ · kaleme basınca altındaki kayıtlar açılır
+                  </p>
+                </div>
+              </div>
+              {giderKalemOzet.rows.length === 0 ? (
+                <p className="text-xs text-slate-400 py-4">Bu aralıkta genel gider türünde kasa çıkışı yok.</p>
+              ) : (
+                <div className="space-y-2">
+                  {giderKalemOzet.rows.map(r => {
+                    const share = giderKalemOzet.total > 0 ? (r.amount / giderKalemOzet.total) * 100 : 0;
+                    const bar = (r.amount / giderKalemOzet.maxAmt) * 100;
+                    const on = incomeGiderKalemFilter === r.cat;
+                    const detay = on ? giderKalemDetay(r.cat) : [];
+                    return (
+                      <div
+                        key={r.cat}
+                        className={`rounded-xl border overflow-hidden ${on ? 'border-rose-300 bg-rose-50' : 'border-slate-100 bg-slate-50'}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setIncomeGiderKalemFilter(on ? null : r.cat)}
+                          className="w-full text-left px-3 py-2.5 hover:bg-rose-50/80 transition"
+                        >
+                          <div className="flex items-baseline justify-between gap-3 mb-1.5">
+                            <span className="text-xs font-bold text-slate-800">{r.label}</span>
+                            <span className="text-xs font-black tabular-nums text-rose-700 whitespace-nowrap">
+                              {money(r.amount)} ₺
+                              <span className="text-[10px] font-semibold text-slate-400 ml-1.5">{share.toFixed(0)}%</span>
+                            </span>
+                          </div>
+                          <div className="h-2.5 rounded-full bg-white overflow-hidden border border-rose-100">
+                            <div className="h-full rounded-full bg-rose-400" style={{ width: `${Math.max(bar, 3)}%` }} />
+                          </div>
+                        </button>
+                        {on && (
+                          <div className="border-t border-rose-100 bg-white px-3 py-2 space-y-1.5">
+                            {detay.map(d => (
+                              <div key={String(d.id)} className="flex items-start justify-between gap-3 text-[11px]">
+                                <div className="min-w-0">
+                                  <span className="text-slate-400 mr-2 whitespace-nowrap">{d.date}</span>
+                                  <span className="text-slate-700">{d.title}</span>
+                                  {d.kart ? <span className="ml-1.5 text-purple-600 font-semibold">kart</span> : null}
+                                  {!d.odendi ? <span className="ml-1.5 text-amber-600 font-semibold">açık</span> : null}
+                                </div>
+                                <span className="font-bold tabular-nums text-rose-700 whitespace-nowrap">{money(d.amount)} ₺</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div>
               <h4 className="text-sm font-bold text-slate-800 mb-2">Gelirler ({inLines.length})</h4>
