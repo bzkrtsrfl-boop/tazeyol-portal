@@ -3935,7 +3935,7 @@ export default function App() {
     });
     // Peşin avans açık vadeye, ödemeler işlendikten sonra yazılır (ödenmiş 1 nciyi yemez).
 
-    type Pay = { date: string; desc: string; amount: number; type: string };
+    type Pay = { date: string; desc: string; amount: number; type: string; ledgerId?: any };
     const pays: Pay[] = [...divertedPays];
     (dbSubcontractorsLedger || []).forEach((l: any) => {
       if (String(l.subcontractor_id) !== String(sub.id)) return;
@@ -3960,7 +3960,8 @@ export default function App() {
         date: sanitizeDate(l.created_at),
         desc,
         amount: amt,
-        type: String(l.transaction_type || '')
+        type: String(l.transaction_type || ''),
+        ledgerId: l.id
       });
     });
     (dbInvoices || []).forEach((inv: any) => {
@@ -4069,7 +4070,9 @@ export default function App() {
         type,
         desc: p.desc || 'Ödeme',
         debit: 0,
-        credit: Math.round(p.amount * 100) / 100
+        credit: Math.round(p.amount * 100) / 100,
+        isManual: !!p.ledgerId,
+        rawId: p.ledgerId
       });
     });
 
