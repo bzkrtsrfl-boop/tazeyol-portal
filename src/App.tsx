@@ -6447,12 +6447,20 @@ export default function App() {
   const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
-    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'dis_alim', 'collections', 'customers', 'credit_cards', 'general_expenses', 'monthly_view', 'income_report'] },
+    { id: 'reports', label: 'Raporlar', itemIds: ['monthly_view', 'income_report', 'profitability', 'dis_alim'] },
+    { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses'] },
     { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements', 'trip_settlements'] },
-    { id: 'fleet', label: 'Araç', itemIds: ['arac_filosu', 'fleet', 'profitability', 'plate_rentals'] },
+    { id: 'fleet', label: 'Araç', itemIds: ['arac_filosu', 'fleet', 'plate_rentals'] },
     { id: 'hal', label: 'Hal saha', itemIds: ['hal_saha'] },
     { id: 'people', label: 'İnsan ve yetki', itemIds: ['employees', 'users'] }
-  ].map(g => ({ ...g, items: g.itemIds.map(id => menuById[id]).filter(item => item && canViewMod(item.id)) }))
+  ].map(g => ({
+    ...g,
+    items: g.itemIds
+      .map(id => menuById[id])
+      .filter(item => item && canViewMod(item.id))
+      .sort((a, b) => String(a.label).localeCompare(String(b.label), 'tr'))
+  }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'tr'))
     .filter(g => g.items.length);
 
   return (
