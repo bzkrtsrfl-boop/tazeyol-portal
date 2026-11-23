@@ -1463,6 +1463,7 @@ export default function App() {
     if (isReporter) return false;
     return moduleAccessLevel(portalAccess, mod) === 'edit';
   };
+  const seesInspectionOverdueAlert = isAdmin || isReporter || (isSaha && canViewMod('payments'));
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -1506,6 +1507,7 @@ export default function App() {
   const [incomeOutSort, setIncomeOutSort] = useState<ColumnSort>({ field: 'date', dir: 'asc' });
   const [incomeGiderKalemFilter, setIncomeGiderKalemFilter] = useState<string | null>(null);
   const [collectionSort, setCollectionSort] = useState<ColumnSort>({ field: 'date', dir: 'desc' });
+  const [overdueInspectionAlertOpen, setOverdueInspectionAlertOpen] = useState(true);
   const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
   const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('asc');
   const [cardDueFilter, setCardDueFilter] = useState<'all' | 'week' | 'overdue' | 'clear'>('all');
@@ -1737,7 +1739,7 @@ export default function App() {
       ] = await Promise.all([
         loadIf(want('payments'), 'payment_batches'),
         loadIf(want('payments') || want('subcontractors'), 'advance_installments'),
-        loadIf(want('fleet') || want('profitability') || want('plate_rentals') || want('hal_saha'), 'vehicles', { column: 'id', ascending: true }),
+        loadIf(want('fleet') || want('profitability') || want('plate_rentals') || want('hal_saha') || want('payments'), 'vehicles', { column: 'id', ascending: true }),
         loadIf(finance, 'invoices', { column: 'created_at', ascending: false }),
         loadIf(want('employees') || want('profitability'), 'employees', { column: 'id', ascending: true }),
         loadIf(want('subcontractors') || want('sub_accounts') || want('payments') || want('employees'), 'advance_payments', { column: 'created_at', ascending: false }),
@@ -4056,7 +4058,9 @@ export default function App() {
       if (!already) pays.push(bp);
     });
     const pesinAdvanceTotal = Math.round(
-      lines.filter(l => /pe[sş]in avans/i.test(l.type)).reduce((s, l) => s + l.credit, 0) * 100
+      lines
+        .filter(l => /pe[sş]in avans/i.test(l.type) && inSeptPayWave(l.date))
+        .reduce((s, l) => s + l.credit, 0) * 100
     ) / 100;
     const septInstCut = Math.round(
       lines.filter(l => /taksitli avans/i.test(l.type)).reduce((s, l) => {
@@ -4328,6 +4332,17 @@ export default function App() {
   const contractorPayableNow = useMemo(
     () => Math.round(allDecoratedBankLines.reduce((s, l) => s + (l.netAmount || 0), 0) * 100) / 100,
     [allDecoratedBankLines]
+  );
+  const todayIso = new Date().toISOString().split('T')[0];
+  const overdueInspections = useMemo(
+    () =>
+      (dbVehicles || [])
+        .filter(v => {
+          const d = sanitizeDate(v.next_inspection_date);
+          return !!d && d < todayIso;
+        })
+        .sort((a, b) => String(a.next_inspection_date).localeCompare(String(b.next_inspection_date))),
+    [dbVehicles, todayIso]
   );
   const payableOtherDebt = totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt + totalEmployeeFutureDebt;
   const payableTotalDebt = contractorPayableNow + payableOtherDebt;
@@ -6710,6 +6725,41 @@ export default function App() {
         </div>
       )}
 
+      {seesInspectionOverdueAlert && overdueInspectionAlertOpen && overdueInspections.length > 0 && (
+        <div className="fixed inset-0 bg-slate-900/55 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-rose-200">
+            <div className="flex items-start gap-3 pb-3 border-b border-rose-100">
+              <AlertTriangle className="w-6 h-6 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-black text-rose-950 text-base">Muayene süresi geçen araç</h3>
+                <p className="text-xs text-rose-800 mt-0.5">{overdueInspections.length} plaka · tarihi geçmiş</p>
+              </div>
+            </div>
+            <div className="mt-3 max-h-64 overflow-y-auto space-y-1.5">
+              {overdueInspections.slice(0, 12).map(v => (
+                <div key={String(v.id || v.plate_number)} className="flex justify-between gap-3 text-xs bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">
+                  <div className="min-w-0">
+                    <span className="font-mono font-bold text-rose-950 block">{v.plate_number}</span>
+                    <span className="text-rose-700">Sürücü: {v.driver_name || 'Atanmadı'}</span>
+                  </div>
+                  <span className="font-black text-rose-800 whitespace-nowrap">{formatDateTR(v.next_inspection_date)}</span>
+                </div>
+              ))}
+              {overdueInspections.length > 12 && (
+                <p className="text-[11px] text-slate-500 px-1">+{overdueInspections.length - 12} araç daha. İç Filo’dan bakın.</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setOverdueInspectionAlertOpen(false)}
+              className="mt-4 w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold"
+            >
+              Tamam
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ANA İÇERİK ALANI */}
       <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
         {isSaha && !PORTAL_MODULES.some(m => canViewMod(m.id)) && (
@@ -7148,20 +7198,33 @@ export default function App() {
                     .filter(v => v.next_inspection_date)
                     .sort((a, b) => new Date(a.next_inspection_date).getTime() - new Date(b.next_inspection_date).getTime())
                     .slice(0, 5)
-                    .map((veh, idx) => (
-                      <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
+                    .map((veh, idx) => {
+                      const d = sanitizeDate(veh.next_inspection_date);
+                      const overdue = !!d && d < todayIso;
+                      return (
+                      <div
+                        key={idx}
+                        className={`p-3 rounded-xl flex justify-between items-center text-xs border ${
+                          overdue
+                            ? 'bg-rose-100 border-rose-400 ring-1 ring-rose-300'
+                            : 'bg-slate-50 border-slate-200'
+                        }`}
+                      >
                         <div>
-                          <span className="font-mono font-bold text-blue-700 block">{veh.plate_number}</span>
-                          <span className="text-[11px] text-slate-500">Sürücü: {veh.driver_name || 'Atanmadı'}</span>
+                          <span className={`font-mono font-bold block ${overdue ? 'text-rose-950' : 'text-blue-700'}`}>{veh.plate_number}</span>
+                          <span className={`text-[11px] ${overdue ? 'text-rose-800' : 'text-slate-500'}`}>Sürücü: {veh.driver_name || 'Atanmadı'}</span>
                         </div>
                         <div className="text-right">
-                          <span className="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded text-[11px] block">
+                          <span className={`font-bold px-2 py-0.5 rounded text-[11px] block ${overdue ? 'bg-rose-600 text-white' : 'bg-amber-100 text-amber-800'}`}>
                             {formatDateTR(veh.next_inspection_date)}
                           </span>
-                          <span className="text-[10px] text-slate-400 mt-0.5 block">Muayene Tarihi</span>
+                          <span className={`text-[10px] mt-0.5 block ${overdue ? 'text-rose-700 font-semibold' : 'text-slate-400'}`}>
+                            {overdue ? 'Süresi geçti' : 'Muayene Tarihi'}
+                          </span>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })}
                 </div>
               </div>
             </div>
@@ -9880,7 +9943,7 @@ export default function App() {
 
       {/* MODAL: TAŞERONA MANUEL ÖDEME / AVANS YAP */}
       {isSubPaymentModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsSubPaymentModalOpen(false))}>
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[70] flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setIsSubPaymentModalOpen(false))}>
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-100">
             <div className="flex justify-between items-center pb-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-base">Alt yükleniciye avans ver</h3>
