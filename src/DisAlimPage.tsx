@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Search, X, FileSpreadsheet, Download } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { writeExcelAoa } from './excelOut';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { supabase } from './supabase';
@@ -245,10 +245,7 @@ export default function DisAlimPage({ rows, canEdit, cleanNumber, formatDateTR, 
       ['Yansıtma KDV’siz', yanNet, '%5', yanFee],
       ['Nakliye hizmet (normal Migros)', nakliye]
     ];
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Mutabakat');
-    XLSX.writeFile(workbook, `Dis_Alim_Mutabakat_${allMonths ? 'tumu' : ym}.xlsx`);
+    writeExcelAoa(aoa, `Dis_Alim_Mutabakat_${allMonths ? 'tumu' : ym}.xlsx`, 'Mutabakat');
   };
 
   const exportPdf = async () => {

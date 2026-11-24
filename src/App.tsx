@@ -89,6 +89,8 @@ import TripSettlementsPage from './TripSettlementsPage';
 import DisAlimPage from './DisAlimPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
 import { SortTh, sortByColumn, type ColumnSort } from './columnSort';
+import { formatMoneyTR, formatNumTR } from './money';
+import { writeExcelAoa, excelKeepNumber } from './excelOut';
 import MonthlyViewPage from './MonthlyViewPage';
 
 // KURUMSAL TAZEYOL LOGO + ERP BİLEŞENİ
@@ -142,6 +144,42 @@ function normalizeGiderTitle(no: string) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLocaleLowerCase('tr-TR');
+}
+
+function cleanPlateKey(p: string) {
+  return String(p || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function isExpensePlateTag(inner: string) {
+  const s = cleanPlateKey(inner);
+  if (!s || s === 'KK') return false;
+  return /[A-Z]/.test(s) && /\d/.test(s) && s.length >= 5;
+}
+
+function stripExpensePlateTags(title: string) {
+  return String(title || '')
+    .replace(/^\[KK\]\s*/i, '')
+    .replace(/\[[^\]]*\]/g, (m) => (isExpensePlateTag(m.slice(1, -1)) ? ' ' : m))
+    .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*$/g, '')
+    .trim();
+}
+
+function lastExpensePlateTag(title: string) {
+  const tags = [...String(title || '').matchAll(/\[([^\]]+)\]/g)]
+    .map(m => m[1])
+    .filter(isExpensePlateTag)
+    .map(cleanPlateKey);
+  return tags.length ? tags[tags.length - 1] : '';
+}
+
+function removeExpensePlateTag(title: string, plate: string) {
+  const key = cleanPlateKey(plate);
+  const kk = /^\s*\[KK\]/i.test(title);
+  let next = String(title || '').replace(/^\[KK\]\s*/i, '');
+  next = next.replace(/\[[^\]]*\]/g, (m) => (cleanPlateKey(m.slice(1, -1)) === key ? '' : m));
+  next = next.replace(/\s+/g, ' ').trim();
+  return kk ? `[KK] ${next}` : next;
 }
 
 function dedupeGiderKalemRows(rows: any[], close: (a: number, b: number, t?: number) => boolean) {
@@ -548,10 +586,7 @@ function dismissIfBackdrop(e: React.MouseEvent, close: () => void) {
 }
 
 function exportAoaExcel(rows: any[][], fileName: string, sheetName: string) {
-  const sheet = XLSX.utils.aoa_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, sheetName.slice(0, 31));
-  XLSX.writeFile(workbook, fileName);
+  writeExcelAoa(rows, fileName, sheetName);
 }
 
 function incomeReportPdfMarkup(opts: {
@@ -3514,16 +3549,13 @@ export default function App() {
       line.balance
     ]);
     const kapanis = ledger.length ? ledger[ledger.length - 1].balance : 0;
-    const sheet = XLSX.utils.aoa_to_sheet([
+    const safeName = customer.name.replace(/[\\/:*?"<>|]/g, ' ').slice(0, 40).trim();
+    writeExcelAoa([
       ...header,
       ...body,
       [],
       ['', '', 'Kapanış bakiyesi', '', '', kapanis]
-    ]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Cari');
-    const safeName = customer.name.replace(/[\\/:*?"<>|]/g, ' ').slice(0, 40).trim();
-    XLSX.writeFile(workbook, `Tazeyol_Cari_${safeName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    ], `Tazeyol_Cari_${safeName}_${new Date().toISOString().split('T')[0]}.xlsx`, 'Cari');
   };
 
   const payrollMonthList = useMemo(() => {
@@ -3731,16 +3763,13 @@ export default function App() {
       line.balance
     ]);
     const kapanis = ledger.length ? ledger[ledger.length - 1].balance : 0;
-    const sheet = XLSX.utils.aoa_to_sheet([
+    const safeName = String(emp.full_name || 'personel').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 40).trim();
+    writeExcelAoa([
       ...header,
       ...body,
       [],
       ['', '', 'Kapanış bakiyesi', '', '', kapanis]
-    ]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Hakedis');
-    const safeName = String(emp.full_name || 'personel').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 40).trim();
-    XLSX.writeFile(workbook, `Tazeyol_Hakedis_${safeName}_${payrollFrom}_${payrollTo}.xlsx`);
+    ], `Tazeyol_Hakedis_${safeName}_${payrollFrom}_${payrollTo}.xlsx`, 'Hakedis');
   };
 
   const openPayrollReport = (emp: any) => {
@@ -4795,18 +4824,17 @@ export default function App() {
       }
     }
 
-    const excelData = selectedRows.map(item => ({
-      'Alıcı Unvanı': item.contractorName,
-      'IBAN': item.iban,
-      'Ödeme Tutarı (TL)': item.amount,
-      'Açıklama': `Tazeyol Lojistik Hakediş (${item.notes.slice(0, 3).join('; ')}${item.notes.length > 3 ? '…' : ''})`
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Toplu Odeme');
+    const excelData = selectedRows.map(item => ([
+      item.contractorName,
+      item.iban,
+      excelKeepNumber(item.amount),
+      `Tazeyol Lojistik Hakediş (${item.notes.slice(0, 3).join('; ')}${item.notes.length > 3 ? '…' : ''})`
+    ]));
     const todayStr = new Date().toISOString().split('T')[0];
-    XLSX.writeFile(workbook, `Tazeyol_Banka_Odeme_Talimati_${todayStr}.xlsx`);
+    writeExcelAoa([
+      ['Alıcı Unvanı', 'IBAN', 'Ödeme Tutarı (TL)', 'Açıklama'],
+      ...excelData
+    ], `Tazeyol_Banka_Odeme_Talimati_${todayStr}.xlsx`, 'Toplu Odeme');
 
     const cashTotal = selectedRows.reduce((s, r) => s + r.amount, 0);
     const payload = {
@@ -5593,9 +5621,14 @@ export default function App() {
     }
 
     try {
-      const desc = expenseFormData.companyName
-        || (expenseFormData.category === 'owner_personal' ? 'Şirket dışı harcama' : 'Genel Şirket Masrafı');
-      let fullTitle = `${expenseFormData.invoiceNo ? expenseFormData.invoiceNo + ' - ' : ''}${desc}${expenseFormData.plateNumber ? ' [' + expenseFormData.plateNumber.toUpperCase() + ']' : ''}`;
+      const desc = stripExpensePlateTags(
+        expenseFormData.companyName
+        || (expenseFormData.category === 'owner_personal' ? 'Şirket dışı harcama' : 'Genel Şirket Masrafı')
+      );
+      const invNo = stripExpensePlateTags(expenseFormData.invoiceNo);
+      const plateKey = cleanPlateKey(expenseFormData.plateNumber);
+      let fullTitle = [invNo, desc].filter(Boolean).join(' - ');
+      if (plateKey) fullTitle = `${fullTitle} [${plateKey}]`;
       fullTitle = fullTitle.replace(/^\[KK\]\s*/i, '');
       const paidByCard = expenseFormData.status === 'paid' && expenseFormData.paidSource === 'card';
       if (paidByCard) fullTitle = `[KK] ${fullTitle}`;
@@ -6340,16 +6373,31 @@ export default function App() {
     const header = [['ARAÇ MUTABAKAT RAPORU', rentalGroupLabel, useRows[0].year_month], []];
     const body = useRows.map((r: any) => {
       const t = r.totals || rentalSettlementTotals(r);
-      return [r.plate, r.contractor_name, r.province || r.region, cleanNumber(r.rent_amount), cleanNumber(r.fuel_rate), cleanNumber(r.total_km), t.fuelIncome, cleanNumber(r.visit_prime), cleanNumber(r.extra_work), cleanNumber(r.hgs), cleanNumber(r.fuel_charge), t.brut, t.kdv, t.stoppage, t.payable, t.term1, t.term2];
+      return [
+        r.plate,
+        r.contractor_name,
+        r.province || r.region,
+        cleanNumber(r.rent_amount),
+        formatNumTR(cleanNumber(r.fuel_rate), 4),
+        formatNumTR(cleanNumber(r.total_km), 0),
+        t.fuelIncome,
+        cleanNumber(r.visit_prime),
+        cleanNumber(r.extra_work),
+        cleanNumber(r.hgs),
+        cleanNumber(r.fuel_charge),
+        t.brut,
+        t.kdv,
+        t.stoppage,
+        t.payable,
+        t.term1,
+        t.term2
+      ];
     });
-    const sheet = XLSX.utils.aoa_to_sheet([
+    writeExcelAoa([
       ...header,
       ['Plaka', 'Fatura kesen', 'Bölge', 'Kira', 'Yakıt oran', 'KM', 'Yakıt geliri', 'Uğrama primi', 'Ek iş', 'HGS', 'Yakıt kesintisi', 'Brüt', 'KDV', 'Tevkifat', 'Ödenecek', '1. Ödeme', '2. Ödeme'],
       ...body
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, sheet, 'Mutabakat');
-    XLSX.writeFile(wb, `Mutabakat_${contractorName}_${useRows[0].year_month || ''}.xlsx`);
+    ], `Mutabakat_${contractorName}_${useRows[0].year_month || ''}.xlsx`, 'Mutabakat');
   };
 
   // GİRİŞ EKRANI (AUTH)
@@ -8779,6 +8827,16 @@ export default function App() {
                     setIsVehicleModalOpen(true);
                   }}
             onEdit={openEditVehicleModal}
+            onUnlinkPlate={isAdmin ? async (invId, plate) => {
+              const inv = (dbInvoices || []).find((i: any) => String(i.id) === String(invId));
+              if (!inv) return;
+              const next = removeExpensePlateTag(inv.invoice_no, plate);
+              if (next === String(inv.invoice_no || '').trim()) return;
+              if (!window.confirm(`${plate} bu giderden çıksın mı? Kayıt ${next || 'plakasız'} olur.`)) return;
+              const { error } = await supabase.from('invoices').update({ invoice_no: next }).eq('id', inv.id);
+              if (error) alert('Plaka çıkarılamadı: ' + error.message);
+              else await loadPortalData();
+            } : undefined}
             cleanNumber={cleanNumber}
             formatDateTR={formatDateTR}
             normalizeVehicleType={normalizeVehicleType}
@@ -8856,7 +8914,7 @@ export default function App() {
                       ['Toplam ciro', money(totalRev)],
                       ['Toplam gider', money(totalCost)],
                       ['Net kâr / zarar', money(totalNet)],
-                      ['Karlılık oranı %', marginPct == null ? '' : Math.round(marginPct * 10) / 10],
+                      ['Karlılık oranı %', marginPct == null ? '' : `${formatNumTR(marginPct, 1)} %`],
                       [],
                       ['Bu ay', 'Tip', 'Plaka', 'Şoför', 'Ciro', 'Yakıt', 'HGS', 'Maaş + prim', 'SGK', 'Sabit / ay', 'Bakım / ay', 'Toplam gider', 'Net kâr'],
                       ...dbProfitability.map((p: any) => [
@@ -9636,10 +9694,12 @@ export default function App() {
                           <button 
                             onClick={() => {
                               setEditingExpenseId(item.id);
+                              const tagged = lastExpensePlateTag(item.invoice_no);
+                              const veh = (dbVehicles || []).find((v: any) => cleanPlateKey(v.plate_number) === tagged);
                               setExpenseFormData({
                                 category: item.category || 'maintenance',
-                                companyName: item.invoice_no || '',
-                                plateNumber: '',
+                                companyName: stripExpensePlateTags(item.invoice_no || ''),
+                                plateNumber: veh ? String(veh.plate_number || '') : tagged,
                                 invoiceNo: '',
                                 amount: String(item.total_amount || ''),
                                 issueDate: sanitizeDate(item.issue_date),
@@ -11876,7 +11936,7 @@ export default function App() {
                 let csvContent = "\uFEFF";
                 csvContent += "Firma Adı;Vergi Numarası;IBAN;Tarih;İşlem Türü;Açıklama;Borç (Fatura);Alacak (Ödeme/Avans);Bakiye\n";
                 ledger.forEach(tx => {
-                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${tx.date ? formatDateTR(tx.date) : '-'}";"${tx.type}";"${tx.desc}";"${tx.debit}";"${tx.credit}";"${tx.balance}"\n`;
+                  csvContent += `"${subName}";"${taxNo}";"${ibanVal}";"${tx.date ? formatDateTR(tx.date) : '-'}";"${tx.type}";"${tx.desc}";"${formatMoneyTR(tx.debit)}";"${formatMoneyTR(tx.credit)}";"${formatMoneyTR(tx.balance)}"\n`;
                 });
                 const encodedUri = encodeURI("data:text/csv;charset=utf-8," + csvContent);
                 const link = document.createElement("a");

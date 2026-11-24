@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Plus, Edit2, Trash2, X, Download, FileSpreadsheet } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { writeExcelAoa } from './excelOut';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { supabase } from './supabase';
@@ -202,7 +202,7 @@ export default function AracFilosuPage({
       Soğutma: coolingLabel(v.cooling),
       Marka: v.brand || '',
       Model: v.model_name || '',
-      'Model yılı': v.model_year || '',
+      'Model yılı': v.model_year ? String(v.model_year) : '',
       Giydirme: wrapText(v),
       Ruhsat: v.contractor_name || '',
       'Şoför Adı': v.driver_name || '',
@@ -227,10 +227,7 @@ export default function AracFilosuPage({
     }
     const headers = Object.keys(dumpRows[0]);
     const aoa = [['Tazeyol ERP — Araç Filosu'], [`${dumpRows.length} araç · görünen liste`], [], headers, ...dumpRows.map(r => headers.map(h => (r as any)[h]))];
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Arac filosu');
-    XLSX.writeFile(workbook, 'Arac_Filosu.xlsx');
+    writeExcelAoa(aoa, 'Arac_Filosu.xlsx', 'Arac filosu');
   };
 
   const exportPdf = async () => {
