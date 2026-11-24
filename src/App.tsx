@@ -733,7 +733,7 @@ async function readPortalUserFnError(error: any, data: any, fallback: string) {
 }
 
 function isPortalUserFnMissing(msg: string) {
-  return /not found|404|Failed to send|FunctionsRelayError|function/i.test(msg);
+  return /not found|404|Failed to send|FunctionsRelayError|function not found/i.test(msg);
 }
 
 export default function App() {
@@ -754,8 +754,10 @@ export default function App() {
   const [newPortalUserOpen, setNewPortalUserOpen] = useState(false);
   const [newPortalUserHint, setNewPortalUserHint] = useState('');
   const [userDrafts, setUserDrafts] = useState<Record<string, {
+    email: string;
     full_name: string;
     role: 'admin' | 'reporter' | 'saha';
+    is_active: boolean;
     groups: string[];
     filoDepots: string[];
     access: Record<string, AccessLevel>;
@@ -797,6 +799,15 @@ export default function App() {
         setCurrentUserRole(null);
         setCurrentUserId(null);
         setRentalAssignedGroup(null);
+        setRentalAssignedGroups([]);
+        setFiloAssignedDepots([]);
+        setPortalAccess({});
+        return;
+      }
+      if (profile.is_active === false) {
+        await supabase.auth.signOut();
+        setCurrentUserRole(null);
+        setCurrentUserId(null);
         setRentalAssignedGroups([]);
         setFiloAssignedDepots([]);
         setPortalAccess({});
@@ -853,6 +864,11 @@ export default function App() {
         setLoginError('Hesabınıza rol atanmamış. Supabase profiles kaydını kontrol edin.');
         return;
       }
+      if (profile.is_active === false) {
+        await supabase.auth.signOut();
+        setLoginError('Bu hesap pasif. Yönetici Kullanıcılar ekranından aktif etmeli.');
+        return;
+      }
       localStorage.removeItem('tazeyol_user_role');
       setCurrentUserRole(profile.role);
       setCurrentUserId(data.user.id);
@@ -894,7 +910,7 @@ export default function App() {
     if (rows.length) {
       const { data: extras } = await supabase
         .from('profiles')
-        .select('id, portal_access, rental_work_groups, rental_work_group, filo_depots, role, full_name');
+        .select('id, portal_access, rental_work_groups, rental_work_group, filo_depots, role, full_name, is_active');
       const byId = Object.fromEntries((extras || []).map((p: any) => [p.id, p]));
       rows = rows.map((u: any) => {
         const p = byId[u.id];
@@ -905,8 +921,10 @@ export default function App() {
   };
 
   const handleSavePortalUser = async (user: any, patch: {
+    email?: string;
     full_name?: string;
     role?: 'admin' | 'reporter' | 'saha';
+    is_active?: boolean;
     rental_work_groups?: string[];
     filo_depots?: string[];
     portal_access?: Record<string, AccessLevel>;
@@ -937,9 +955,42 @@ export default function App() {
         return false;
       }
     }
+    const nextActive = patch.is_active !== undefined ? patch.is_active !== false : user.is_active !== false;
+    if (!nextActive) {
+      if (user.id === currentUserId) {
+        alert('Kendi hesabınızı pasif yapamazsınız.');
+        return false;
+      }
+      if (nextRole === 'admin' || user.role === 'admin') {
+        const otherAdmins = portalUsers.filter((u: any) => u.role === 'admin' && u.is_active !== false && u.id !== user.id);
+        if (!otherAdmins.length) {
+          alert('Son aktif yönetici pasif yapılamaz.');
+          return false;
+        }
+      }
+    }
+    const nextEmail = String(patch.email !== undefined ? patch.email : (user.email || '')).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      alert('Geçerli e-posta yazın.');
+      return false;
+    }
+    const { error: loginErr } = await supabase.rpc('admin_update_portal_login', {
+      p_user_id: user.id,
+      p_email: nextEmail,
+      p_is_active: nextActive
+    });
+    if (loginErr) {
+      alert(
+        /admin_update_portal_login|does not exist|schema cache/i.test(loginErr.message || '')
+          ? 'E-posta ve aktif/pasif için setup_portal_user_manage.sql dosyasını SQL Editor’da bir kez Run edin.'
+          : loginErr.message
+      );
+      return false;
+    }
     const payload: any = {
       full_name: patch.full_name !== undefined ? patch.full_name : user.full_name,
       role: nextRole,
+      is_active: nextActive,
       rental_work_groups: nextRole === 'saha' && nextAccess.rental_settlements ? nextGroups : [],
       rental_work_group: nextRole === 'saha' && nextAccess.rental_settlements ? (nextGroups[0] || null) : null,
       filo_depots: nextRole === 'saha' && nextAccess.trip_settlements ? nextFilo : [],
@@ -950,7 +1001,7 @@ export default function App() {
       alert('Kullanıcı kaydedilemedi: ' + (error.message || '') + ( /portal_access|rental_work_groups|filo_depots/i.test(error.message || '') ? ' setup_trip_settlements.sql dosyasını bir kez Run edin.' : ''));
       return false;
     }
-    setPortalUsers(prev => prev.map((u: any) => u.id === user.id ? { ...u, ...payload } : u));
+    setPortalUsers(prev => prev.map((u: any) => u.id === user.id ? { ...u, ...payload, email: nextEmail } : u));
     if (user.id === currentUserId) {
       setRentalAssignedGroups(payload.rental_work_groups);
       setRentalAssignedGroup(payload.rental_work_group);
@@ -970,6 +1021,29 @@ export default function App() {
     }
     // Personel (saha) kiralık grup olmadan da açılır; filo gibi menü yetkisi sonra karttan verilir.
     setNewPortalUserBusy(true);
+    const createBody = {
+      p_email: email,
+      p_password: newPortalUser.password,
+      p_full_name: newPortalUser.full_name.trim(),
+      p_role: newPortalUser.role,
+      p_rental_work_group: newPortalUser.role === 'saha' ? (newPortalUser.rental_work_group || null) : null
+    };
+    const { error: rpcErr } = await supabase.rpc('admin_create_portal_user', createBody);
+    if (!rpcErr) {
+      setNewPortalUserBusy(false);
+      setNewPortalUserHint('');
+      setNewPortalUserOpen(false);
+      setNewPortalUser({ email: '', password: '', full_name: '', role: 'saha', rental_work_group: 'magazalar' });
+      await loadPortalUsers();
+      alert(`${email} açıldı. Bu e-posta ve şifre ile giriş yapabilir.`);
+      return;
+    }
+    const missingRpc = /admin_create_portal_user|does not exist|schema cache/i.test(rpcErr.message || '');
+    if (!missingRpc) {
+      setNewPortalUserBusy(false);
+      alert(rpcErr.message);
+      return;
+    }
     const { data, error } = await supabase.functions.invoke('create-portal-user', {
       body: {
         action: 'create',
@@ -985,9 +1059,9 @@ export default function App() {
       const msg = await readPortalUserFnError(error, data, 'Kullanıcı açılamadı.');
       if (isPortalUserFnMissing(msg)) {
         setNewPortalUserHint(
-          `Portaldan otomatik açma henüz kapalı. Aynı bilgileri Supabase’de yazın:\n1) Authentication → Users → Add user / Create new user\n2) E-posta: ${email}\n3) Şifre: formdaki şifre (kopyalayın)\n4) Auto Confirm User işaretli → Create user\n5) Bu sayfada Listeyi yenile, sonra grup ve menü işaretleyin.`
+          `Portaldan otomatik açma henüz kapalı. setup_portal_user_create.sql dosyasını SQL Editor’da bir kez Run edin, sayfayı yenileyin, tekrar deneyin.`
         );
-        alert(`Hesap burada otomatik oluşmadı.\n\nAuthentication → Users → Add user\nE-posta: ${email}\nŞifreyi bu formdan kopyalayın.\nAuto Confirm açık olsun.\nSonra Listeyi yenile.`);
+        alert('Hesap açılamadı. setup_portal_user_create.sql dosyasını SQL Editor’da çalıştırın, sonra bu formdan tekrar deneyin.');
         return;
       }
       alert(msg);
@@ -1499,6 +1573,7 @@ export default function App() {
     return moduleAccessLevel(portalAccess, mod) === 'edit';
   };
   const seesInspectionOverdueAlert = isAdmin || isReporter || (isSaha && canViewMod('payments'));
+  const seesPolicyExpiryAlert = canViewMod('fleet');
 
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -1543,6 +1618,7 @@ export default function App() {
   const [incomeGiderKalemFilter, setIncomeGiderKalemFilter] = useState<string | null>(null);
   const [collectionSort, setCollectionSort] = useState<ColumnSort>({ field: 'date', dir: 'desc' });
   const [overdueInspectionAlertOpen, setOverdueInspectionAlertOpen] = useState(true);
+  const [policyExpiryAlertOpen, setPolicyExpiryAlertOpen] = useState(true);
   const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
   const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('asc');
   const [cardDueFilter, setCardDueFilter] = useState<'all' | 'week' | 'overdue' | 'clear'>('all');
@@ -4373,6 +4449,45 @@ export default function App() {
         .sort((a, b) => String(a.next_inspection_date).localeCompare(String(b.next_inspection_date))),
     [dbVehicles, todayIso]
   );
+  const policyExpiryAlerts = useMemo(() => {
+    const today = new Date(`${todayIso}T12:00:00`);
+    const daysUntil = (raw: any) => {
+      const d = sanitizeDate(raw);
+      if (!d) return null;
+      const exp = new Date(`${d}T12:00:00`);
+      if (Number.isNaN(exp.getTime())) return null;
+      return Math.round((exp.getTime() - today.getTime()) / 86400000);
+    };
+    const rows: { id: string; plate: string; driver: string; kind: string; date: string; days: number }[] = [];
+    (dbVehicles || []).forEach(v => {
+      if (v.is_active === false) return;
+      const plate = String(v.plate_number || '').trim() || 'Plaka yok';
+      const driver = v.driver_name || 'Atanmadı';
+      const ins = daysUntil(v.insurance_expiry_date);
+      if (ins != null && ins <= 30) {
+        rows.push({
+          id: `${v.id || plate}-sigorta`,
+          plate,
+          driver,
+          kind: 'Sigorta',
+          date: sanitizeDate(v.insurance_expiry_date),
+          days: ins
+        });
+      }
+      const kas = daysUntil(v.kasko_expiry_date);
+      if (kas != null && kas <= 30) {
+        rows.push({
+          id: `${v.id || plate}-kasko`,
+          plate,
+          driver,
+          kind: 'Kasko',
+          date: sanitizeDate(v.kasko_expiry_date),
+          days: kas
+        });
+      }
+    });
+    return rows.sort((a, b) => a.days - b.days || a.plate.localeCompare(b.plate, 'tr'));
+  }, [dbVehicles, todayIso]);
   const payableOtherDebt = totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt + totalEmployeeFutureDebt;
   const payableTotalDebt = contractorPayableNow + payableOtherDebt;
   const periodProfit = totalCollectedCash - totalPeriodPaidExpenses;
@@ -4856,6 +4971,7 @@ export default function App() {
       title: `${todayStr} banka talimatı (${waveLabel})`,
       total_amount: Math.round(cashTotal * 100) / 100,
       contractor_count: selectedRows.length,
+      batch_reference: `TALIMAT-${todayStr}-${Date.now()}`,
       payload
     }]).then(({ error }) => {
       if (error) {
@@ -5080,6 +5196,7 @@ export default function App() {
         title: `${date} yüklenen banka Excel${closeTerm ? ` (${closeTerm === 'term2' ? '2 nci' : '1 nci'})` : ''}`,
         total_amount: Math.round(batchRows.reduce((s: number, r: any) => s + r.amount, 0) * 100) / 100,
         contractor_count: batchRows.length,
+        batch_reference: `TALIMAT-${date}-${Date.now()}`,
         payload: { rows: batchRows, lines: [] }
       };
       const existingBatch = (dbPaymentBatches || []).find((b: any) =>
@@ -6773,6 +6890,46 @@ export default function App() {
         </div>
       )}
 
+      {seesPolicyExpiryAlert && policyExpiryAlertOpen && policyExpiryAlerts.length > 0 && (
+        <div className="fixed inset-0 bg-slate-900/55 backdrop-blur-sm z-[81] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-amber-200">
+            <div className="flex items-start gap-3 pb-3 border-b border-amber-100">
+              <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-black text-amber-950 text-base">Sigorta / kasko 1 ay içinde bitiyor</h3>
+                <p className="text-xs text-amber-800 mt-0.5">{policyExpiryAlerts.length} kayıt · bitişe 30 gün veya daha az (geçmişler dahil)</p>
+              </div>
+            </div>
+            <div className="mt-3 max-h-64 overflow-y-auto space-y-1.5">
+              {policyExpiryAlerts.slice(0, 16).map(row => (
+                <div key={row.id} className={`flex justify-between gap-3 text-xs rounded-lg px-3 py-2 border ${row.days < 0 ? 'bg-rose-50 border-rose-100' : 'bg-amber-50 border-amber-100'}`}>
+                  <div className="min-w-0">
+                    <span className="font-mono font-bold text-slate-900 block">{row.plate}</span>
+                    <span className="text-slate-600">{row.kind} · {row.driver}</span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className={`font-black block ${row.days < 0 ? 'text-rose-800' : 'text-amber-800'}`}>{formatDateTR(row.date)}</span>
+                    <span className="text-[10px] font-semibold text-slate-500">
+                      {row.days < 0 ? `${Math.abs(row.days)} gün geçti` : row.days === 0 ? 'Bugün bitiyor' : `${row.days} gün kaldı`}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {policyExpiryAlerts.length > 16 && (
+                <p className="text-[11px] text-slate-500 px-1">+{policyExpiryAlerts.length - 16} kayıt daha. İç Filo künyesinden bakın.</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPolicyExpiryAlertOpen(false)}
+              className="mt-4 w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
+            >
+              Tamam
+            </button>
+          </div>
+        </div>
+      )}
+
       {seesInspectionOverdueAlert && overdueInspectionAlertOpen && overdueInspections.length > 0 && (
         <div className="fixed inset-0 bg-slate-900/55 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl border border-rose-200">
@@ -8087,7 +8244,7 @@ export default function App() {
                       <div>
                         <div className="text-sm font-bold text-slate-800">{b.title || 'Banka talimatı'}</div>
                         <div className="text-[11px] text-slate-500">
-                          {formatDateTR(b.pay_date)} · {b.contractor_count || 0} kişi · {cleanNumber(b.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          {formatDateTR(b.pay_date)} · {b.contractor_count || (Array.isArray(b.payload?.rows) ? b.payload.rows.length : 0)} kişi · {cleanNumber(b.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                         </div>
                       </div>
                       {isAdmin && (
@@ -12083,8 +12240,8 @@ export default function App() {
                 <div>
                   <h3 className="font-bold text-slate-900">Kullanıcı yetkileri</h3>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-3xl">
-                    <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın; hesap burada açılır. Unutan kişi için karttaki <b>yeni şifre</b> kutusuna yazıp sıfırlayın, sonra o kişiye söyleyin.
-                    Her satırda menüler <b>Kapalı / Görür / İşler</b> olarak görünür: yönetici tümünde İşler, rapor tümünde Görür (kilitli). Personelde her menü ayrı seçilir. Gece saha için Hal saha = İşler.
+                    <b>Kullanıcı ekle</b> ile e-posta ve şifreyi yazın; hesap burada açılır. Karttan e-posta, ad ve <b>aktif / pasif</b> değişir. Pasif hesap giriş yapamaz. Unutan kişi için karttaki <b>yeni şifre</b> kutusuna yazıp sıfırlayın.
+                    Her satırda menüler <b>Kapalı / Görür / İşler</b> olarak görünür: yönetici tümünde İşler, rapor tümünde Görür (kilitli). Personelde her menü ayrı seçilir.
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -12135,8 +12292,10 @@ export default function App() {
                 const liveAccess = normalizeAccess(u.portal_access);
                 const liveFilo = normalizeGroups(u.filo_depots);
                 const draft = userDrafts[u.id] || {
+                  email: u.email || '',
                   full_name: u.full_name || '',
                   role: u.role as 'admin' | 'reporter' | 'saha',
+                  is_active: u.is_active !== false,
                   groups: liveGroups,
                   filoDepots: liveFilo,
                   access: liveAccess
@@ -12153,8 +12312,10 @@ export default function App() {
                 const saveUser = async () => {
                   setUserSaveBusyId(u.id);
                   const ok = await handleSavePortalUser(u, {
+                    email: draft.email,
                     full_name: draft.full_name,
                     role: draft.role,
+                    is_active: draft.is_active,
                     rental_work_groups: draft.groups,
                     filo_depots: draft.filoDepots,
                     portal_access: draft.access
@@ -12171,12 +12332,19 @@ export default function App() {
                   }
                 };
                 return (
-                  <div key={u.id} className={`bg-white rounded-2xl border p-4 space-y-3 ${u.id === currentUserId ? 'border-[#009fe3]' : 'border-slate-200'}`}>
+                  <div key={u.id} className={`bg-white rounded-2xl border p-4 space-y-3 ${draft.is_active === false ? 'opacity-70 border-slate-200' : u.id === currentUserId ? 'border-[#009fe3]' : 'border-slate-200'}`}>
                     <div className="flex flex-wrap gap-2 items-center">
-                      <div className="font-semibold text-slate-800">{u.email}{u.id === currentUserId ? <span className="ml-2 text-[10px] font-bold text-[#009fe3]">Siz</span> : null}</div>
+                      {u.id === currentUserId ? <span className="text-[10px] font-bold text-[#009fe3]">Siz</span> : null}
+                      <input
+                        type="email"
+                        value={draft.email}
+                        onChange={e => patchDraft({ email: e.target.value })}
+                        className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm min-w-[220px] font-semibold"
+                      />
                       <input
                         value={draft.full_name}
                         onChange={e => patchDraft({ full_name: e.target.value })}
+                        placeholder="Ad"
                         className="px-2 py-1.5 border border-slate-200 rounded-lg text-sm min-w-[140px]"
                       />
                       <select
@@ -12188,6 +12356,13 @@ export default function App() {
                         <option value="reporter">Rapor (salt okuma)</option>
                         <option value="saha">Personel (yetkili)</option>
                       </select>
+                      <button
+                        type="button"
+                        onClick={() => patchDraft({ is_active: !draft.is_active })}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border ${draft.is_active !== false ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
+                      >
+                        {draft.is_active !== false ? 'Aktif' : 'Pasif'}
+                      </button>
                     </div>
                     {draft.role === 'saha' && (
                       <>

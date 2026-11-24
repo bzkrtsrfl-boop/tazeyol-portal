@@ -40,9 +40,6 @@ export function moduleAccessLevel(
 ): AccessLevel | '' {
   const direct = access[mod];
   if (direct === 'view' || direct === 'edit') return direct;
-  if (mod === 'arac_filosu' && (access.fleet === 'view' || access.fleet === 'edit')) {
-    return access.fleet;
-  }
   return '';
 }
 
@@ -77,7 +74,7 @@ export function needsFinanceData(role: UserRole | null, access: Record<string, A
 
 export const ACCESS_PRESETS: { id: string; label: string; access: Record<string, AccessLevel> }[] = [
   { id: 'saha_kiralik', label: 'Kiralık saha', access: { rental_settlements: 'edit' } },
-  { id: 'filo_sadece', label: 'Sadece iç filo', access: { fleet: 'edit', arac_filosu: 'edit' } },
+  { id: 'filo_sadece', label: 'Sadece iç filo', access: { fleet: 'edit' } },
   { id: 'arac_filosu_sadece', label: 'Araç filosu künye', access: { arac_filosu: 'edit' } },
   { id: 'hal_saha_sadece', label: 'Hal saha giriş (gece sefer yazar)', access: { hal_saha: 'edit' } },
   { id: 'filo_saha', label: 'Filo depo (sefer yazar)', access: { trip_settlements: 'edit' } },
@@ -98,6 +95,7 @@ export type PortalProfile = {
   filo_depots: string[];
   portal_access: Record<string, AccessLevel>;
   full_name: string | null;
+  is_active: boolean;
 };
 
 export function normalizeGroups(raw: any, fallback?: string | null): string[] {
@@ -123,11 +121,11 @@ export function normalizeAccess(raw: any): Record<string, AccessLevel> {
 export async function fetchProfile(userId: string): Promise<PortalProfile | null> {
   let { data, error } = await supabase
     .from('profiles')
-    .select('role, rental_work_group, rental_work_groups, filo_depots, portal_access, full_name')
+    .select('role, rental_work_group, rental_work_groups, filo_depots, portal_access, full_name, is_active')
     .eq('id', userId)
     .maybeSingle();
 
-  if (error && /rental_work_groups|portal_access|filo_depots/i.test(error.message || '')) {
+  if (error && /rental_work_groups|portal_access|filo_depots|is_active/i.test(error.message || '')) {
     const fallback = await supabase.from('profiles').select('role, rental_work_group, full_name').eq('id', userId).maybeSingle();
     data = fallback.data as any;
     error = fallback.error;
@@ -147,7 +145,8 @@ export async function fetchProfile(userId: string): Promise<PortalProfile | null
       rental_work_groups: groups,
       filo_depots: normalizeGroups((data as any).filo_depots),
       portal_access: access,
-      full_name: data.full_name || null
+      full_name: data.full_name || null,
+      is_active: (data as any).is_active !== false
     };
   }
 
