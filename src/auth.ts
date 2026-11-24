@@ -6,8 +6,8 @@ export type AccessLevel = 'view' | 'edit';
 export const PORTAL_MODULES = [
   { id: 'rental_settlements', label: 'Kiralık araç mutabakatı' },
   { id: 'plate_rentals', label: 'Belge plaka kiraları' },
-  { id: 'fleet', label: 'İç filo' },
-  { id: 'arac_filosu', label: 'Araç filosu' },
+  { id: 'fleet', label: 'İç filo (öz mal)' },
+  { id: 'arac_filosu', label: 'Araç filosu (künye)' },
   { id: 'profitability', label: 'Öz mal karlılık' },
   { id: 'sales_customers', label: 'Satış faturaları' },
   { id: 'dis_alim', label: 'Dış alım mutabakatı' },
@@ -23,7 +23,7 @@ export const PORTAL_MODULES = [
   { id: 'monthly_view', label: 'Aylık görünüm' },
   { id: 'income_report', label: 'Gelir gider raporu' },
   { id: 'hal_saha', label: 'Hal saha' },
-  { id: 'trip_settlements', label: 'Filo' }
+  { id: 'trip_settlements', label: 'Filo (sefer)' }
 ] as const;
 
 export type PortalModuleId = (typeof PORTAL_MODULES)[number]['id'];

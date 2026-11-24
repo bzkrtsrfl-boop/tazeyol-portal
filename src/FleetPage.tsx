@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Plus, X, Download, Printer } from 'lucide-react';
 import { SortTh, sortByColumn, type ColumnSort } from './columnSort';
 import { formatMoneyTR } from './money';
+import { inferVehicleChargeKind, type VehicleChargeKind } from './vehicleCharge';
 
 const SKIP = new Set([
   'freight_sales',
@@ -62,6 +63,18 @@ function invoicesForPlate(invoices: any[], plate: string) {
     const hay = `${inv.invoice_no || ''} ${inv.description || ''}`.replace(/\s+/g, '').toUpperCase();
     return hay.includes(key);
   });
+}
+
+function latestPlateCharge(invoices: any[], plate: string, kind: VehicleChargeKind) {
+  const rows = invoicesForPlate(invoices, plate)
+    .filter(inv => inferVehicleChargeKind(inv) === kind)
+    .sort((a, b) => String(b.issue_date || b.created_at || '').localeCompare(String(a.issue_date || a.created_at || '')));
+  if (!rows.length) return 0;
+  return Number(rows[0].total_amount) || 0;
+}
+
+function isRolledPlateCharge(inv: any) {
+  return !!inferVehicleChargeKind(inv);
 }
 
 function money(n: number) {
@@ -134,11 +147,17 @@ export default function FleetPage({
   const fleetRows = useMemo(() => {
     const rows = (vehicles || []).map((v, idx) => {
       const plate = (v.plate_number || '').trim();
-      const otherCost = invoicesForPlate(invoices, plate).reduce((sum: number, e: any) => sum + cleanNumber(e.total_amount), 0);
-      const sigortaAmt = cleanNumber(v.insurance_cost || 0);
-      const kaskoAmt = cleanNumber(v.kasko_cost || 0);
+      const plateInvs = invoicesForPlate(invoices, plate);
+      const otherCost = plateInvs
+        .filter(e => !isRolledPlateCharge(e))
+        .reduce((sum: number, e: any) => sum + cleanNumber(e.total_amount), 0);
+      const billedMuayene = latestPlateCharge(invoices, plate, 'muayene');
+      const billedSigorta = latestPlateCharge(invoices, plate, 'sigorta');
+      const billedKasko = latestPlateCharge(invoices, plate, 'kasko');
+      const sigortaAmt = billedSigorta || cleanNumber(v.insurance_cost || 0);
+      const kaskoAmt = billedKasko || cleanNumber(v.kasko_cost || 0);
       const mtvAmt = cleanNumber(v.last_mtv_cost || 0);
-      const muayeneAmt = cleanNumber(v.inspection_cost || 0);
+      const muayeneAmt = billedMuayene || cleanNumber(v.inspection_cost || 0);
       return {
         v,
         idx,
@@ -234,7 +253,7 @@ export default function FleetPage({
       <div className="flex justify-between items-center pb-5 border-b border-slate-100">
         <div>
           <h3 className="font-bold text-lg text-slate-900">İç Filo ({vehicles.length} Araç)</h3>
-          <p className="text-xs text-slate-500 mt-0.5">Şirket öz malı: sürücü, muayene, sigorta, kasko ve MTV. Plakaya basınca masraf dökümü açılır.</p>
+          <p className="text-xs text-slate-500 mt-0.5">Şirket öz malı. Muayene / sigorta / kasko sütunu son kaydı gösterir; eski ödemeler plaka dökümünde durur. Plakaya basınca masraf açılır.</p>
         </div>
         {canEdit && (
           <button
