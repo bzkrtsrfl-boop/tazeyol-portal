@@ -75,6 +75,10 @@ import {
   RENTAL_WORK_GROUPS,
   rentalAdminGraceUntilMonth,
   rentalAdminCanEditMonth,
+  rentalRosterSyncOpen,
+  rentalSettlementRowEmpty,
+  rentalPlateKey,
+  buildRentalFleetRoster,
   rentalRowLockedForUser,
   rentalListeFromWorkbook,
   rentalGroupMeta,
@@ -87,11 +91,13 @@ import {
 import FleetPage from './FleetPage';
 import AracFilosuPage from './AracFilosuPage';
 import HalSahaPage from './HalSahaPage';
+import HalSahaReportPage from './HalSahaReportPage';
+import { isHalFirmActive, halFirmByName } from './halSaha';
 import TripSettlementsPage from './TripSettlementsPage';
 import DisAlimPage from './DisAlimPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
 import { SortTh, sortByColumn, type ColumnSort } from './columnSort';
-import { formatMoneyTR, formatNumTR } from './money';
+import { formatMoneyTR, formatNumTR, moneyInputValue, roundMoney } from './money';
 import { writeExcelAoa, excelKeepNumber } from './excelOut';
 import { inferVehicleChargeKind, stripVehicleChargeTags, vehicleChargeTag, type VehicleChargeKind } from './vehicleCharge';
 import MonthlyViewPage from './MonthlyViewPage';
@@ -382,7 +388,7 @@ function parseLocaleNumber(val: any): number {
     if (parts.length > 2 || (parts.length === 2 && last.length === 3)) str = parts.join('');
   }
   const n = parseFloat(str);
-  return isNaN(n) ? 0 : n;
+  return isNaN(n) ? 0 : roundMoney(n);
 }
 
 function excelColExact(row: any, names: string[]) {
@@ -404,7 +410,7 @@ function escHtml(s: any) {
 }
 
 function moneyHtml(n: any) {
-  return `${(Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`;
+  return formatMoneyTR(n);
 }
 
 function rentalFisMarkup(row: any) {
@@ -1452,16 +1458,16 @@ export default function App() {
       plate: r.plate || '',
       contractor_name: r.contractor_name || '',
       vehicle_type: (normalizePlateVehicleType(r.vehicle_type) as typeof rentalSettlementForm.vehicle_type) || '',
-      rent_amount: String(r.rent_amount ?? ''),
+      rent_amount: moneyInputValue(r.rent_amount),
       fuel_rate: String(r.fuel_rate ?? ''),
-      fuel_unit_price: String(r.fuel_unit_price ?? ''),
+      fuel_unit_price: moneyInputValue(r.fuel_unit_price),
       total_km: String(r.total_km ?? ''),
       work_days: String(r.work_days ?? ''),
       stop_count: String(r.stop_count ?? ''),
-      visit_prime: String(r.visit_prime ?? ''),
-      extra_work: String(r.extra_work ?? ''),
-      hgs: String(r.hgs ?? ''),
-      fuel_charge: String(r.fuel_charge ?? ''),
+      visit_prime: moneyInputValue(r.visit_prime),
+      extra_work: moneyInputValue(r.extra_work),
+      hgs: moneyInputValue(r.hgs),
+      fuel_charge: moneyInputValue(r.fuel_charge),
       notes: r.notes || ''
     });
   };
@@ -1570,6 +1576,10 @@ export default function App() {
     if (mod === 'users') return isAdmin;
     if (isAdmin || isReporter) return true;
     if (mod === 'overview') return false;
+    if (mod === 'hal_saha_report') {
+      const a = moduleAccessLevel(portalAccess, 'hal_saha');
+      return a === 'view' || a === 'edit';
+    }
     const a = moduleAccessLevel(portalAccess, mod);
     return a === 'view' || a === 'edit';
   };
@@ -1585,7 +1595,7 @@ export default function App() {
     // 2. NAVİGASYON & TARİH FİLTRELERİ
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
  const [activeTab, setActiveTab] = useState<
-    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'dis_alim' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'monthly_view' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'users'
+    'overview' | 'customers' | 'subcontractors' | 'sub_accounts' | 'sub_ibans' | 'sales_customers' | 'dis_alim' | 'employees' | 'fleet' | 'arac_filosu' | 'profitability' | 'collections' | 'credit_cards' | 'payments' | 'general_expenses' | 'monthly_view' | 'income_report' | 'plate_rentals' | 'rental_settlements' | 'trip_settlements' | 'hal_saha' | 'hal_saha_report' | 'users'
   >('overview');
 
   useEffect(() => {
@@ -1784,7 +1794,7 @@ export default function App() {
   const [rentalListSort, setRentalListSort] = useState<'plate' | 'contractor' | 'status' | 'amount'>('contractor');
   const [rentalStatusFilter, setRentalStatusFilter] = useState<'all' | 'draft' | 'submitted' | 'approved'>('all');
   const [rentalContractorFilter, setRentalContractorFilter] = useState('');
-  const rentalMonthSeedRef = useRef('');
+  const rentalSyncingRef = useRef(false);
   const [cashOpening, setCashOpening] = useState(CASH_BOOK_OPENING);
   const [cashOpeningAsOf, setCashOpeningAsOf] = useState(CASH_BOOK_START);
   const [cashOpeningBase, setCashOpeningBase] = useState<number | null>(null);
@@ -1879,8 +1889,8 @@ export default function App() {
         loadIf(want('trip_settlements'), 'trip_settlements', { column: 'year_month', ascending: false }),
         loadIf(want('trip_settlements') || want('profitability'), 'trip_fleet_plates', { column: 'plate', ascending: true }),
         loadIf(want('trip_settlements') || want('arac_filosu') || isAdmin, 'trip_filo_depots', { column: 'sort_order', ascending: true }),
-        loadIf(want('arac_filosu'), 'fleet_vehicles', { column: 'plate', ascending: true }),
-        loadIf(want('arac_filosu'), 'fleet_vehicle_assignments'),
+        loadIf(want('arac_filosu') || (isAdmin && want('rental_settlements')), 'fleet_vehicles', { column: 'plate', ascending: true }),
+        loadIf(want('arac_filosu') || (isAdmin && want('rental_settlements')), 'fleet_vehicle_assignments'),
         loadIf(want('arac_filosu') || isAdmin, 'fleet_code_jobs', { column: 'sort_order', ascending: true }),
         loadIf(want('arac_filosu') || isAdmin, 'fleet_code_places', { column: 'sort_order', ascending: true }),
         loadIf(want('dis_alim'), 'dis_alim_lines', { column: 'invoice_date', ascending: false })
@@ -2395,15 +2405,15 @@ export default function App() {
     let cashAmt = payAmt;
     if (isPersonal) {
       const raw = window.prompt(
-        `${card.card_name} şahsi kart.\nEkstre ödemesi: ${payAmt.toLocaleString('tr-TR')} ₺\n\nŞirket kasasından düşülecek tutar (şahsi harcama 0 yazın):`,
+        `${card.card_name} şahsi kart.\nEkstre ödemesi: ${payAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺\n\nŞirket kasasından düşülecek tutar (şahsi harcama 0 yazın):`,
         '0'
       );
       if (raw === null) return;
       cashAmt = Math.max(0, cleanNumber(raw));
     }
     const confirmMsg = isPersonal
-      ? `${card.card_name}\nEkstre: ${payAmt.toLocaleString('tr-TR')} ₺ kapanacak.\nKasadan düşecek: ${cashAmt.toLocaleString('tr-TR')} ₺`
-      : `${card.card_name} (${card.bank_name})\n${typeLabel}: ${payAmt.toLocaleString('tr-TR')} ₺ kasadan düşecek.`;
+      ? `${card.card_name}\nEkstre: ${payAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ kapanacak.\nKasadan düşecek: ${cashAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`
+      : `${card.card_name} (${card.bank_name})\n${typeLabel}: ${payAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ kasadan düşecek.`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -2432,7 +2442,7 @@ export default function App() {
       }]);
       }
 
-      alert(`Kart ekstresi güncellendi.${cashAmt > 0 ? ` Kasadan ${cashAmt.toLocaleString('tr-TR')} ₺ düşüldü.` : ' Kasaya dokunulmadı (şahsi).'}${remainingAmt > 0 ? `\nKalan ekstre: ${remainingAmt.toLocaleString('tr-TR')} ₺` : ''}`);
+      alert(`Kart ekstresi güncellendi.${cashAmt > 0 ? ` Kasadan ${cashAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ düşüldü.` : ' Kasaya dokunulmadı (şahsi).'}${remainingAmt > 0 ? `\nKalan ekstre: ${remainingAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : ''}`);
       loadPortalData();
     } catch (err: any) {
       alert('Kart ödeme hatası: ' + err.message);
@@ -5068,7 +5078,7 @@ export default function App() {
       }
       setBankSelectedLines({});
       loadPortalData();
-      alert(`Talimat Excel’i indirildi. Ödendi işaretlenmedi.\nBanka başarılı raporu gelince aşağıdaki partiden “Ödendi işle” deyin.\n${selectedRows.length} kişi, ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`);
+      alert(`Talimat Excel’i indirildi. Ödendi işaretlenmedi.\nBanka başarılı raporu gelince aşağıdaki partiden “Ödendi işle” deyin.\n${selectedRows.length} kişi, ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`);
     });
   };
 
@@ -5101,7 +5111,7 @@ export default function App() {
       alert('Geçerli bir tarih girin. Örn. 24.11.2026');
       return;
     }
-    if (!window.confirm(`Banka bu partiyi ödedi.\n${formatDateTR(payDate)} · ${personCount} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır. Excel tekrar yüklenmez.`)) return;
+    if (!window.confirm(`Banka bu partiyi ödedi.\n${formatDateTR(payDate)} · ${personCount} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır. Excel tekrar yüklenmez.`)) return;
     setPayingBatchId(batch.id);
     const warn: string[] = [];
     try {
@@ -5209,7 +5219,7 @@ export default function App() {
         );
       }
       alert(
-        `Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ düşüldü.` +
+        `Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ düşüldü.` +
         (warn.length ? `\n\nUyarı:\n${warn.slice(0, 4).join('\n')}` : '')
       );
       await loadPortalData();
@@ -5252,7 +5262,7 @@ export default function App() {
         (inv.term2_status !== 'paid' ? (line2 ? line2.netAmount : t2) : 0);
     }
 
-    const confirmMsg = `${inv.invoice_no}\nÖdenecek tutar (avans mahsubu düşülmüş): ${payAmt.toLocaleString('tr-TR')} ₺\nBu ödemeyi onaylıyor musunuz? (Kasadan fiilen düşülecektir)`;
+    const confirmMsg = `${inv.invoice_no}\nÖdenecek tutar (avans mahsubu düşülmüş): ${payAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺\nBu ödemeyi onaylıyor musunuz? (Kasadan fiilen düşülecektir)`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -5344,7 +5354,7 @@ export default function App() {
         last_applied_month: null,
         issue_date: todayStr,
         notes: isInstallment 
-          ? `Taksit başı düşüm: ${singleDeduction.toLocaleString('tr-TR')} TL (Kalan: ${instCount - 1} Taksit / ${(amt - singleDeduction).toLocaleString('tr-TR')} TL)`
+          ? `Taksit başı düşüm: ${singleDeduction.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL (Kalan: ${instCount - 1} Taksit / ${(amt - singleDeduction).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL)`
           : 'Peşin avans (Faturadan mahsup edilecek)'
       };
       let { error: advErr } = await supabase.from('advance_payments').insert([advRow]);
@@ -5355,7 +5365,7 @@ export default function App() {
       }
       if (advErr) throw advErr;
 
-      alert(`Taşeron avansı (${amt.toLocaleString('tr-TR')} ₺) başarıyla işlendi ve ${subPaymentFormData.targetAccount === 'bank' ? 'Banka' : 'Kasa'} çıkışı yapıldı!`);
+      alert(`Taşeron avansı (${amt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺) başarıyla işlendi ve ${subPaymentFormData.targetAccount === 'bank' ? 'Banka' : 'Kasa'} çıkışı yapıldı!`);
       setIsSubPaymentModalOpen(false);
       setSubPaymentFormData({
         subcontractorName: '',
@@ -5466,8 +5476,8 @@ export default function App() {
       if (advErr) throw advErr;
 
       alert(paidByCard
-        ? `Tedarikçi avansı (${amt.toLocaleString('tr-TR')} ₺) kartla işlendi. Kasa şimdi düşmez.`
-        : `Tedarikçi avansı (${amt.toLocaleString('tr-TR')} ₺) işlendi. Kasa / banka çıktı; e-fatura gelince mahsup edilir.`);
+        ? `Tedarikçi avansı (${amt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺) kartla işlendi. Kasa şimdi düşmez.`
+        : `Tedarikçi avansı (${amt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺) işlendi. Kasa / banka çıktı; e-fatura gelince mahsup edilir.`);
       setIsSupplierAdvanceModalOpen(false);
       setSupplierAdvanceForm(emptySupplierAdvance);
       loadPortalData();
@@ -5730,7 +5740,7 @@ export default function App() {
       }]);
 
       if (error) throw error;
-      alert(`Para girişi (${amt.toLocaleString('tr-TR')} ₺) başarıyla ${cashDepositFormData.targetAccount === 'bank' ? 'Banka' : 'Kasa'} hesabına eklendi!`);
+      alert(`Para girişi (${amt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺) başarıyla ${cashDepositFormData.targetAccount === 'bank' ? 'Banka' : 'Kasa'} hesabına eklendi!`);
       setIsCashDepositModalOpen(false);
       setCashDepositFormData({ depositType: 'partner_capital', amount: '', targetAccount: 'bank', title: '', date: new Date().toISOString().split('T')[0] });
       loadPortalData();
@@ -5818,12 +5828,12 @@ export default function App() {
       return;
     }
     const totalBulkAmount = payRows.reduce((sum, row) => sum + row.amount, 0);
-    const confirm = window.confirm(`Seçilen ${payRows.length} kişinin kalan carisi ödenecek: ${totalBulkAmount.toLocaleString('tr-TR')} ₺.\nEksik ödenenler listede kalır. Sözleşmeli maaş ayrıca yazılmaz.`);
+    const confirm = window.confirm(`Seçilen ${payRows.length} kişinin kalan carisi ödenecek: ${totalBulkAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺.\nEksik ödenenler listede kalır. Sözleşmeli maaş ayrıca yazılmaz.`);
     if (!confirm) return;
 
     try {
       const done = await insertSalaryPays(payRows);
-      alert(`Ödeme işlendi (${formatDateTR(done.payDate)}). Kasadan ${done.total.toLocaleString('tr-TR')} ₺ düşüldü.`);
+      alert(`Ödeme işlendi (${formatDateTR(done.payDate)}). Kasadan ${done.total.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ düşüldü.`);
       setIsBulkSalaryModalOpen(false);
       loadPortalData();
     } catch (err: any) {
@@ -5843,7 +5853,7 @@ export default function App() {
       alert('Tutar kalan cariden büyük olamaz. Avans ayrı harekettir; sözleşmeli maaşı elle yazmayın.');
       return;
     }
-    if (!window.confirm(`${singleSalaryPay.name} için ${amount.toLocaleString('tr-TR')} ₺ cari ödenecek ve kasadan düşecek.`)) return;
+    if (!window.confirm(`${singleSalaryPay.name} için ${amount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ cari ödenecek ve kasadan düşecek.`)) return;
     try {
       await insertSalaryPays([{ id: singleSalaryPay.empId, amount, name: singleSalaryPay.name }]);
       alert('Ödeme kaydedildi. Net alacak düştü, kasa güncellendi.');
@@ -5958,9 +5968,9 @@ export default function App() {
           const take = Math.min(amt, poolTotal);
           const payable = Math.round((amt - take) * 100) / 100;
           if (window.confirm(
-            `Bu tedarikçide ${poolTotal.toLocaleString('tr-TR')} ₺ avans var.\n` +
-            `Fatura ${amt.toLocaleString('tr-TR')} ₺.\n` +
-            `${take.toLocaleString('tr-TR')} ₺ mahsup edilecek, ödenecek ${payable.toLocaleString('tr-TR')} ₺.\n\nMahsup edilsin mi?`
+            `Bu tedarikçide ${poolTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ avans var.\n` +
+            `Fatura ${amt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺.\n` +
+            `${take.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ mahsup edilecek, ödenecek ${payable.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺.\n\nMahsup edilsin mi?`
           )) {
             let left = take;
             for (const a of pool) {
@@ -5983,7 +5993,7 @@ export default function App() {
             if (invUp) throw invUp;
             mahsupNote = payable <= 0.009
               ? ` Avans faturayı kapattı; kasa tekrar düşmez.`
-              : ` Avans mahsubu ${take.toLocaleString('tr-TR')} ₺. Kalan ödenecek ${payable.toLocaleString('tr-TR')} ₺.`;
+              : ` Avans mahsubu ${take.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺. Kalan ödenecek ${payable.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺.`;
           }
         }
       }
@@ -6510,16 +6520,19 @@ export default function App() {
   const rentalGroupSummary = useMemo(() => {
     return rentalGroupMonthRows.reduce((acc: any, r: any) => {
       const t = r.totals || rentalSettlementTotals(r);
-      acc.payable += t.payable || 0;
-      acc.term1 += t.term1 || 0;
-      acc.term2 += t.term2 || 0;
+      acc.payable = roundMoney(acc.payable + (t.payable || 0));
+      acc.term1 = roundMoney(acc.term1 + (t.term1 || 0));
+      acc.term2 = roundMoney(acc.term2 + (t.term2 || 0));
       acc.count += 1;
       return acc;
     }, { payable: 0, term1: 0, term2: 0, count: 0 });
   }, [rentalGroupMonthRows]);
 
-  const rentalPrevMonth = addYearMonth(rentalSettlementMonth, -1);
-  const rentalPrevMonthCount = (dbRentalSettlements || []).filter((r: any) => rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalPrevMonth).length;
+  const rentalRosterOpen = rentalRosterSyncOpen(rentalSettlementMonth);
+  const rentalFleetRoster = useMemo(
+    () => buildRentalFleetRoster(dbAracVehicles, dbAracAssignments, rentalWorkGroup),
+    [dbAracAssignments, dbAracVehicles, rentalWorkGroup]
+  );
 
   const rentalGroupLabel = RENTAL_WORK_GROUPS.find(g => g.id === rentalWorkGroup)?.label || 'Kiralık Araçlar';
   const rentalContractorNames = [...new Set([
@@ -6657,80 +6670,142 @@ export default function App() {
     downloadBlob(blob, folder);
   };
 
-  const handleOpenRentalMonth = async () => {
+  const handleOpenRentalMonth = async (opts?: { silent?: boolean }) => {
     if (!isAdmin) return;
+    const silent = !!opts?.silent;
     if (!rentalSettlementMonth) {
-      alert('Önce ay seçin.');
+      if (!silent) alert('Önce ay seçin.');
       return;
     }
-    const prev = addYearMonth(rentalSettlementMonth, -1);
-    const existing = new Set(
-      (dbRentalSettlements || [])
-        .filter((r: any) => rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalSettlementMonth)
-        .map((r: any) => `${String(r.plate || '').toUpperCase()}|${r.contractor_name}`)
-    );
-    const source = (dbRentalSettlements || []).filter((r: any) =>
-      rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === prev
-    );
-    const rows = source
-      .filter((r: any) => !existing.has(`${String(r.plate || '').toUpperCase()}|${r.contractor_name}`))
-      .map((r: any) => ({
-        year_month: rentalSettlementMonth,
-        province: r.province || null,
-        region: r.region || null,
-        plate: r.plate,
-        contractor_name: r.contractor_name,
-        vehicle_type: r.vehicle_type || null,
-        rent_amount: cleanNumber(r.rent_amount),
-        fuel_rate: cleanNumber(r.fuel_rate),
-        fuel_unit_price: 0,
-        total_km: 0,
-        work_days: 0,
-        stop_count: 0,
-        visit_prime: 0,
-        extra_work: 0,
-        hgs: 0,
-        fuel_charge: 0,
-        notes: r.notes || null,
-        work_group: rentalWorkGroup,
-        status: 'draft'
-      }));
-    if (!rows.length) {
-      alert(source.length ? 'Bu ay için plakalar zaten açık.' : `${prev} ayında kopyalanacak plaka yok.`);
+    if (!rentalRosterSyncOpen(rentalSettlementMonth)) {
+      if (!silent) {
+        alert(`${rentalSettlementMonth} kadrosu kilitli. Filo işareti ancak ayın kendi takvim ayı bitmeden (sonraki ayın 1’i olmadan) eşleşir. Geçmiş ay listesine dokunulmaz.`);
+      }
       return;
     }
-    let { error } = await supabase.from('rental_settlements').insert(rows);
-    if (error && /work_group|status/i.test(error.message || '')) {
-      const slim = rows.map(({ work_group: _g, status: _s, ...rest }) => rest);
-      ({ error } = await supabase.from('rental_settlements').insert(slim));
+    if (rentalSyncingRef.current) return;
+    rentalSyncingRef.current = true;
+    try {
+      const prev = addYearMonth(rentalSettlementMonth, -1);
+      let vehicles: any[] = [];
+      let assignments: any[] = [];
+      try {
+        vehicles = await fetchAllRows('fleet_vehicles', { column: 'plate', ascending: true });
+        assignments = await fetchAllRows('fleet_vehicle_assignments');
+      } catch {
+        vehicles = dbAracVehicles || [];
+        assignments = dbAracAssignments || [];
+      }
+      setDbAracVehicles(vehicles);
+      setDbAracAssignments(assignments);
+      const roster = buildRentalFleetRoster(vehicles, assignments, rentalWorkGroup);
+      if (!roster.length) {
+        if (!silent) {
+          alert(`Araç Filosu’nda ${rentalGroupLabel} işaretli plaka yok. Önce künyede kiralık grubu işaretleyin; işaret yokken mevcut liste silinmez.`);
+        }
+        return;
+      }
+      const { data: monthSettlements, error: monthErr } = await supabase
+        .from('rental_settlements')
+        .select('*')
+        .in('year_month', [rentalSettlementMonth, prev].filter(Boolean));
+      if (monthErr) {
+        if (!silent) alert('Kiralık kayıtlar okunamadı: ' + monthErr.message);
+        return;
+      }
+      const allMonth = monthSettlements || [];
+      const fleetKeys = new Set(roster.map((v: any) => v.plateKey));
+      const currentRows = allMonth.filter((r: any) =>
+        rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalSettlementMonth
+      );
+      const prevByPlate = new Map<string, any>();
+      allMonth.forEach((r: any) => {
+        if (rentalRowGroup(r) !== rentalWorkGroup || String(r.year_month || '') !== prev) return;
+        const k = rentalPlateKey(r.plate);
+        if (k && !prevByPlate.has(k)) prevByPlate.set(k, r);
+      });
+      const currentByPlate = new Set(currentRows.map((r: any) => rentalPlateKey(r.plate)).filter(Boolean));
+      const toInsert = roster
+        .filter((v: any) => !currentByPlate.has(v.plateKey))
+        .map((v: any) => {
+          const src = prevByPlate.get(v.plateKey);
+          return {
+            year_month: rentalSettlementMonth,
+            province: src?.province || null,
+            region: src?.region || null,
+            plate: src?.plate || v.plate,
+            contractor_name: src?.contractor_name || v.contractor_name || '-',
+            vehicle_type: src?.vehicle_type || null,
+            rent_amount: cleanNumber(src?.rent_amount),
+            fuel_rate: cleanNumber(src?.fuel_rate),
+            fuel_unit_price: 0,
+            total_km: 0,
+            work_days: 0,
+            stop_count: 0,
+            visit_prime: 0,
+            extra_work: 0,
+            hgs: 0,
+            fuel_charge: 0,
+            notes: src?.notes || v.notes || null,
+            work_group: rentalWorkGroup,
+            status: 'draft'
+          };
+        });
+      const dropRows = currentRows.filter((r: any) => !fleetKeys.has(rentalPlateKey(r.plate)) && rentalSettlementRowEmpty(r));
+      const keptWithData = currentRows.filter((r: any) => !fleetKeys.has(rentalPlateKey(r.plate)) && !rentalSettlementRowEmpty(r));
+      if (!toInsert.length && !dropRows.length) {
+        if (!silent) {
+          alert(keptWithData.length
+            ? `Liste filoyla aynı. ${keptWithData.length} plaka filoda yok ama km/gün yazılı veya onaylı; bırakıldı.`
+            : 'Liste zaten Araç Filosu işaretleriyle aynı.');
+        }
+        return;
+      }
+      let inserted: any[] = [];
+      if (toInsert.length) {
+        let { data, error } = await supabase.from('rental_settlements').insert(toInsert).select();
+        if (error && /work_group|status/i.test(error.message || '')) {
+          const slim = toInsert.map(({ work_group: _g, status: _s, ...rest }) => rest);
+          ({ data, error } = await supabase.from('rental_settlements').insert(slim).select());
+        }
+        if (error) {
+          if (!silent) alert('Filodan eklenemedi: ' + error.message);
+          return;
+        }
+        inserted = data || [];
+      }
+      const dropIds = dropRows.map((r: any) => r.id).filter(Boolean);
+      if (dropIds.length) {
+        const { error } = await supabase.from('rental_settlements').delete().in('id', dropIds);
+        if (error) {
+          if (!silent) alert('Filoda olmayan boş satırlar silinemedi: ' + error.message);
+          return;
+        }
+      }
+      const dropSet = new Set(dropIds);
+      setDbRentalSettlements(prevRows => [
+        ...(prevRows || []).filter((r: any) => !dropSet.has(r.id)),
+        ...inserted
+      ]);
+      if (!silent) setRentalEditRow(null);
+      else if (dropRows.some((r: any) => rentalEditRow && r.id === rentalEditRow.id)) setRentalEditRow(null);
+      if (!silent) {
+        const bits = [];
+        if (toInsert.length) bits.push(`${toInsert.length} plaka eklendi`);
+        if (dropRows.length) bits.push(`${dropRows.length} boş plaka listeden düştü`);
+        if (keptWithData.length) bits.push(`${keptWithData.length} km’li/onaylı plaka bırakıldı`);
+        alert(`${rentalGroupLabel} · ${rentalSettlementMonth}\n${bits.join('. ')}.`);
+      }
+    } finally {
+      rentalSyncingRef.current = false;
     }
-    if (error) {
-      alert('Yeni ay açılamadı: ' + error.message);
-      return;
-    }
-    setRentalEditRow(null);
-    await loadPortalData();
   };
 
   useEffect(() => {
     if (!isAdmin || loading || !rentalSettlementMonth) return;
-    const key = `${rentalWorkGroup}|${rentalSettlementMonth}`;
-    if (rentalMonthSeedRef.current === key) return;
-    const hasCurrent = (dbRentalSettlements || []).some((r: any) =>
-      rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === rentalSettlementMonth
-    );
-    if (hasCurrent) {
-      rentalMonthSeedRef.current = key;
-      return;
-    }
-    const prev = addYearMonth(rentalSettlementMonth, -1);
-    const hasPrev = (dbRentalSettlements || []).some((r: any) =>
-      rentalRowGroup(r) === rentalWorkGroup && String(r.year_month || '') === prev
-    );
-    if (!hasPrev) return;
-    rentalMonthSeedRef.current = key;
-    handleOpenRentalMonth();
-  }, [isAdmin, loading, dbRentalSettlements, rentalWorkGroup, rentalSettlementMonth]);
+    if (!rentalRosterSyncOpen(rentalSettlementMonth)) return;
+    handleOpenRentalMonth({ silent: true });
+  }, [isAdmin, loading, rentalWorkGroup, rentalSettlementMonth]);
 
   const handleDownloadRentalMutabakat = (contractorName: string) => {
     const rows = rentalSettlementRows.filter((r: any) => r.contractor_name === contractorName);
@@ -6873,13 +6948,14 @@ export default function App() {
     { id: 'rental_settlements', label: 'Kiralık Araçlar', badge: dbRentalSettlements.length, icon: FileSpreadsheet },
     { id: 'trip_settlements', label: 'Filo (sefer)', badge: dbTripPlates.length, icon: List },
     { id: 'hal_saha', label: 'Sefer ve tahsilat', badge: dbHalEntries.length, icon: Building2 },
+    { id: 'hal_saha_report', label: 'Hal saha takibi', icon: BarChart3 },
     { id: 'plate_rentals', label: 'Belge Plaka Kiraları', badge: dbPlateRentals.length, icon: Tag },
     { id: 'users', label: 'Kullanıcılar', badge: portalUsers.length, icon: ShieldCheck },
   ];
   const sidebarItems = menuItems.filter((item) => canViewMod(item.id));
   const menuById = Object.fromEntries(menuItems.map((item) => [item.id, item]));
   const sidebarGroups = [
-    { id: 'reports', label: 'Raporlar', itemIds: ['monthly_view', 'income_report', 'profitability', 'dis_alim'] },
+    { id: 'reports', label: 'Raporlar', itemIds: ['monthly_view', 'income_report', 'profitability', 'dis_alim', 'hal_saha_report'] },
     { id: 'money', label: 'Para', itemIds: ['sales_customers', 'collections', 'customers', 'credit_cards', 'general_expenses'] },
     { id: 'sub', label: 'Alt yüklenici', itemIds: ['subcontractors', 'sub_accounts', 'payments', 'sub_ibans', 'rental_settlements', 'trip_settlements'] },
     { id: 'fleet', label: 'Araç', itemIds: ['arac_filosu', 'fleet', 'plate_rentals'] },
@@ -7259,7 +7335,7 @@ export default function App() {
                   <div className="mt-2 flex justify-between items-baseline">
                     <span className="text-[11px] text-slate-500">Müşteriyi arayınız</span>
                     <span className="text-base font-bold text-amber-700">
-                      {alertAnalysis.overdueSales.reduce((s, i) => s + cleanNumber(i.total_amount), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      {alertAnalysis.overdueSales.reduce((s, i) => s + cleanNumber(i.total_amount), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </span>
                   </div>
                 </div>
@@ -7279,7 +7355,7 @@ export default function App() {
                   <div className="mt-1 flex justify-between items-baseline">
                     <span className="text-[11px] text-slate-500">Genel giderlere git</span>
                     <span className="text-base font-bold text-rose-700">
-                      {alertAnalysis.pendingDebts.reduce((s, i) => s + cleanNumber(i.alertAmount ?? i.total_amount), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      {alertAnalysis.pendingDebts.reduce((s, i) => s + cleanNumber(i.alertAmount ?? i.total_amount), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </span>
                   </div>
                   {alertAnalysis.pendingDebts.length > 0 && (
@@ -7292,7 +7368,7 @@ export default function App() {
                           <span className="shrink-0 font-semibold text-rose-800">
                             {d.diffDays < 0 ? 'geçti' : d.diffDays === 0 ? 'bugün' : `${d.diffDays} gün`}
                             {' · '}
-                            {cleanNumber(d.alertAmount).toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺
+                            {cleanNumber(d.alertAmount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           </span>
                         </li>
                       ))}
@@ -7322,7 +7398,7 @@ export default function App() {
                       <div className="flex justify-between items-baseline mt-0.5">
                         <span className="text-[10px] text-slate-400">Toplam Asgari Ödeme:</span>
                         <span className="text-[11px] font-bold text-amber-600">
-                          {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.min_payment_amount || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.min_payment_amount || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                         </span>
                       </div>
                     )}
@@ -7362,13 +7438,13 @@ export default function App() {
                   <Coins className="w-3.5 h-3.5" /> Alınan Tahsilatlar
                 </span>
                 <div className="text-2xl font-bold text-emerald-600 mt-2">
-                  +{totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  +{totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
         </div>
                 <span className="text-xs text-slate-400 mt-1 block">
                   {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'} · o aralıkta kasaya giren
                 </span>
                 <span className="text-[11px] text-slate-400 mt-0.5 block">
-                  Ciro {totalPeriodSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ (kesilen fatura, kasa değil)
+                  Ciro {totalPeriodSalesRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ (kesilen fatura, kasa değil)
                 </span>
               </button>
 
@@ -7377,7 +7453,7 @@ export default function App() {
                   <TrendingUp className="w-3.5 h-3.5" /> Bekleyen Müşteri Alacakları
                 </span>
                 <div className="text-2xl font-bold text-slate-900 mt-2">
-                  {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-xs text-slate-400 mt-1 block">
                   Bugünkü kalan: fatura − avans − tahsilat. Ödendi işareti kasaya yazılmaz.
@@ -7400,13 +7476,13 @@ export default function App() {
                       <DollarSign className="w-3.5 h-3.5" /> Güncel Kasa / Banka
                     </span>
                     <div className="text-2xl font-bold mt-2">
-                      {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </div>
                     <span className="text-xs text-blue-100 mt-1 block">
-                      {formatDateTR(cashStartDate)} fiili {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      {formatDateTR(cashStartDate)} fiili {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </span>
                     <span className="text-[11px] text-blue-100/90 mt-0.5 block">
-                      sonrası +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                      sonrası +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
           </button>
                   {isAdmin && (
@@ -7447,12 +7523,17 @@ export default function App() {
             {(() => {
               const isHalKasaOpen = (e: any) => /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
               const isHalCariOnly = (e: any) => /\[(AKTARIM-CARI|DRIVE-GIRIS|MERKEZ-TAHSIL)\]/.test(String(e.notes || ''));
+              const halFirmMap = halFirmByName(dbHalFirms);
               const seferTutari = (dbHalEntries || []).reduce((s: number, e: any) => {
-                if (e.kind !== 'sefer') return s;
+                const firm = halFirmMap.get(e.firm_name);
+                if (e.kind !== 'sefer' || (firm && !isHalFirmActive(firm))) return s;
                 const bedel = cleanNumber(e.bedel);
                 return s + (e.has_vat ? Math.round(bedel * 1.2 * 100) / 100 : bedel);
               }, 0);
-              const nakitCari = (dbHalEntries || []).filter((e: any) => !isHalKasaOpen(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
+              const nakitCari = (dbHalEntries || []).filter((e: any) => {
+                const firm = halFirmMap.get(e.firm_name);
+                return !isHalKasaOpen(e) && !(firm && !isHalFirmActive(firm));
+              }).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
               const nakitKasa = (dbHalEntries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
               const teslim = (dbHalHandovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
               const halCariKalan = Math.round((seferTutari - nakitCari) * 100) / 100;
@@ -7468,7 +7549,7 @@ export default function App() {
                   <Building2 className="w-3.5 h-3.5" /> Hal cari kalan
                 </span>
                 <div className="text-xl font-black text-rose-800 mt-1 tabular-nums">
-                  {halCariKalan.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {halCariKalan.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-0.5 block">Anlık hal alacağı · sefer − tahsilat</span>
               </button>
@@ -7481,7 +7562,7 @@ export default function App() {
                   <Wallet className="w-3.5 h-3.5" /> Personel kasa
                 </span>
                 <div className="text-xl font-black text-amber-950 mt-1 tabular-nums">
-                  {personelKasa.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {personelKasa.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
               </div>
                 <span className="text-[11px] text-amber-800/70 mt-0.5 block">Saha üzerindeki nakit · merkeze henüz alınmadı</span>
               </button>
@@ -7505,7 +7586,7 @@ export default function App() {
                 <div className="text-right">
                   <p className="text-[11px] font-bold tracking-widest uppercase text-slate-400">Net</p>
                   <p className={`text-2xl font-black tabular-nums ${periodProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                    {periodProfit >= 0 ? '+' : ''}{periodProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {periodProfit >= 0 ? '+' : ''}{periodProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </p>
                 </div>
               </div>
@@ -7524,7 +7605,7 @@ export default function App() {
                     <span className="text-xs font-bold uppercase tracking-wider">Girdi</span>
               </div>
                   <p className="mt-2 text-xl font-black text-emerald-800 tabular-nums">
-                    {girdi.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {girdi.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </p>
                   <p className="text-[11px] text-slate-400 mt-1">Kasaya giren tahsilat / avans / para ekle</p>
                 </div>
@@ -7536,7 +7617,7 @@ export default function App() {
                     <span className="text-xs font-bold uppercase tracking-wider">Çıktı</span>
                 </div>
                   <p className="mt-2 text-xl font-black text-rose-800 tabular-nums">
-                    {cikti.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {cikti.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </p>
                   <p className="text-[11px] text-slate-400 mt-1">Talimat, avans, maaş, gider, kart</p>
                 </div>
@@ -7551,7 +7632,7 @@ export default function App() {
                   <AlertCircle className="w-3.5 h-3.5" /> Ödenecek borç · taşeron
                 </span>
                 <div className="text-xl font-bold text-rose-600 mt-1.5">
-                  {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">Açık hakediş − avans · hakediş listesine git</span>
               </button>
@@ -7560,7 +7641,7 @@ export default function App() {
                   <AlertCircle className="w-3.5 h-3.5" /> Ödenecek borç · diğer
                 </span>
                 <div className="text-xl font-bold text-amber-800 mt-1.5">
-                  {payableOtherDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {payableOtherDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">
                   Devlet + tedarik + personel (sağdaki kutular)
@@ -7571,7 +7652,7 @@ export default function App() {
                   <Building2 className="w-3.5 h-3.5" /> Devlet Ödemeleri
                 </span>
                 <div className="text-xl font-bold text-slate-900 mt-1.5">
-                  {totalGovernmentPaymentsDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {totalGovernmentPaymentsDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">Giderler menüsüne git</span>
               </button>
@@ -7581,7 +7662,7 @@ export default function App() {
                   <Receipt className="w-3.5 h-3.5" /> Temel Diğer Faturalar
                 </span>
                 <div className="text-xl font-bold text-slate-900 mt-1.5">
-                  {totalGeneralCompanyExpensesDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {totalGeneralCompanyExpensesDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">Açık tedarik borçları</span>
               </button>
@@ -7591,7 +7672,7 @@ export default function App() {
                   <UserCheck className="w-3.5 h-3.5" /> Personel Gelecek Ödemesi
                 </span>
                 <div className="text-xl font-bold text-slate-900 mt-1.5">
-                  {totalEmployeeFutureDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {totalEmployeeFutureDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">Personel & bordroya git</span>
               </button>
@@ -7601,10 +7682,10 @@ export default function App() {
                   <Coins className="w-3.5 h-3.5" /> DÖNEM İÇİ FİİLİ MASRAF
                 </span>
                 <div className="text-xl font-bold text-emerald-800 mt-1.5">
-                  {totalPeriodPaidExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {totalPeriodPaidExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-emerald-600 mt-1 block">
-                  Seçilen ayda kasadan çıkan · ay neti {(totalCollectedCash - totalPeriodPaidExpenses).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  Seçilen ayda kasadan çıkan · ay neti {(totalCollectedCash - totalPeriodPaidExpenses).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </span>
               </button>
             </div>
@@ -7639,7 +7720,7 @@ export default function App() {
                           </span>
                         </div>
                         <span className="font-bold text-rose-600 text-sm">
-                          {line.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          {line.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                         </span>
                       </div>
                     ))}
@@ -7730,16 +7811,16 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
                   <span className="text-[11px] text-amber-800 font-semibold block">Dönem fatura ({customerInvoiceMonth.label || 'önceki ay'})</span>
-                  <span className="text-lg font-bold text-slate-900">{customerBalances.reduce((s, r) => s + r.billedPeriod, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                  <span className="text-lg font-bold text-slate-900">{customerBalances.reduce((s, r) => s + r.billedPeriod, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                 </div>
                 <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
                   <span className="text-[11px] text-emerald-800 font-semibold block">Dönem avans + tahsilat ({customerMoneyMonthLabel})</span>
-                  <span className="text-lg font-bold text-emerald-800">{customerBalances.reduce((s, r) => s + r.advancesPeriod + r.collectionsPeriod, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                  <span className="text-lg font-bold text-emerald-800">{customerBalances.reduce((s, r) => s + r.advancesPeriod + r.collectionsPeriod, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
                   <span className="text-[11px] text-slate-600 font-semibold block">Dönem borcu ({customerInvoiceMonth.label} − {customerMoneyMonthLabel})</span>
                   <span className={`text-lg font-bold ${customerBalances.reduce((s, r) => s + r.net, 0) >= 0 ? 'text-amber-800' : 'text-rose-700'}`}>
-                    {customerBalances.reduce((s, r) => s + r.net, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {customerBalances.reduce((s, r) => s + r.net, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                 </div>
               </div>
@@ -7773,11 +7854,11 @@ export default function App() {
                             <div className="font-semibold text-slate-800">{c.name}</div>
                             <div className="text-[10px] text-slate-400">{c.tax_id || 'VKN yok'}{c.phone ? ` · ${c.phone}` : ''}</div>
                           </td>
-                          <td className="py-2.5 pr-3 text-right font-semibold">{row.billedPeriod.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                          <td className="py-2.5 pr-3 text-right text-emerald-700">{row.advancesPeriod.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
-                          <td className="py-2.5 pr-3 text-right text-emerald-800">{row.collectionsPeriod.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                          <td className="py-2.5 pr-3 text-right font-semibold">{row.billedPeriod.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
+                          <td className="py-2.5 pr-3 text-right text-emerald-700">{row.advancesPeriod.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
+                          <td className="py-2.5 pr-3 text-right text-emerald-800">{row.collectionsPeriod.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
                           <td className={`py-2.5 pr-3 text-right font-black ${row.net > 0.5 ? 'text-amber-800' : row.net < -0.5 ? 'text-rose-700' : 'text-slate-500'}`}>
-                            {row.net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                            {row.net.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           </td>
                           <td className="py-2.5 pr-3">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${durum === 'Alacak' ? 'bg-amber-100 text-amber-800' : durum === 'Kapalı' ? 'bg-slate-100 text-slate-600' : 'bg-rose-100 text-rose-700'}`}>
@@ -7870,17 +7951,17 @@ export default function App() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10">
                 <span className="text-blue-200 text-[11px] block">Toplam Açık Fatura</span>
-                <span className="text-lg font-bold block mt-0.5">{totalOpenSalesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-lg font-bold block mt-0.5">{totalOpenSalesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                 <span className="text-blue-200/70 text-[10px] block mt-1">Ödendi işaretlenmemiş satışlar. Bu kutu kasadaki parayı düşmez.</span>
               </div>
               <div className="bg-emerald-500/20 backdrop-blur-xs p-3 rounded-xl border border-emerald-400/20">
                 <span className="text-emerald-200 text-[11px] block">Alınan dekont (kasa)</span>
-                <span className="text-lg font-bold text-emerald-300 block mt-0.5">+{customerCashInAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-lg font-bold text-emerald-300 block mt-0.5">+{customerCashInAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                 <span className="text-emerald-100/80 text-[10px] block mt-1">Yalnızca banka günü yazılı tahsilat. Excel fatura kopyası yok.</span>
               </div>
               <div className="bg-white/10 backdrop-blur-xs p-3 rounded-xl border border-white/10">
                 <span className="text-amber-200 text-[11px] block">Net cari alacak</span>
-                <span className="text-lg font-black text-amber-300 block mt-0.5">{pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-lg font-black text-amber-300 block mt-0.5">{pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                 <span className="text-amber-100/70 text-[10px] block mt-1">Satır toplamı: fatura − avans. Migros ana alacak.</span>
               </div>
             </div>
@@ -8008,7 +8089,7 @@ export default function App() {
                       <td className="py-3 px-3 text-slate-600">{formatDateTR(sale.issue_date)}</td>
                       <td className="py-3 px-3 text-slate-600">{formatDateTR(sale.due_date)}</td>
                       <td className="py-3 px-3 text-right font-bold text-slate-900 text-sm">
-                        {cleanNumber(sale.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        {cleanNumber(sale.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                       </td>
                       <td className="py-3 px-3 text-center">
                         {sale.status === 'paid' ? (
@@ -8199,25 +8280,25 @@ export default function App() {
                       <tr key={inv.id} className="hover:bg-slate-50 transition">
                         <td className="py-3 px-3 font-mono font-medium text-slate-800">{inv.invoice_no}</td>
                         <td className="py-3 px-3 text-slate-500">{formatDateTR(inv.issue_date)}</td>
-                        <td className="py-3 px-3 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR')} ₺</td>
+                        <td className="py-3 px-3 font-bold text-slate-900">{cleanNumber(inv.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
                         <td className="py-3 px-3">
                           <span className={`font-semibold block ${isT1Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
-                  {dynamicT1.toLocaleString('tr-TR')} ₺
+                  {dynamicT1.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </span>
                 {deductedAdvAmt > 0 && (
                   <span className="block text-[10px] text-amber-600 font-normal">
-                    (-{deductedAdvAmt.toLocaleString('tr-TR')} ₺ Avans Mahsubu)
+                    (-{deductedAdvAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ Avans Mahsubu)
                   </span>
                 )}
                           <span className="text-[10px] text-slate-400">{isT1Paid ? 'Ödendi' : formatDateTR(contractorTermPayDate(sanitizeDate(inv.issue_date), 'term1', inv.term1_due_date))}</span>
                         </td>
                       <td className="py-3 px-3">
             <span className={`font-semibold block ${isT2Paid ? 'text-emerald-600 line-through' : 'text-blue-700'}`}>
-              {dynamicT2.toLocaleString('tr-TR')} ₺
+              {dynamicT2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
             {deductedAdvForT2 > 0 && (
               <span className="block text-[10px] text-amber-600 font-normal">
-                (-{deductedAdvForT2.toLocaleString('tr-TR')} ₺ Avans Mahsubu)
+                (-{deductedAdvForT2.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ Avans Mahsubu)
               </span>
             )}
             <span className="text-[10px] text-slate-400">{isT2Paid ? 'Ödendi' : formatDateTR(contractorTermPayDate(sanitizeDate(inv.issue_date), 'term2', inv.term2_due_date))}</span>
@@ -8346,7 +8427,7 @@ export default function App() {
                         <td className="py-3 px-3 font-bold text-slate-900 text-sm">{sub.company_name || sub.name}</td>
                         <td className="py-3 px-3 font-mono text-slate-600">{sub.tax_no || sub.computedTax || '-'}</td>
                         <td className="py-3 px-3 font-mono text-blue-700">{sub.iban || 'IBAN Eksik'}</td>
-                        <td className={`py-3 px-3 text-right font-black text-sm ${sub.balance < -0.009 ? 'text-amber-600' : 'text-emerald-700'}`}>{sub.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className={`py-3 px-3 text-right font-black text-sm ${sub.balance < -0.009 ? 'text-amber-600' : 'text-emerald-700'}`}>{sub.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
                       </tr>
                     ))}
                 </tbody>
@@ -8501,7 +8582,7 @@ export default function App() {
                       <div>
                         <div className="text-sm font-bold text-slate-800">{b.title || 'Banka talimatı'}</div>
                         <div className="text-[11px] text-slate-500">
-                          {formatDateTR(b.pay_date)} · {b.contractor_count || (Array.isArray(b.payload?.rows) ? b.payload.rows.length : 0)} kişi · {cleanNumber(b.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          {formatDateTR(b.pay_date)} · {b.contractor_count || (Array.isArray(b.payload?.rows) ? b.payload.rows.length : 0)} kişi · {cleanNumber(b.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                         </div>
                       </div>
                       {isAdmin && (
@@ -8531,11 +8612,11 @@ export default function App() {
               <div>
                 <span className="text-xs font-semibold text-blue-900 block">Bankadan Çıkacak Seçili Toplam Tutar:</span>
                 <span className="text-2xl font-black text-blue-700">
-                  {bankLiveSelectionSummary.total.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  {bankLiveSelectionSummary.total.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </span>
                 {displayBankTermLines.some(l => l.advanceCut > 0) && (
                   <span className="text-[11px] font-semibold text-amber-700 mt-1 block">
-                    Listede avans mahsubu: −{displayBankTermLines.reduce((s, l) => s + (l.advanceCut || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    Listede avans mahsubu: −{displayBankTermLines.reduce((s, l) => s + (l.advanceCut || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                 )}
               </div>
@@ -8642,7 +8723,7 @@ export default function App() {
                             {modeBtn('both', 'Tamamı', row.has1 && row.has2)}
                   </div>
                           <span className="block text-[10px] text-slate-400 mt-1">
-                            1 nci {row.term1Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} · 2 nci {row.term2Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                            1 nci {row.term1Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 2 nci {row.term2Amount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                 </td>
                         <td className={`py-3 px-3 whitespace-nowrap ${overdue ? 'text-rose-600 font-bold' : 'text-slate-700'}`}>
@@ -8655,7 +8736,7 @@ export default function App() {
                           {row.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           {row.leftoverAdvance > 0.01 && (
                             <span className="block text-[10px] font-semibold text-amber-700">
-                              Kalan avans {row.leftoverAdvance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ gelecek faturaya
+                              Kalan avans {row.leftoverAdvance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ gelecek faturaya
                             </span>
                           )}
                         </td>
@@ -8709,28 +8790,28 @@ export default function App() {
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Toplam Sözleşmeli Maaş</span>
             <span className="text-base font-extrabold text-slate-800 mt-0.5 block">
-              {empSummary.totalBase.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+              {empSummary.totalBase.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
           </div>
 
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
             <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Açık ay sefer primi</span>
             <span className="text-base font-extrabold text-emerald-800 mt-0.5 block">
-              +{empSummary.totalBonus.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+              +{empSummary.totalBonus.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
           </div>
 
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
             <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Açık ay avansı</span>
             <span className="text-base font-extrabold text-amber-800 mt-0.5 block">
-              -{empSummary.totalAdv.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+              -{empSummary.totalAdv.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
             <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider block">Personele kalan (alacak)</span>
             <span className="text-base font-black text-blue-900 mt-0.5 block">
-              {empSummary.totalNet.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+              {empSummary.totalNet.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
           </div>
         </div>
@@ -8856,19 +8937,19 @@ export default function App() {
                   </td>
 
                   <td className="py-3 px-3 text-right font-medium text-slate-700">
-                    {emp.baseSalaryNum.toLocaleString('tr-TR')} ₺
+                    {emp.baseSalaryNum.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </td>
 
                   <td className="py-3 px-3 text-right font-medium text-slate-600">
                     {cleanNumber(emp.employer_sgk) > 0
-                      ? `${cleanNumber(emp.employer_sgk).toLocaleString('tr-TR')} ₺`
+                      ? `${cleanNumber(emp.employer_sgk).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`
                       : <span className="text-slate-400">-</span>}
                   </td>
 
                   <td className="py-3 px-3 text-right">
                     {emp.bonusNum > 0 ? (
                       <span className="inline-flex items-center text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                        +{emp.bonusNum.toLocaleString('tr-TR')} ₺
+                        +{emp.bonusNum.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                       </span>
                     ) : (
                       <span className="text-slate-400">-</span>
@@ -8878,7 +8959,7 @@ export default function App() {
                   <td className="py-3 px-3 text-right">
                     {emp.advanceDeduction > 0 ? (
                       <span className="inline-flex items-center text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                        -{emp.advanceDeduction.toLocaleString('tr-TR')} ₺
+                        -{emp.advanceDeduction.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                       </span>
                     ) : (
                       <span className="text-slate-400">-</span>
@@ -8888,11 +8969,11 @@ export default function App() {
                   <td className="py-3 px-3 text-right">
                     <div className="flex flex-col items-end">
                       <span className={`font-extrabold text-sm ${emp.cariBalance < -0.009 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                        {emp.cariBalance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        {emp.cariBalance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                       </span>
                       {emp.booksPaid > 0 && (
                         <span className="mt-0.5 text-[10px] text-slate-500">
-                          Ödenen {emp.booksPaid.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          Ödenen {emp.booksPaid.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                         </span>
                       )}
                       {emp.cariBalance < -0.009 && (
@@ -9046,7 +9127,7 @@ export default function App() {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="bg-rose-50 border border-rose-100 rounded-xl p-3">
                     <span className="text-[11px] text-rose-800 font-semibold block">Toplam ekstre borcu</span>
-                    <span className="text-lg font-black text-slate-900">{totalStmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                    <span className="text-lg font-black text-slate-900">{totalStmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                   </div>
                   <button type="button" onClick={() => setCardDueFilter(cardDueFilter === 'week' ? 'all' : 'week')} className={`text-left rounded-xl p-3 border ${cardDueFilter === 'week' ? 'bg-amber-100 border-amber-300' : 'bg-amber-50 border-amber-100'}`}>
                     <span className="text-[11px] text-amber-800 font-semibold block">Bu hafta son ödeme</span>
@@ -9114,10 +9195,10 @@ export default function App() {
                             </td>
                             <td className="py-3 px-3 text-slate-600">{isPersonal ? 'Şahsi' : 'Şirket'}</td>
                             <td className={`py-3 px-3 text-right font-black ${hasDebt ? 'text-rose-700' : 'text-emerald-700'}`}>
-                              {stmtAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                              {stmtAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                             </td>
                             <td className="py-3 px-3 text-right text-amber-800 font-semibold">
-                              {minAmt > 0 ? `${minAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : '—'}
+                              {minAmt > 0 ? `${minAmt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : '—'}
                             </td>
                             <td className="py-3 px-3">
                               <div className={`font-bold ${hasDebt && diff < 0 ? 'text-rose-700' : hasDebt && diff <= 3 ? 'text-amber-800' : 'text-slate-800'}`}>{formatDateTR(cc.due_date)}</div>
@@ -9200,6 +9281,16 @@ export default function App() {
             formatDateTR={formatDateTR}
             cleanNumber={cleanNumber}
             onReload={loadPortalData}
+          />
+        )}
+
+        {activeTab === 'hal_saha_report' && canViewMod('hal_saha_report') && (
+          <HalSahaReportPage
+            firms={dbHalFirms}
+            entries={dbHalEntries}
+            handovers={dbHalHandovers}
+            formatDateTR={formatDateTR}
+            cleanNumber={cleanNumber}
           />
         )}
 
@@ -9502,7 +9593,7 @@ export default function App() {
                             {item.bakim.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           </td>
                           <td className={`py-3 px-3 text-right font-black ${item.netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {item.netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                            {item.netProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           </td>
                       </tr>
                     );
@@ -9893,7 +9984,7 @@ export default function App() {
               <div>
                 <h3 className="font-bold text-lg text-slate-900">Müşteri Tahsilatları</h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Yalnız kasaya giren banka transferi ve senin eklediğin dekont. Excel/EA kopyası yok. Aralık: {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'}. Toplam {totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                  Yalnız kasaya giren banka transferi ve senin eklediğin dekont. Excel/EA kopyası yok. Aralık: {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'}. Toplam {totalCollectedCash.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </p>
               </div>
               {isAdmin && (
@@ -9950,7 +10041,7 @@ export default function App() {
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-emerald-600 text-sm">
-                        +{cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        +{cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                       </td>
                       {isAdmin && (
                         <td className="py-3 px-4 text-center">
@@ -10110,7 +10201,7 @@ export default function App() {
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-slate-900 text-sm">
-                        {cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                        {cleanNumber(item.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                       </td>
                       {isAdmin && (
                         <td className="py-3 px-4 text-center space-x-2">
@@ -10229,20 +10320,20 @@ export default function App() {
                       <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs space-y-1">
                         <div className="flex justify-between gap-2">
                           <span className="text-slate-500">Sabit maaş (kapanmış aylar, son {closedLabel})</span>
-                          <span className="font-bold text-slate-800">+{books.closedHak.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                          <span className="font-bold text-slate-800">+{books.closedHak.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                         </div>
                         <div className="flex justify-between gap-2">
                           <span className="text-slate-500">Prim − avans (Ekim’den beri)</span>
-                          <span className="font-bold text-slate-800">{(books.bonus - books.advanceCut).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                          <span className="font-bold text-slate-800">{(books.bonus - books.advanceCut).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                         </div>
                         <div className="flex justify-between gap-2">
                           <span className="text-slate-500">Ödenen</span>
-                          <span className="font-bold text-emerald-700">−{books.paid.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                          <span className="font-bold text-emerald-700">−{books.paid.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                         </div>
                         <div className="flex justify-between gap-2 pt-1 border-t border-slate-100">
                           <span className="font-semibold text-slate-700">Cari</span>
                           <span className={`font-extrabold ${books.balance < -0.009 ? 'text-rose-700' : 'text-emerald-800'}`}>
-                            {books.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                            {books.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                           </span>
                         </div>
                       </div>
@@ -10397,7 +10488,7 @@ export default function App() {
                         title: tx.title || (isBonus ? 'Prim' : 'Avans'),
                         amount: totAmt,
                         plus: isBonus,
-                        extra: isInst ? `(Aylık kesinti: ${mCut.toLocaleString('tr-TR')} ₺)` : '',
+                        extra: isInst ? `(Aylık kesinti: ${mCut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺)` : '',
                         onDelete: () => handleDeleteEmployeeTransaction(tx.id)
                       });
                     });
@@ -10464,7 +10555,7 @@ export default function App() {
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className={`font-bold ${amtCls}`}>
-                                  {line.plus ? '+' : '−'}{line.amount.toLocaleString('tr-TR')} ₺
+                                  {line.plus ? '+' : '−'}{line.amount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                                 </span>
                                 {line.onDelete ? (
                                   <button
@@ -11108,7 +11199,7 @@ export default function App() {
                 if (rem <= 0) return null;
                 return (
                   <p className="text-[11px] text-emerald-700 mt-1 font-medium">
-                    Bu tedarikçide {rem.toLocaleString('tr-TR')} ₺ mahsup edilecek avans var. Kaydedince sorulacak.
+                    Bu tedarikçide {rem.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ mahsup edilecek avans var. Kaydedince sorulacak.
                   </p>
                 );
               })()}
@@ -11204,10 +11295,10 @@ export default function App() {
                     <td className="py-2 pr-2 whitespace-nowrap">{formatDateTR(line.date)}</td>
                     <td className="py-2 pr-2 font-semibold">{line.type}</td>
                     <td className="py-2 pr-2 text-slate-600">{line.title}</td>
-                    <td className="py-2 pr-2 text-right">{line.debit ? line.debit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
-                    <td className="py-2 pr-2 text-right text-emerald-700">{line.credit ? line.credit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className="py-2 pr-2 text-right">{line.debit ? line.debit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className="py-2 pr-2 text-right text-emerald-700">{line.credit ? line.credit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
                     <td className={`py-2 text-right font-bold ${line.balance >= 0 ? 'text-amber-800' : 'text-rose-700'}`}>
-                      {line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      {line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </td>
                   </tr>
                 ))}
@@ -11218,7 +11309,7 @@ export default function App() {
                 <div className="text-right">
                   <span className="text-[11px] text-slate-500 block">Kapanış bakiyesi</span>
                   <span className="text-lg font-black text-slate-900">
-                    {selectedCariLedger[selectedCariLedger.length - 1].balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {selectedCariLedger[selectedCariLedger.length - 1].balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                   <span className="text-[11px] text-slate-400 block">Artı: müşteriden alacak · Eksi: fazla ödeme/avans</span>
                 </div>
@@ -11291,10 +11382,10 @@ export default function App() {
                     <td className="py-2 pr-2 whitespace-nowrap">{formatDateTR(line.date)}</td>
                     <td className="py-2 pr-2 font-semibold">{line.type}</td>
                     <td className="py-2 pr-2 text-slate-600">{line.title}</td>
-                    <td className="py-2 pr-2 text-right text-emerald-700">{line.earn ? line.earn.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
-                    <td className="py-2 pr-2 text-right text-rose-700">{line.cut ? line.cut.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className="py-2 pr-2 text-right text-emerald-700">{line.earn ? line.earn.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                    <td className="py-2 pr-2 text-right text-rose-700">{line.cut ? line.cut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
                     <td className={`py-2 text-right font-bold ${line.balance >= 0 ? 'text-slate-800' : 'text-rose-700'}`}>
-                      {line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      {line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </td>
                   </tr>
                 ))}
@@ -11305,19 +11396,19 @@ export default function App() {
                 <div className="bg-slate-50 rounded-xl p-3">
                   <span className="text-[11px] text-slate-500 block">Toplam hakediş</span>
                   <span className="font-black text-emerald-700">
-                    {selectedPayrollLedger.reduce((s, l) => s + l.earn, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {selectedPayrollLedger.reduce((s, l) => s + l.earn, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                 </div>
                 <div className="bg-slate-50 rounded-xl p-3">
                   <span className="text-[11px] text-slate-500 block">Toplam kesinti / ödeme</span>
                   <span className="font-black text-rose-700">
-                    {selectedPayrollLedger.reduce((s, l) => s + l.cut, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {selectedPayrollLedger.reduce((s, l) => s + l.cut, 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                 </div>
                 <div className="bg-blue-50 rounded-xl p-3">
                   <span className="text-[11px] text-blue-700 block">Kapanış bakiyesi</span>
                   <span className="font-black text-slate-900">
-                    {selectedPayrollLedger[selectedPayrollLedger.length - 1].balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                    {selectedPayrollLedger[selectedPayrollLedger.length - 1].balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                   <span className="text-[11px] text-slate-400 block">Artı: personele kalan · Eksi: fazla avans</span>
                 </div>
@@ -11528,7 +11619,7 @@ export default function App() {
             <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-lg">Kasa / banka hareketleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{formatDateTR(cashStartDate)} açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺. Sonrası giriş eklenir, çıkış düşer.</p>
+                <p className="text-xs text-slate-500 mt-0.5">{formatDateTR(cashStartDate)} açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺. Sonrası giriş eklenir, çıkış düşer.</p>
               </div>
               <div className="flex items-center gap-2">
                 <label className="text-[11px] font-semibold text-slate-500">Başlangıç
@@ -11543,23 +11634,23 @@ export default function App() {
             <div className="px-5 py-3 grid grid-cols-2 sm:grid-cols-5 gap-2 border-b border-slate-100">
               <div className="bg-slate-50 rounded-xl p-3">
                 <span className="text-[10px] font-bold text-slate-400 uppercase block">Dönem başı</span>
-                <span className="text-sm font-black text-slate-800">{cashLedgerView.startBal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-sm font-black text-slate-800">{cashLedgerView.startBal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-emerald-50 rounded-xl p-3">
                 <span className="text-[10px] font-bold text-emerald-600 uppercase block">Giriş</span>
-                <span className="text-sm font-black text-emerald-700">+{cashLedgerView.periodIn.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-sm font-black text-emerald-700">+{cashLedgerView.periodIn.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-rose-50 rounded-xl p-3">
                 <span className="text-[10px] font-bold text-rose-600 uppercase block">Kasa çıkışı</span>
-                <span className="text-sm font-black text-rose-700">−{cashLedgerView.periodOut.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-sm font-black text-rose-700">−{cashLedgerView.periodOut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-orange-50 rounded-xl p-3">
                 <span className="text-[10px] font-bold text-orange-600 uppercase block">Taşeron ödeme</span>
-                <span className="text-sm font-black text-orange-800">−{(cashLedgerView.contractorOut || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-sm font-black text-orange-800">−{(cashLedgerView.contractorOut || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-blue-50 rounded-xl p-3">
                 <span className="text-[10px] font-bold text-blue-600 uppercase block">Dönem sonu</span>
-                <span className="text-sm font-black text-blue-800">{cashLedgerView.endBal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                <span className="text-sm font-black text-blue-800">{cashLedgerView.endBal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
             </div>
             <div className="overflow-auto flex-1 p-5">
@@ -11583,9 +11674,9 @@ export default function App() {
                         {line.isHist && <span className="block text-[10px] font-semibold text-amber-700">Açılışa dahil</span>}
                       </td>
                       <td className="py-2 px-2 text-slate-500 max-w-[280px] truncate" title={line.title}>{line.title}</td>
-                      <td className="py-2 px-2 text-right font-bold text-emerald-600">{line.inflow ? line.inflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
-                      <td className="py-2 px-2 text-right font-bold text-rose-600">{line.outflow ? line.outflow.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
-                      <td className="py-2 px-2 text-right font-black text-slate-900">{line.balance == null ? '—' : line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺'}</td>
+                      <td className="py-2 px-2 text-right font-bold text-emerald-600">{line.inflow ? line.inflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                      <td className="py-2 px-2 text-right font-bold text-rose-600">{line.outflow ? line.outflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                      <td className="py-2 px-2 text-right font-black text-slate-900">{line.balance == null ? '—' : line.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -11649,11 +11740,11 @@ export default function App() {
             </div>
             <p className="text-xs text-slate-600">
               <span className="font-bold text-slate-900 block">{singleSalaryPay.name}</span>
-              Kapanmış hak {singleSalaryPay.closedHak.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-              {singleSalaryPay.openExtra ? ` · Bu ay prim/avans ${singleSalaryPay.openExtra.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : ''}
-              {singleSalaryPay.paid > 0 ? ` · Ödenen ${singleSalaryPay.paid.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : ''}
+              Kapanmış hak {singleSalaryPay.closedHak.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+              {singleSalaryPay.openExtra ? ` · Bu ay prim/avans ${singleSalaryPay.openExtra.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : ''}
+              {singleSalaryPay.paid > 0 ? ` · Ödenen ${singleSalaryPay.paid.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺` : ''}
             </p>
-            <p className="text-sm font-bold text-emerald-800">Kalan cari: {singleSalaryPay.net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</p>
+            <p className="text-sm font-bold text-emerald-800">Kalan cari: {singleSalaryPay.net.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</p>
             <p className="text-[11px] text-slate-500">Varsayılan tüm kalandır. Kısmi ödeme için düşürün; cariden fazla yazılmaz. Avans bu ekrandan girilmez.</p>
             <div>
               <label className="block font-semibold text-slate-700 mb-1 text-xs">Ödenecek (en fazla kalan)</label>
@@ -11710,7 +11801,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <span className="text-slate-400 text-[10px]">Kalan cari:</span>
                       <span className={`w-28 px-2 py-1 rounded font-bold text-right ${item.net > 0.009 ? 'bg-white text-indigo-700 border border-slate-200' : 'bg-slate-100 text-slate-400'}`}>
-                        {item.net.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                        {item.net.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                       <span>₺</span>
                     </div>
@@ -12056,23 +12147,23 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
                   <div>
                     <span className="text-[10px] text-slate-500 block">Son Sigorta Bedeli</span>
-                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastInsurance.toLocaleString('tr-TR')} ₺</span>
+                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastInsurance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Son Kasko Bedeli</span>
-                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastKasko.toLocaleString('tr-TR')} ₺</span>
+                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastKasko.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Son Muayene Harcı</span>
-                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastInspection.toLocaleString('tr-TR')} ₺</span>
+                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastInspection.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Son MTV Tutarı</span>
-                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastMtv.toLocaleString('tr-TR')} ₺</span>
+                    <span className="font-bold text-slate-800">{drawerData.vehicleSummary.lastMtv.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                   </div>
                   <div className="col-span-2 pt-1 border-t border-slate-200">
                     <span className="text-[10px] text-slate-500 block">Ödenmiş Toplam Ceza</span>
-                    <span className="font-bold text-rose-600">{drawerData.vehicleSummary.paidFines.toLocaleString('tr-TR')} ₺</span>
+                    <span className="font-bold text-rose-600">{drawerData.vehicleSummary.paidFines.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                   </div>
                 </div>
               )}
@@ -12088,7 +12179,7 @@ export default function App() {
                   <div key={iIdx} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 space-y-1">
                     <div className="flex justify-between font-bold text-slate-800">
                       <span>{item.invoice_no || item.month_year || 'Kayıt'}</span>
-                      <span className="text-blue-700">{(item.total_amount || item.invoice_rev || 0).toLocaleString('tr-TR')} ₺</span>
+                      <span className="text-blue-700">{(item.total_amount || item.invoice_rev || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
                     </div>
                     <div className="flex justify-between text-[11px] text-slate-500">
                       <span>Tarih: {item.due_date || item.issue_date || '-'}</span>
@@ -12126,7 +12217,7 @@ export default function App() {
             hgs: parseLocaleNumber(rentalSettlementForm.hgs),
             fuel_charge: parseLocaleNumber(rentalSettlementForm.fuel_charge)
           }) : null;
-          const money = (n: number) => `${(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
+          const money = (n: number) => formatMoneyTR(n);
           const kmTxt = (n: any) => parseLocaleNumber(n).toLocaleString('tr-TR', { maximumFractionDigits: 0 });
           const entryCls = 'w-full px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-sm font-semibold text-right tabular-nums disabled:bg-slate-100 disabled:border-slate-200';
           const adminCls = 'w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-right tabular-nums disabled:bg-slate-100';
@@ -12165,11 +12256,16 @@ export default function App() {
                 </>
               )}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              <div className="bg-white rounded-xl border border-slate-200 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Araç</div>
+                <div className="text-lg font-black tabular-nums text-slate-900">{rentalGroupSummary.count}</div>
+                <div className="text-[10px] text-slate-400">{rentalGroupLabel} · {rentalSettlementMonth || 'ay'}</div>
+              </div>
               <div className="bg-white rounded-xl border border-slate-200 px-4 py-3">
                 <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">KDV dahil toplam</div>
                 <div className="text-lg font-black tabular-nums text-slate-900">{money(rentalGroupSummary.payable)}</div>
-                <div className="text-[10px] text-slate-400">{rentalGroupLabel} · {rentalSettlementMonth || 'ay'} · {rentalGroupSummary.count} araç</div>
+                <div className="text-[10px] text-slate-400">{rentalGroupLabel} · {rentalSettlementMonth || 'ay'}</div>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 px-4 py-3">
                 <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">1. ödeme</div>
@@ -12186,12 +12282,17 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-xl border border-slate-200 px-4 py-2.5">
                 <p className="text-[11px] text-slate-500">
                   {isAdmin
-                    ? 'Tablodaki tutarlar bu grubun açık ayıdır. Kaydet: onaya alır. Onayla: kilitler. Yönetici, kilitli olsa da mutabakat ayının sonraki takvim ayı boyunca (Ekim → Kasım sonu) düzeltme yapabilir. Saha kilitli kalır.'
+                    ? 'Tablodaki tutarlar bu grubun açık ayıdır. Liste, ay bitmeden Araç Filosu kiralık işaretine göre eşleşir; km’siz fazla plaka düşer, geçmiş ay durur. Kaydet: onaya alır. Onayla: kilitler. Yönetici kilitli olsa da mutabakat ayının sonraki takvim ayı boyunca düzeltme yapabilir. Saha kilitli kalır.'
                     : 'Salt okuma: kaydet / onay yok. Fiş PDF’lerini indirebilirsiniz.'}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {isAdmin && (
                     <>
+                  {rentalRosterOpen && (
+                    <button type="button" onClick={() => handleOpenRentalMonth()} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-800 text-xs font-bold whitespace-nowrap">
+                      Filodan eşleştir
+                    </button>
+                  )}
                   <button type="button" onClick={handleAdminSaveAllRental} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold whitespace-nowrap">
                     Tümünü kaydet
                   </button>
@@ -12251,14 +12352,19 @@ export default function App() {
                       {rentalSettlementRows.length === 0 && (
                         <tr>
                           <td colSpan={7} className="py-10 text-center text-slate-500">
-                            <div>Bu ayda {rentalGroupLabel} satırı yok. KM, gün, uğrama boş açılır; plaka ve kira önceki aydan gelir.</div>
-                            {isAdmin && rentalPrevMonthCount > 0 && (
-                              <button type="button" onClick={handleOpenRentalMonth} className="mt-3 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold">
-                                {rentalPrevMonth} plakalarını {rentalSettlementMonth} ayına boş aç
+                            <div>Bu ayda {rentalGroupLabel} satırı yok. Araç Filosu’nda bu gruba işaretli plakalar, ay bitmeden buraya boş açılır; kira önceki aydan gelir.</div>
+                            {isAdmin && rentalRosterOpen && rentalFleetRoster.length > 0 && (
+                              <button type="button" onClick={() => handleOpenRentalMonth()} className="mt-3 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold">
+                                Filodan {rentalFleetRoster.length} plakayı aç
                               </button>
                             )}
-                            {(!isAdmin || rentalPrevMonthCount === 0) && (
-                              <div className="text-[11px] text-slate-400 mt-2">Yönetici Excel yükler veya önceki aydan ay açar.</div>
+                            {isAdmin && rentalRosterOpen && rentalFleetRoster.length === 0 && (
+                              <div className="text-[11px] text-slate-400 mt-2">Künyede {rentalGroupLabel} işareti yok. Araç menüsü → Araç Filosu.</div>
+                            )}
+                            {(!isAdmin || !rentalRosterOpen) && (
+                              <div className="text-[11px] text-slate-400 mt-2">
+                                {rentalRosterOpen ? 'Yönetici filodan eşleştirir.' : 'Bu ayın kadrosu kilitli. Yönetici Excel veya tek plaka ekler.'}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -12317,11 +12423,11 @@ export default function App() {
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block"><span className="text-[10px] font-bold text-slate-500">Yapılan KM</span><input value={rentalSettlementForm.total_km} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, total_km: e.target.value })} className={entryCls} inputMode="numeric" /></label>
                         {meta.hasWorkDays && <label className="block"><span className="text-[10px] font-bold text-slate-500">Çalışma gün</span><input value={rentalSettlementForm.work_days} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, work_days: e.target.value })} className={entryCls} inputMode="numeric" /></label>}
-                        <label className="block"><span className="text-[10px] font-bold text-slate-500">{meta.stopLabel}</span><input value={rentalSettlementForm.stop_count} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, stop_count: e.target.value, visit_prime: String(parseLocaleNumber(e.target.value) * meta.visitUnit) })} className={entryCls} inputMode="numeric" /></label>
+                        <label className="block"><span className="text-[10px] font-bold text-slate-500">{meta.stopLabel}</span><input value={rentalSettlementForm.stop_count} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, stop_count: e.target.value, visit_prime: moneyInputValue(parseLocaleNumber(e.target.value) * meta.visitUnit) })} className={entryCls} inputMode="numeric" /></label>
                         {meta.hasHgs && <label className="block"><span className="text-[10px] font-bold text-slate-500">HGS ₺</span><input value={rentalSettlementForm.hgs} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, hgs: e.target.value })} className={entryCls} inputMode="decimal" /></label>}
-                        <label className="block"><span className="text-[10px] font-bold text-slate-500">Ek iş ₺</span><input value={rentalSettlementForm.extra_work} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, extra_work: e.target.value })} className={entryCls} inputMode="decimal" /></label>
+                        <label className="block"><span className="text-[10px] font-bold text-slate-500">Ek iş ₺</span><input value={rentalSettlementForm.extra_work} disabled={locked} onChange={e => setRentalSettlementForm({ ...rentalSettlementForm, extra_work: e.target.value })} onBlur={e => setRentalSettlementForm({ ...rentalSettlementForm, extra_work: moneyInputValue(e.target.value) })} className={entryCls} inputMode="decimal" /></label>
                       </div>
-                      <p className="text-[10px] text-slate-400 mt-1">{meta.stopLabel} × {meta.visitUnit.toLocaleString('tr-TR')} ₺ = {money(stopCount * meta.visitUnit)} uğrama (otomatik)</p>
+                      <p className="text-[10px] text-slate-400 mt-1">{meta.stopLabel} × {meta.visitUnit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ = {money(stopCount * meta.visitUnit)} uğrama (otomatik)</p>
                     </div>
                     {isAdmin && (
                       <div>
@@ -12483,7 +12589,7 @@ export default function App() {
                           {r.collection_kind === 'devlet' ? 'Yalnız devlet' : (amt === 0 ? '0 bedel kira' : 'Yıllık kira')}
                         </td>
                         <td className="py-3 px-3 text-right font-bold">
-                          {amt.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                          {amt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                         </td>
                         <td className="py-3 px-3 whitespace-nowrap">
                           <span className={warn ? 'font-black' : ''}>{formatDateTR(r.renewal_date) || '—'}</span>
@@ -12612,7 +12718,7 @@ export default function App() {
         {rentalReportRow && (() => {
           const r = rentalReportRow;
           const t = r.totals || rentalSettlementTotals(r);
-          const money = (n: number) => `${n.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`;
+          const money = (n: number) => `${n.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺`;
           return (
             <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onMouseDown={e => dismissIfBackdrop(e, () => setRentalReportRow(null))}>
               <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-slate-100 space-y-4">
@@ -12798,7 +12904,7 @@ export default function App() {
               <span className="text-xs text-blue-700">Artı bakiye: taşerona borcunuz. Eksi: avans / fazla ödeme.</span>
             </div>
             <div className="text-right">
-              <span className="text-xl font-black text-blue-900">{(selectedSubcontractorLedger.length ? selectedSubcontractorLedger[selectedSubcontractorLedger.length - 1].balance : 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+              <span className="text-xl font-black text-blue-900">{(selectedSubcontractorLedger.length ? selectedSubcontractorLedger[selectedSubcontractorLedger.length - 1].balance : 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               <span className="text-xs text-blue-700 block mt-0.5">Güncel Bakiye</span>
             </div>
           </div>
@@ -12879,9 +12985,9 @@ export default function App() {
                         <td className="py-2.5 px-3 text-slate-500">{tx.date ? formatDateTR(tx.date) : '-'}</td>
                         <td className="py-2.5 px-3 font-semibold text-slate-700">{tx.type}</td>
                         <td className="py-2.5 px-3 text-slate-600">{tx.desc}</td>
-                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{tx.debit ? tx.debit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
-                        <td className="py-2.5 px-3 text-right font-bold text-amber-700">{tx.credit ? tx.credit.toLocaleString('tr-TR', { minimumFractionDigits: 2 }) + ' ₺' : '—'}</td>
-                        <td className={`py-2.5 px-3 text-right font-black ${tx.balance >= 0 ? 'text-blue-900' : 'text-rose-700'}`}>{tx.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">{tx.debit ? tx.debit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                        <td className="py-2.5 px-3 text-right font-bold text-amber-700">{tx.credit ? tx.credit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺' : '—'}</td>
+                        <td className={`py-2.5 px-3 text-right font-black ${tx.balance >= 0 ? 'text-blue-900' : 'text-rose-700'}`}>{tx.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</td>
                         <td className="py-2.5 px-3 text-center">
                           {tx.isManual ? (
                             <button

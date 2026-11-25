@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Plus, X, Download, Printer } from 'lucide-react';
 import { SortTh, sortByColumn, type ColumnSort } from './columnSort';
-import { formatMoneyTR } from './money';
+import { formatMoneyTR, formatMoneyAmountTR } from './money';
 import { inferVehicleChargeKind, type VehicleChargeKind } from './vehicleCharge';
 
 const SKIP = new Set([
@@ -78,7 +78,7 @@ function isRolledPlateCharge(inv: any) {
 }
 
 function money(n: number) {
-  return (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatMoneyAmountTR(n);
 }
 
 function downloadCsv(name: string, rows: string[][]) {
@@ -284,7 +284,7 @@ export default function FleetPage({
           <span className="text-[11px] font-semibold text-blue-700 uppercase block">FİLO SABİT GİDER TOPLAMI</span>
           <span className="text-base font-black text-blue-900 block mt-1">{money(sabitTop)} ₺</span>
           <span className="text-[11px] font-medium text-blue-600">
-            Aylık: {(sabitTop / 12).toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺ / ay
+            Aylık: {formatMoneyTR(sabitTop / 12)} / ay
           </span>
         </div>
       </div>
@@ -330,7 +330,7 @@ export default function FleetPage({
                   <td className="py-3 px-3 text-slate-700 font-medium">{v.driver_name || '-'}</td>
                   <td className="py-3 px-3">
                     <span className="font-semibold text-slate-800">
-                      {sigortaAmt > 0 ? `${sigortaAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                      {sigortaAmt > 0 ? formatMoneyTR(sigortaAmt) : '-'}
                     </span>
                     {(v.insurance_expiry_date || v.insurance_start_date) && (
                       <span className="block text-[10px] text-slate-400">
@@ -340,7 +340,7 @@ export default function FleetPage({
                   </td>
                   <td className="py-3 px-3">
                     <span className="font-semibold text-slate-800">
-                      {kaskoAmt > 0 ? `${kaskoAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                      {kaskoAmt > 0 ? formatMoneyTR(kaskoAmt) : '-'}
                     </span>
                     {(v.kasko_expiry_date || v.kasko_start_date) && (
                       <span className="block text-[10px] text-slate-400">
@@ -349,11 +349,11 @@ export default function FleetPage({
                     )}
                   </td>
                   <td className="py-3 px-3 font-semibold text-slate-800">
-                    {mtvAmt > 0 ? `${mtvAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                    {mtvAmt > 0 ? formatMoneyTR(mtvAmt) : '-'}
                   </td>
                   <td className="py-3 px-3">
                     <span className="font-semibold text-slate-800">
-                      {muayeneAmt > 0 ? `${muayeneAmt.toLocaleString('tr-TR')} ₺` : '-'}
+                      {muayeneAmt > 0 ? formatMoneyTR(muayeneAmt) : '-'}
                     </span>
                     {v.next_inspection_date && (
                       <span className="block text-[10px] text-slate-400">

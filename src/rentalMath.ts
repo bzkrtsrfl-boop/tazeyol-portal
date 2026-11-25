@@ -39,6 +39,53 @@ export function rentalAdminCanEditMonth(yearMonth: string, now = new Date()) {
   return current <= rentalAdminGraceUntilMonth(ym);
 }
 
+/** Kadro eşleşmesi: ay M, sonraki ayın 1’ine kadar (Kasım → 1 Aralık’tan önce). Geçmiş ay dondurulur. */
+export function rentalRosterSyncOpen(yearMonth: string, now = new Date()) {
+  const ym = String(yearMonth || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return false;
+  const current = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`;
+  return current <= ym;
+}
+
+export function rentalSettlementRowEmpty(row: any) {
+  const st = String(row?.status || 'draft');
+  if (st !== 'draft') return false;
+  const n = (v: any) => Math.abs(Number(v) || 0);
+  return n(row?.total_km) < 0.009
+    && n(row?.work_days) < 0.009
+    && n(row?.stop_count) < 0.009
+    && n(row?.extra_work) < 0.009
+    && n(row?.hgs) < 0.009
+    && n(row?.fuel_charge) < 0.009
+    && n(row?.visit_prime) < 0.009;
+}
+
+export function rentalPlateKey(p: string) {
+  return String(p || '').replace(/\s+/g, '').toUpperCase();
+}
+
+export function buildRentalFleetRoster(vehicles: any[], assignments: any[], groupId: string) {
+  const ids = new Set(
+    (assignments || [])
+      .filter((a: any) => a.kind === 'kiralik' && a.group_id === groupId)
+      .map((a: any) => a.vehicle_id)
+  );
+  const seen = new Set<string>();
+  return (vehicles || [])
+    .filter((v: any) => ids.has(v.id) && v.is_active !== false)
+    .map((v: any) => ({
+      plate: String(v.plate || '').trim(),
+      plateKey: rentalPlateKey(v.plate),
+      contractor_name: String(v.contractor_name || '').trim(),
+      notes: v.notes || null
+    }))
+    .filter((v: any) => {
+      if (!v.plateKey || seen.has(v.plateKey)) return false;
+      seen.add(v.plateKey);
+      return true;
+    });
+}
+
 export function rentalRowLockedForUser(row: any, role: string | null) {
   if (role === 'admin') {
     if ((row?.status || 'draft') !== 'approved') return false;
@@ -76,8 +123,12 @@ export function rentalListeFromWorkbook(workbook: XLSX.WorkBook) {
   return { sheetName: preferred, headers, rows };
 }
 
+function r2(n: number) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
 export function rentalFuelIncome(km: any, rate: any, unit: any) {
-  return (Number(km) || 0) / 100 * (Number(rate) || 0) * (Number(unit) || 0);
+  return r2((Number(km) || 0) / 100 * (Number(rate) || 0) * (Number(unit) || 0));
 }
 
 export const RENTAL_WORK_GROUPS = [
@@ -115,30 +166,33 @@ export function rentalMonthlyRent(row: any) {
 
 export function rentalVisitMoney(row: any) {
   const stored = Number(row?.visit_prime) || 0;
-  if (stored > 0) return stored;
+  if (stored > 0) return r2(stored);
   const meta = rentalGroupMeta(rentalRowGroup(row));
-  return (Number(row?.stop_count) || 0) * (meta.visitUnit || 0);
+  return r2((Number(row?.stop_count) || 0) * (meta.visitUnit || 0));
 }
 
 export function rentalSettlementTotals(row: any) {
   const fuelIncome = rentalFuelIncome(row?.total_km, row?.fuel_rate, row?.fuel_unit_price);
-  const brut = rentalMonthlyRent(row)
+  const brut = r2(
+    rentalMonthlyRent(row)
     + rentalVisitMoney(row)
     + (Number(row?.extra_work) || 0)
     + (Number(row?.hgs) || 0)
     + fuelIncome
-    - (Number(row?.fuel_charge) || 0);
-  const kdv = brut * 0.2;
-  const stoppage = kdv * 0.2;
-  const payable = brut + kdv - stoppage;
+    - (Number(row?.fuel_charge) || 0)
+  );
+  const kdv = r2(brut * 0.2);
+  const stoppage = r2(kdv * 0.2);
+  const payable = r2(brut + kdv - stoppage);
+  const term1 = r2(payable / 2);
   return {
     fuelIncome,
     brut,
     kdv,
     stoppage,
     payable,
-    term1: payable / 2,
-    term2: payable / 2
+    term1,
+    term2: r2(payable - term1)
   };
 }
 

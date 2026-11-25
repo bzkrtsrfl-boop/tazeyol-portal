@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
 import { supabase } from './supabase';
+import { formatMoneyAmountTR } from './money';
+import { buildHalCari, isHalEntryShown, isHalFirmActive } from './halSaha';
 
 function daysAgo(dateStr: string) {
   const d = new Date(`${dateStr}T00:00:00`);
@@ -87,8 +89,8 @@ export default function HalSahaPage({
     .filter((p: any) => p.is_active !== false)
     .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.plate).localeCompare(String(b.plate), 'tr'));
 
-  const money = (n: number) => (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const activeFirms = (firms || []).filter((f: any) => f.is_active !== false);
+  const money = (n: number) => formatMoneyAmountTR(n);
+  const activeFirms = (firms || []).filter((f: any) => isHalFirmActive(f));
   const inMonth = (d: string) => String(d || '').slice(0, 7) === ym;
 
   const monthEntries = useMemo(
@@ -100,7 +102,7 @@ export default function HalSahaPage({
     const rows = (firmFilter
       ? monthEntries.filter((e: any) => e.firm_name === firmFilter)
       : monthEntries
-    ).filter((e: any) => !isHalKasaOnly(e));
+    ).filter((e: any) => !isHalKasaOnly(e) && isHalEntryShown(e, firms, `${ym}-01`, `${ym}-31`));
     const noteOf = (e: any) => String(e.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim();
     const amtOf = (e: any) => (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0) + cleanNumber(e.collected);
     return [...rows].sort((a, b) => {
@@ -111,7 +113,7 @@ export default function HalSahaPage({
       if (cmp === 0) cmp = String(a.entry_date || '').localeCompare(String(b.entry_date || ''));
       return listSort.dir === 'asc' ? cmp : -cmp;
     });
-  }, [monthEntries, firmFilter, listSort, cleanNumber]);
+  }, [monthEntries, firmFilter, listSort, cleanNumber, firms]);
 
   const kasaDefter = useMemo(() => {
     const nakit = (entries || [])
@@ -145,23 +147,10 @@ export default function HalSahaPage({
     });
   }, [entries, handovers, cleanNumber, kasaSort]);
 
-  const cari = useMemo(() => {
-    const names = activeFirms.map((f: any) => f.name);
-      const extra = monthEntries.filter((e: any) => !isHalKasaOnly(e)).map((e: any) => e.firm_name).filter(Boolean);
-    const all = [...new Set([...names, ...extra])];
-    return all.map(name => {
-      const shop = activeFirms.find((f: any) => f.name === name)?.shop || '';
-      const prev = (entries || []).filter((e: any) => e.firm_name === name && String(e.entry_date).slice(0, 7) < ym && !isHalKasaOnly(e));
-      const now = monthEntries.filter((e: any) => e.firm_name === name && !isHalKasaOnly(e));
-      const prevSefer = prev.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
-      const prevTah = prev.reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
-      const sefer = now.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
-      const tahsilat = now.reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
-      const devir = prevSefer - prevTah;
-      const kalan = devir + sefer - tahsilat;
-      return { name, shop, devir, sefer, tahsilat, kalan };
-    });
-  }, [activeFirms, entries, monthEntries, ym, cleanNumber]);
+  const cari = useMemo(
+    () => buildHalCari(firms, entries, `${ym}-01`, `${ym}-31`, cleanNumber),
+    [firms, entries, ym, cleanNumber]
+  );
 
   const genel = cari.reduce((a, r) => ({
     devir: a.devir + r.devir,
@@ -213,7 +202,13 @@ export default function HalSahaPage({
 
   const setFirmActive = async (id: string, is_active: boolean) => {
     if (!canTakeToCash) return;
-    const { error } = await supabase.from('hal_firms').update({ is_active }).eq('id', id);
+    if (!is_active && !window.confirm('Firma pasif olsun mu? Bundan sonra yeni kayıt ve güncel tablolarda görünmez. Eski hareketler geçmiş dönemde durur.')) return;
+    const todayCut = new Date().toISOString().slice(0, 10);
+    const payload = is_active ? { is_active: true, inactive_at: null } : { is_active: false, inactive_at: todayCut };
+    let { error } = await supabase.from('hal_firms').update(payload).eq('id', id);
+    if (error && /inactive_at/i.test(error.message || '')) {
+      ({ error } = await supabase.from('hal_firms').update({ is_active }).eq('id', id));
+    }
     if (error) alert(error.message);
     else await onReload();
   };
@@ -254,6 +249,10 @@ export default function HalSahaPage({
     const firm = (form.firm || '').trim();
     if (!firm) {
       alert('Firma seçin. Tüm firmalar seçiliyken kayıt girilmez.');
+      return;
+    }
+    if (!activeFirms.some((f: any) => f.name === firm)) {
+      alert('Bu firma pasif. Yeni kayıt girilmez. Geçmiş hareketler rapor döneminde durur.');
       return;
     }
     const bedel = kind === 'sefer' ? cleanNumber(form.bedel) : 0;
@@ -649,6 +648,7 @@ export default function HalSahaPage({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-3">
             <h4 className="font-bold text-sm">Hal firmaları</h4>
+            <p className="text-[11px] text-slate-500">Pasif firma yeni girişte ve güncel tabloda yok. Geçmiş ay / raporda eski hareketler durur.</p>
             <div className="flex flex-wrap gap-2">
               <input value={newFirm.name} onChange={e => setNewFirm(f => ({ ...f, name: e.target.value }))} placeholder="Firma adı" className="flex-1 min-w-[140px] px-3 py-2 border rounded-lg text-xs" />
               <input value={newFirm.shop} onChange={e => setNewFirm(f => ({ ...f, shop: e.target.value }))} placeholder="Dükkan no" className="w-28 px-3 py-2 border rounded-lg text-xs" />
@@ -665,7 +665,7 @@ export default function HalSahaPage({
                     className="w-24 px-2 py-1 border rounded text-xs"
                   />
                   <button type="button" onClick={() => setFirmActive(f.id, f.is_active === false)} className="text-[11px] font-bold text-[#009fe3]">
-                    {f.is_active === false ? 'Aç' : 'Kapat'}
+                    {f.is_active === false ? 'Aktif yap' : 'Pasif'}
                   </button>
                 </div>
               ))}

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Edit2, Search, Trash2, X } from 'lucide-react';
 import { supabase } from './supabase';
+import { formatMoneyAmountTR } from './money';
 import {
   filoDepotLabel,
   filoDepotSlug,
@@ -63,7 +64,7 @@ export default function TripSettlementsPage({
     setDrafts({});
   }, [depot, ym]);
 
-  const money = (n: number) => (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (n: number) => formatMoneyAmountTR(n);
   const sahaLocked = role === 'saha' && tripMonthLockedForSaha(ym);
   const canWriteMonth = canEditModule && (isAdmin || (role === 'saha' && !sahaLocked));
 

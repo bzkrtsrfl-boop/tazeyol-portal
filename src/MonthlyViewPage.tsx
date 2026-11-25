@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Calendar, ChevronRight } from 'lucide-react';
 import { yearMonthTrLabel } from './disAlim';
+import { formatMoneyAmountTR } from './money';
 import { buildMonthlyView, type MonthlyViewLine } from './monthlyView';
 
 type Props = {
@@ -12,7 +13,7 @@ type Props = {
 const PIE_COLORS = ['#2563eb', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4', '#f97316', '#64748b', '#db2777'];
 
 function money(n: number) {
-  return (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatMoneyAmountTR(n);
 }
 
 function LineTable({

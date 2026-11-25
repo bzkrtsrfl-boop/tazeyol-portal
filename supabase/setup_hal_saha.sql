@@ -121,6 +121,8 @@ create policy hal_plates_write on public.hal_plates
 revoke all on table public.hal_plates from anon, public;
 grant select, insert, update, delete on table public.hal_plates to authenticated;
 
+alter table public.hal_firms add column if not exists inactive_at date;
+
 -- Gece saha, girişte filodaki plakayı seçebilsin (yazamaz).
 do $$
 begin

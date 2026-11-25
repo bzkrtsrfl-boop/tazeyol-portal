@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Search, X, FileSpreadsheet, Download } from 'lucide-react';
 import { writeExcelAoa } from './excelOut';
+import { formatMoneyAmountTR } from './money';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { supabase } from './supabase';
@@ -74,7 +75,7 @@ export default function DisAlimPage({ rows, canEdit, cleanNumber, formatDateTR, 
   const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
 
-  const money = (n: number) => (Number(n) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (n: number) => formatMoneyAmountTR(n);
   const entryCls = 'w-full px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-sm font-semibold disabled:bg-slate-100 disabled:border-slate-200';
 
   const units = useMemo(() => {

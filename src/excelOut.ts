@@ -1,9 +1,9 @@
 import * as XLSX from 'xlsx';
-import { formatMoneyTR } from './money';
+import { formatMoneyTR, roundMoney } from './money';
 
 /** Banka talimatı gibi sayı kalması gereken hücreler */
 export function excelKeepNumber(n: number) {
-  return { __excelKeepNumber: true as const, n: Number(n) || 0 };
+  return { __excelKeepNumber: true as const, n: roundMoney(n) };
 }
 
 function excelCell(cell: any) {
