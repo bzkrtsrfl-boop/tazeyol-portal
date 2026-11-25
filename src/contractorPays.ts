@@ -40,12 +40,47 @@ export function mergeSameDayContractorPays(pays: ContractorPay[]): ContractorPay
   return Array.from(groups.values()).map(list => {
     const reals = list.filter(p => !isReconstructedHakedisPay(p.desc));
     const use = reals.length ? reals : list;
-    const best = use[0];
-    if (use.length === 2 && use.every(p => !isReconstructedHakedisPay(p.desc))) {
-      return { ...best, amount: Math.round(best.amount * 2 * 100) / 100 };
-    }
-    return best;
+    return use[0];
   }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.amount - b.amount);
+}
+
+function samePayDay(a: string, b: string) {
+  return String(a || '').slice(0, 10) === String(b || '').slice(0, 10);
+}
+
+export function isExplodedInvoiceTermPay(desc: string) {
+  const d = desc || '';
+  return /ÖDEME/i.test(d) && /GIB|TRN|\(1 nci|\(2 nci|\(Tamam/i.test(d);
+}
+
+function isTermLabeledPay(p: ContractorPay) {
+  return !!(payTermFromDesc(p.desc, p.type) || isExplodedInvoiceTermPay(p.desc));
+}
+
+/**
+ * Ödendi = Excel kişi tutarı (tek satır). Fatura vade kopyaları (GIB 1 nci / 2 nci) aynı gün silinir.
+ * Parti yoksa eski satırlar olduğu gibi kalır.
+ */
+export function collapsePaysWithPersonBankLumps(pays: ContractorPay[], lumps: ContractorPay[]): ContractorPay[] {
+  const realLumps = (lumps || []).filter(p => p.amount > 0.009);
+  if (!realLumps.length) return pays;
+  const covered = new Set(realLumps.map(p => String(p.date || '').slice(0, 10)));
+  const rest = (pays || []).filter(p => {
+    if (p.amount <= 0.009) return false;
+    const d = String(p.date || '').slice(0, 10);
+    if (!covered.has(d)) return true;
+    if (isExplodedInvoiceTermPay(p.desc)) return false;
+    if (isAnonymousBankPay(p.desc) || isBankTalimatDesc(p.desc, p.type)) return false;
+    if (isReconstructedHakedisPay(p.desc) || isTermLabeledPay(p)) return false;
+    return true;
+  });
+  realLumps.forEach(lump => {
+    if (rest.some(p => samePayDay(p.date, lump.date) && amountsClose(p.amount, lump.amount, 0.51) && (isAnonymousBankPay(p.desc) || p.type === 'bank'))) {
+      return;
+    }
+    rest.push({ ...lump, type: 'bank' });
+  });
+  return rest.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.amount - b.amount);
 }
 
 export function termPayLabel(term: 'term1' | 'term2' | string) {

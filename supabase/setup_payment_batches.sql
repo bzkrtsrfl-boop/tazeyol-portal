@@ -21,6 +21,26 @@ alter table public.payment_batches add column if not exists contractor_count int
 alter table public.payment_batches add column if not exists payload jsonb not null default '[]'::jsonb;
 alter table public.payment_batches add column if not exists batch_reference text;
 
+do $$
+declare r record;
+begin
+  for r in
+    select c.conname
+    from pg_constraint c
+    join pg_class t on t.oid = c.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public'
+      and t.relname = 'payment_batches'
+      and c.contype = 'c'
+      and pg_get_constraintdef(c.oid) ilike '%status%'
+  loop
+    execute format('alter table public.payment_batches drop constraint if exists %I', r.conname);
+  end loop;
+end $$;
+alter table public.payment_batches drop constraint if exists payment_batches_status_check;
+alter table public.payment_batches
+  add constraint payment_batches_status_check check (status in ('sent', 'paid', 'cancelled'));
+
 -- Canlıdaki eski tabloda NOT NULL ama varsayılanı olmayan sütunlar (batch_reference vb.)
 -- portal insert’ini düşürmesin.
 do $$

@@ -60,9 +60,11 @@ import {
   paymentLooksFull,
   termPayLabel,
   payTermFromDesc,
-  isBankTalimatDesc,
+  isAnonymousBankPay,
+  isExplodedInvoiceTermPay,
   inSeptPayWave,
-  normalizeSeptWavePays
+  normalizeSeptWavePays,
+  collapsePaysWithPersonBankLumps
 } from './contractorPays';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -1688,6 +1690,7 @@ export default function App() {
   const [dbSubcontractors, setDbSubcontractors] = useState<any[]>([]);
   const [dbSubcontractorsLedger, setDbSubcontractorsLedger] = useState<any[]>([]);
   const [dbPaymentBatches, setDbPaymentBatches] = useState<any[]>([]);
+  const [payingBatchId, setPayingBatchId] = useState<string | number | null>(null);
   const [dbAdvanceInstallments, setDbAdvanceInstallments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [portalDataReady, setPortalDataReady] = useState(false);
@@ -3285,7 +3288,18 @@ export default function App() {
       )) return;
       kept.push(inv);
     });
-    return kept;
+    return kept.filter(inv => {
+      const no = String(inv.invoice_no || '');
+      if (!isExplodedInvoiceTermPay(no)) return true;
+      const name = extractContractorName(no);
+      const d = sanitizeDate(inv.issue_date || inv.created_at);
+      return !kept.some(k =>
+        k !== inv &&
+        sanitizeDate(k.issue_date || k.created_at) === d &&
+        contractorRecordsMatch(name, extractContractorName(k.invoice_no || '')) &&
+        isAnonymousBankPay(String(k.invoice_no || ''))
+      );
+    });
   };
 
   const cashInRows = (() => {
@@ -4216,9 +4230,12 @@ export default function App() {
     const batchPays: Pay[] = [];
     (dbPaymentBatches || []).forEach((b: any) => {
       if (String(b.status) !== 'paid') return;
-      const date = sanitizeDate(b.pay_date);
+      const date = sanitizeDate(b.pay_date) || sanitizeDate(b.created_at);
       if (!date) return;
-      const payload = b.payload || {};
+      let payload: any = b.payload || {};
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch { payload = {}; }
+      }
       let amt = 0;
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
       rows.forEach((r: any) => {
@@ -4241,16 +4258,7 @@ export default function App() {
         type: 'bank'
       });
     });
-    batchPays.forEach(bp => {
-      if (inSeptPayWave(bp.date) && pays.some(p => paymentLooksFull(p.desc, p.type) || amountsClose(p.amount, septTotal, 1))) return;
-      const already = pays.some(p =>
-        p.date === bp.date && (
-          isBankTalimatDesc(p.desc, p.type) ||
-          amountsClose(p.amount, bp.amount, 0.51)
-        )
-      );
-      if (!already) pays.push(bp);
-    });
+    const collapsedPays = collapsePaysWithPersonBankLumps(pays, batchPays);
     const pesinAdvanceTotal = Math.round(
       lines
         .filter(l => /pe[sş]in avans/i.test(l.type) && inSeptPayWave(l.date))
@@ -4263,7 +4271,7 @@ export default function App() {
         return s + (n > 1 ? l.credit / n : 0);
       }, 0) * 100
     ) / 100;
-    const visiblePays = normalizeSeptWavePays(pays, septTotal, pesinAdvanceTotal, septInstCut);
+    const visiblePays = normalizeSeptWavePays(collapsedPays, septTotal, pesinAdvanceTotal, septInstCut);
 
     slots.forEach(s => { s.remain = s.net; });
     visiblePays.forEach(p => {
@@ -5065,27 +5073,37 @@ export default function App() {
   };
 
   const handleConfirmPaymentBatch = async (batch: any) => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      alert('Ödendi işle yalnız yönetici hesabıyla yapılır.');
+      return;
+    }
     if (String(batch.status) === 'paid') {
       alert('Bu parti zaten ödendi işlendi.');
       return;
     }
-    const payload = batch.payload || {};
+    let payload: any = batch.payload || {};
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch { payload = {}; }
+    }
     const rows = Array.isArray(payload.rows) ? payload.rows : [];
     const lines = Array.isArray(payload.lines) ? payload.lines : [];
-    const cashTotal = rows.reduce((s: number, r: any) => s + cleanNumber(r.amount), 0);
+    const cashTotal = rows.reduce((s: number, r: any) => s + cleanNumber(r.amount), 0) ||
+      lines.reduce((s: number, l: any) => s + cleanNumber(l.netAmount), 0);
+    const personCount = rows.length || new Set(lines.map((l: any) => l.contractorName)).size;
     const suggestedPay = sanitizeDate(batch.pay_date) || new Date().toISOString().split('T')[0];
     const typedPay = window.prompt(
       `Banka hangi günde ödedi?\nTalimat: ${formatDateTR(suggestedPay)}\nCariye bu tarih yazılır.`,
       suggestedPay
     );
-    if (!typedPay) return;
-    const payDate = sanitizeDate(typedPay);
+    if (typedPay === null) return;
+    const payDate = sanitizeDate(String(typedPay).trim());
     if (!payDate || !/^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
       alert('Geçerli bir tarih girin. Örn. 24.11.2026');
       return;
     }
-    if (!window.confirm(`Banka bu partiyi ödedi.\n${formatDateTR(payDate)} · ${rows.length} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır. Excel tekrar yüklenmez.`)) return;
+    if (!window.confirm(`Banka bu partiyi ödedi.\n${formatDateTR(payDate)} · ${personCount} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır. Excel tekrar yüklenmez.`)) return;
+    setPayingBatchId(batch.id);
+    const warn: string[] = [];
     try {
       const activeLines = (lines as any[]).length
         ? (lines as any[])
@@ -5095,63 +5113,110 @@ export default function App() {
             invoiceNo: `Banka talimatı - ${r.contractorName}`,
             term: ''
           }));
-      const byInvoice = new Map<any, { term1?: boolean; term2?: boolean }>();
+      const byInvoice = new Map<string, { term1?: boolean; term2?: boolean }>();
       activeLines.forEach((line: any) => {
-        if (!line.invoiceId) return;
-        const cur = byInvoice.get(line.invoiceId) || {};
+        const id = line.invoiceId != null ? String(line.invoiceId) : '';
+        if (!id) return;
+        const cur = byInvoice.get(id) || {};
         if (line.term === 'term1') cur.term1 = true;
         if (line.term === 'term2') cur.term2 = true;
-        byInvoice.set(line.invoiceId, cur);
+        byInvoice.set(id, cur);
       });
       for (const [invoiceId, terms] of byInvoice) {
-        const inv = dbInvoices.find(i => i.id === invoiceId);
+        const inv = dbInvoices.find(i => String(i.id) === invoiceId);
         if (!inv) continue;
         const updates: any = {};
         if (terms.term1) updates.term1_status = 'paid';
         if (terms.term2) updates.term2_status = 'paid';
-              const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
-              const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
+        const isT1Paid = updates.term1_status === 'paid' || inv.term1_status === 'paid';
+        const isT2Paid = updates.term2_status === 'paid' || inv.term2_status === 'paid';
         if (isT1Paid && isT2Paid) updates.status = 'paid';
-        await supabase.from('invoices').update(updates).eq('id', invoiceId);
+        if (!Object.keys(updates).length) continue;
+        const { error: invErr } = await supabase.from('invoices').update(updates).eq('id', inv.id);
+        if (invErr) warn.push('Fatura vade: ' + invErr.message);
       }
       const existing = (dbInvoices || []).filter((i: any) => i.category === 'subcontractor_paid_outflow');
-      const cashRows = activeLines
-        .map((line: any) => {
-          const inv = dbInvoices.find(i => String(i.id) === String(line.invoiceId));
-          const title = String(line.invoiceNo || inv?.invoice_no || line.contractorName);
+      const personCash = new Map<string, { contractorName: string; amount: number }>();
+      (rows as any[]).forEach((r: any) => {
+        const name = String(r.contractorName || '').trim();
+        if (!name) return;
+        const amt = Math.round(cleanNumber(r.amount) * 100) / 100;
+        const key = canonicalContractorKey(name) || name;
+        const cur = personCash.get(key) || { contractorName: name, amount: 0 };
+        cur.amount = Math.round((cur.amount + amt) * 100) / 100;
+        personCash.set(key, cur);
+      });
+      if (!personCash.size) {
+        activeLines.forEach((line: any) => {
+          const name = String(line.contractorName || '').trim();
+          if (!name) return;
           const amt = Math.round(cleanNumber(line.netAmount) * 100) / 100;
-          if (amt <= 0.009) return null;
-          const invoiceNo = line.term
-            ? `ÖDEME - ${title} (${termPayLabel(line.term)})`
-            : `ÖDEME - Banka talimatı - ${line.contractorName || title}`;
-          const dup = existing.some((i: any) =>
-            sanitizeDate(i.issue_date) === payDate &&
-            Math.abs(cleanNumber(i.total_amount) - amt) < 0.05 &&
-            String(i.invoice_no || '') === invoiceNo
-          );
-          if (dup) return null;
-          return {
-            invoice_no: invoiceNo,
-            direction: 'incoming',
-            category: 'subcontractor_paid_outflow',
-            total_amount: amt,
-            issue_date: payDate,
-            due_date: payDate,
-            status: 'paid'
-          };
-        })
-        .filter(Boolean);
-      if (cashRows.length > 0) {
-        const { error: cashErr } = await supabase.from('invoices').insert(cashRows);
-        if (cashErr) throw cashErr;
+          const key = canonicalContractorKey(name) || name;
+          const cur = personCash.get(key) || { contractorName: name, amount: 0 };
+          cur.amount = Math.round((cur.amount + amt) * 100) / 100;
+          personCash.set(key, cur);
+        });
       }
-      await applyAdvanceUsageToDb(activeLines.map((l: any) => ({ contractorName: l.contractorName, advanceCut: cleanNumber(l.advanceCut) })));
-      const { error: stErr } = await supabase.from('payment_batches').update({ status: 'paid', pay_date: payDate }).eq('id', batch.id);
-      if (stErr) throw stErr;
-      alert(`Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ düşüldü.`);
-      loadPortalData();
+      const cashRows = Array.from(personCash.values()).map(person => {
+        const amt = Math.round(person.amount * 100) / 100;
+        if (amt <= 0.009) return null;
+        const invoiceNo = `ÖDEME - Banka talimatı - ${person.contractorName}`.slice(0, 180);
+        const sameDay = existing.filter((i: any) =>
+          sanitizeDate(i.issue_date) === payDate &&
+          contractorRecordsMatch(person.contractorName, extractContractorName(i.invoice_no || ''))
+        );
+        if (sameDay.some((i: any) => isAnonymousBankPay(String(i.invoice_no || '')) && amountsClose(cleanNumber(i.total_amount), amt, 0.51))) {
+          return null;
+        }
+        const explodedSum = Math.round(sameDay
+          .filter((i: any) => isExplodedInvoiceTermPay(String(i.invoice_no || '')))
+          .reduce((s: number, i: any) => s + cleanNumber(i.total_amount), 0) * 100) / 100;
+        if (explodedSum > 0.009 && amountsClose(explodedSum, amt, 1)) return null;
+        return {
+          invoice_no: invoiceNo,
+          direction: 'incoming',
+          category: 'subcontractor_paid_outflow',
+          total_amount: amt,
+          issue_date: payDate,
+          due_date: payDate,
+          status: 'paid'
+        };
+      }).filter(Boolean) as any[];
+      for (let i = 0; i < cashRows.length; i += 25) {
+        const chunk = cashRows.slice(i, i + 25);
+        const { error: cashErr } = await supabase.from('invoices').insert(chunk);
+        if (cashErr) {
+          for (const row of chunk) {
+            const one = await supabase.from('invoices').insert([row]);
+            if (one.error) warn.push('Kasa satırı: ' + one.error.message);
+          }
+        }
+      }
+      try {
+        await applyAdvanceUsageToDb(activeLines.map((l: any) => ({ contractorName: l.contractorName, advanceCut: cleanNumber(l.advanceCut) })));
+      } catch (advErr: any) {
+        warn.push('Avans mahsup: ' + (advErr?.message || advErr));
+      }
+      let { error: stErr } = await supabase.from('payment_batches').update({ status: 'paid', pay_date: payDate }).eq('id', batch.id);
+      if (stErr && /pay_date/i.test(stErr.message || '')) {
+        const retry = await supabase.from('payment_batches').update({ status: 'paid' }).eq('id', batch.id);
+        stErr = retry.error;
+      }
+      if (stErr) {
+        throw new Error(
+          (stErr.message || 'Parti durumu güncellenemedi') +
+          '\n\nSupabase SQL Editor’da setup_payment_batches.sql çalıştırın (status: sent/paid/cancelled).'
+        );
+      }
+      alert(
+        `Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺ düşüldü.` +
+        (warn.length ? `\n\nUyarı:\n${warn.slice(0, 4).join('\n')}` : '')
+      );
+      await loadPortalData();
     } catch (err: any) {
-      alert('Parti onay hatası: ' + err.message);
+      alert('Parti onay hatası: ' + (err.message || err));
+    } finally {
+      setPayingBatchId(null);
     }
   };
 
@@ -8442,10 +8507,12 @@ export default function App() {
                       {isAdmin && (
                         <div className="flex gap-2">
                           <button
+                            type="button"
+                            disabled={payingBatchId === b.id}
                             onClick={() => handleConfirmPaymentBatch(b)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg"
+                            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold px-3 py-1.5 rounded-lg"
                           >
-                            Ödendi işle
+                            {payingBatchId === b.id ? 'İşleniyor…' : 'Ödendi işle'}
                           </button>
                           <button
                             onClick={() => handleCancelPaymentBatch(b)}
