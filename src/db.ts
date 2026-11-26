@@ -80,6 +80,7 @@ export function extractSalesInvoiceKeys(text: string): string[] {
   const keys = new Set<string>();
   for (const m of s.matchAll(/\bEF\s*\d{8,}\b/g)) keys.add(m[0].replace(/\s+/g, ''));
   for (const m of compact.matchAll(/EF\d{8,}/g)) keys.add(m[0]);
+  for (const m of compact.matchAll(/EA\d{8,}/g)) keys.add(m[0]);
   for (const m of compact.matchAll(/GIB\d{8,}/g)) keys.add(m[0]);
   return [...keys];
 }
@@ -113,16 +114,32 @@ function invoiceAmount(inv: any) {
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
 }
 
-export function isLegacyCrcInvoice(inv: any) {
+export const CRC_TAHSILAT_AMOUNT = 1383480;
+
+export function isCrcSalesInvoiceDoc(inv: any) {
   const no = String(inv?.invoice_no || '').toUpperCase();
-  if (no.includes('EF2202600000011') || no.includes('2202600000011')) return true;
+  return no.includes('EF2202600000011') || no.includes('2202600000011');
+}
+
+export function isCrcTahsilatDoc(inv: any) {
+  const cat = String(inv?.category || '');
+  if (cat !== 'customer_collection' && cat !== 'customer_advance') return false;
+  if (isCrcSalesInvoiceDoc(inv)) return false;
+  const no = String(inv?.invoice_no || '');
+  if (/^\s*EF\d{8,}/i.test(no) && !/^\s*THS\s*-/i.test(no)) return false;
+  return /CRC/i.test(no);
+}
+
+export function isLegacyCrcInvoice(inv: any) {
+  if (isCrcSalesInvoiceDoc(inv)) return true;
+  if (/CRC/i.test(String(inv?.invoice_no || ''))) return true;
   const cat = String(inv?.category || '');
   const isMoneyDoc =
     cat === 'freight_sales' ||
     cat === 'customer_collection' ||
     cat === 'customer_advance' ||
     inv?.direction === 'outgoing';
-  return isMoneyDoc && Math.abs(invoiceAmount(inv) - 1383480) < 0.05;
+  return isMoneyDoc && Math.abs(invoiceAmount(inv) - CRC_TAHSILAT_AMOUNT) < 0.05;
 }
 
 export function retitleInvoiceCustomer(invoiceNo: string, customerName: string) {
@@ -145,10 +162,44 @@ export function findCrcCustomer(customers: Customer[]) {
 export function findMigrosCustomer(customers: Customer[]) {
   const hits = (customers || []).filter(c => {
     const n = normalizeName(c.name);
+    if (/DIS ALIM|DIŞ ALIM/.test(n)) return false;
     return n.includes('MIGROS') || n.includes('MİGROS');
   });
   hits.sort((a, b) => String(b.name || '').length - String(a.name || '').length);
   return hits[0] || null;
+}
+
+export function findAtifCustomer(customers: Customer[]) {
+  const hits = (customers || []).filter(c => {
+    const n = String(c.name || '').toLocaleUpperCase('tr-TR').replace(/İ/g, 'I');
+    return n.includes('ATIF') && n.includes('ALTUN');
+  });
+  hits.sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+  return hits[0] || null;
+}
+
+export function findIdealTarimCustomer(customers: Customer[]) {
+  const hits = (customers || []).filter(c => {
+    const n = String(c.name || '').toLocaleUpperCase('tr-TR').replace(/İ/g, 'I');
+    return (n.includes('IDEAL') || n.includes('İDEAL')) && n.includes('TARIM');
+  });
+  hits.sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+  return hits[0] || null;
+}
+
+/** Eylül Excel'i Migros'a yazılmış Atıf / İdeal tutarları. Ekim+ dokunulmaz. */
+export const ATIF_EYLUL_MISFILED_AMOUNTS = [3600, 4800, 7200, 9000, 9600, 10800, 12000, 13200, 14400];
+export const IDEAL_EYLUL_MISFILED_AMOUNT = 510900;
+
+export function eylulMisfiledOwner(inv: any): 'atif' | 'ideal' | null {
+  const cat = String(inv?.category || '');
+  if (cat !== 'freight_sales' && inv?.direction !== 'outgoing') return null;
+  const d = String(inv?.issue_date || '').slice(0, 10);
+  if (d >= '2026-10-01') return null;
+  const amt = invoiceAmount(inv);
+  if (Math.abs(amt - IDEAL_EYLUL_MISFILED_AMOUNT) < 0.05) return 'ideal';
+  if (ATIF_EYLUL_MISFILED_AMOUNTS.some(a => Math.abs(amt - a) < 0.05)) return 'atif';
+  return null;
 }
 
 export function isCustomerMoneyInvoice(inv: any) {

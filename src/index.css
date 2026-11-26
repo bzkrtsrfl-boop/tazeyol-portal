@@ -70,6 +70,20 @@ body {
   margin: 0;
 }
 
+.portal-drawer {
+  animation: portal-drawer-in 160ms ease-out;
+}
+@keyframes portal-drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+.portal-nav-pending {
+  opacity: 0.72;
+  pointer-events: none;
+  cursor: wait;
+  transition: opacity 80ms linear;
+}
+
 @media print {
   body * {
     visibility: hidden;

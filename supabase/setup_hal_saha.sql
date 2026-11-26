@@ -88,6 +88,11 @@ create policy hal_handovers_select on public.hal_handovers
   for select to authenticated using (public.can_view_module('hal_saha'));
 create policy hal_handovers_ins on public.hal_handovers
   for insert to authenticated with check (public.is_admin());
+drop policy if exists hal_handovers_upd on public.hal_handovers;
+create policy hal_handovers_upd on public.hal_handovers
+  for update to authenticated
+  using (public.is_admin())
+  with check (public.is_admin());
 create policy hal_handovers_del on public.hal_handovers
   for delete to authenticated using (public.is_admin());
 

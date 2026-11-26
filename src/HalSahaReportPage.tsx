@@ -6,13 +6,15 @@ import {
   HAL_REPORT_PRESETS,
   buildHalCari,
   cleanHalNote,
+  cmpHalMove,
   halReportRange,
   inHalRange,
   isHalCariOnly,
-  isHalEntryShown,
   isHalKasaOnly,
   isHalMerkezTahsil,
+  halHandoverBookDate,
   seferTotal,
+  type HalMoveSortField,
   type HalReportPreset
 } from './halSaha';
 
@@ -27,10 +29,17 @@ type Props = {
 export default function HalSahaReportPage({ firms, entries, handovers, formatDateTR, cleanNumber }: Props) {
   const [preset, setPreset] = useState<HalReportPreset>('bu_ay');
   const [firmFilter, setFirmFilter] = useState('');
+  const [moveSort, setMoveSort] = useState<{ field: HalMoveSortField; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
+  const [cariSort, setCariSort] = useState<{ field: 'name' | 'shop' | 'devir' | 'sefer' | 'tahsilat' | 'kalan'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
   const range = useMemo(() => halReportRange(preset), [preset]);
+  const toggleSort = <F extends string>(cur: { field: F; dir: 'asc' | 'desc' }, field: F) =>
+    cur.field === field ? { field, dir: (cur.dir === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' } : { field, dir: (field === 'date' ? 'desc' : 'asc') as 'asc' | 'desc' };
+  const sortMark = (cur: { field: string; dir: string }, field: string) =>
+    cur.field !== field ? ' ↕' : cur.dir === 'asc' ? ' ↑' : ' ↓';
+  const thSort = 'py-2 px-3 cursor-pointer select-none hover:text-blue-600';
 
   const money = (n: number) => formatMoneyAmountTR(n);
-  const activeFirms = (firms || []).filter((f: any) => f.is_active !== false);
+  const listedFirms = [...(firms || [])].sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || ''), 'tr'));
   const rangeEntries = useMemo(
     () => (entries || []).filter((e: any) => inHalRange(e.entry_date, range.from, range.to)),
     [entries, range.from, range.to]
@@ -39,9 +48,19 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
   const cari = useMemo(
     () => {
       const rows = buildHalCari(firms, entries, range.from, range.to, cleanNumber);
-      return firmFilter ? rows.filter(r => r.name === firmFilter) : rows;
+      const filtered = firmFilter ? rows.filter(r => r.name === firmFilter) : rows;
+      return [...filtered].sort((a, b) => {
+        let cmp = 0;
+        if (cariSort.field === 'shop') cmp = String(a.shop || '').localeCompare(String(b.shop || ''), 'tr');
+        else if (cariSort.field === 'devir') cmp = a.devir - b.devir;
+        else if (cariSort.field === 'sefer') cmp = a.sefer - b.sefer;
+        else if (cariSort.field === 'tahsilat') cmp = a.tahsilat - b.tahsilat;
+        else if (cariSort.field === 'kalan') cmp = a.kalan - b.kalan;
+        else cmp = a.name.localeCompare(b.name, 'tr');
+        return cariSort.dir === 'asc' ? cmp : -cmp;
+      });
     },
-    [firms, entries, range.from, range.to, cleanNumber, firmFilter]
+    [firms, entries, range.from, range.to, cleanNumber, firmFilter, cariSort]
   );
 
   const genel = cari.reduce((a, r) => ({
@@ -53,17 +72,21 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
 
   const hareketler = useMemo(() => {
     return rangeEntries
-      .filter((e: any) => !isHalKasaOnly(e) && isHalEntryShown(e, firms, range.from, range.to))
+      .filter((e: any) => !isHalKasaOnly(e))
       .filter((e: any) => !firmFilter || e.firm_name === firmFilter)
       .slice()
-      .sort((a: any, b: any) => String(a.entry_date || '').localeCompare(String(b.entry_date || '')) || String(a.firm_name || '').localeCompare(String(b.firm_name || ''), 'tr'));
-  }, [rangeEntries, firmFilter, firms, range.from, range.to]);
+      .sort((a: any, b: any) => {
+        let cmp = cmpHalMove(a, b, moveSort.field, cleanNumber);
+        if (cmp === 0) cmp = String(a.id || '').localeCompare(String(b.id || ''));
+        return moveSort.dir === 'asc' ? cmp : -cmp;
+      });
+  }, [rangeEntries, firmFilter, moveSort, cleanNumber]);
 
   const nakitToplanan = (entries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
   const teslim = (handovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
   const personelKasa = roundMoney(nakitToplanan - teslim);
 
-  const rangeHandovers = (handovers || []).filter((h: any) => inHalRange(h.hand_date, range.from, range.to));
+  const rangeHandovers = (handovers || []).filter((h: any) => inHalRange(halHandoverBookDate(h), range.from, range.to));
 
   const download = () => {
     const donem = `${formatDateTR(range.from)} — ${formatDateTR(range.to)}`;
@@ -83,7 +106,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
       ...cari.map(r => [r.name, r.shop || '', excelKeepNumber(r.devir), excelKeepNumber(r.sefer), excelKeepNumber(r.tahsilat), excelKeepNumber(r.kalan)]),
       [],
       ['Hareketler'],
-      ['Tarih', 'İşlem', 'Firma', 'Plaka', 'Açıklama', 'Sefer', 'Nakit'],
+      ['Tarih', 'İşlem', 'Firma', 'Plaka', 'Açıklama', 'Sefer', 'KDV', 'Nakit'],
       ...hareketler.map((e: any) => [
         formatDateTR(e.entry_date),
         e.kind === 'tahsilat' ? (isHalMerkezTahsil(e) ? 'Tahsilat · kasa' : 'Tahsilat') : 'Sefer',
@@ -91,6 +114,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
         e.plate || '',
         cleanHalNote(e.notes),
         excelKeepNumber(e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0),
+        e.kind === 'sefer' && e.has_vat ? '%20' : '',
         excelKeepNumber(cleanNumber(e.collected))
       ])
     ], `Hal_saha_takip_${range.file}.xlsx`, 'Takip');
@@ -125,7 +149,9 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
               className="px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs font-bold max-w-[220px]"
             >
               <option value="">Tüm firmalar</option>
-              {activeFirms.map((f: any) => <option key={f.id} value={f.name}>{f.name}</option>)}
+              {listedFirms.map((f: any) => (
+                <option key={f.id} value={f.name}>{f.name}{f.is_active === false ? ' (pasif)' : ''}</option>
+              ))}
             </select>
             <button type="button" onClick={download} className="px-3 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5">
               <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
@@ -166,18 +192,18 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold">
               <tr>
-                <th className="py-2 px-3">Firma</th>
-                <th className="py-2 px-3">Dükkan</th>
-                <th className="py-2 px-3 text-right">Devir</th>
-                <th className="py-2 px-3 text-right">Sefer</th>
-                <th className="py-2 px-3 text-right">Tahsilat</th>
-                <th className="py-2 px-3 text-right">Kalan</th>
+                <th className={thSort} onClick={() => setCariSort(s => toggleSort(s, 'name'))}>Firma{sortMark(cariSort, 'name')}</th>
+                <th className={thSort} onClick={() => setCariSort(s => toggleSort(s, 'shop'))}>Dükkan{sortMark(cariSort, 'shop')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'devir'))}>Devir{sortMark(cariSort, 'devir')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'sefer'))}>Sefer{sortMark(cariSort, 'sefer')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'tahsilat'))}>Tahsilat{sortMark(cariSort, 'tahsilat')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'kalan'))}>Kalan{sortMark(cariSort, 'kalan')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {cari.map(r => (
                 <tr key={r.name} className="hover:bg-slate-50">
-                  <td className="py-2.5 px-3 font-bold text-slate-900">{r.name}</td>
+                  <td className="py-2.5 px-3 font-bold text-slate-900">{r.name}{r.inactive ? ' (pasif)' : ''}</td>
                   <td className="py-2.5 px-3 text-slate-500">{r.shop || '—'}</td>
                   <td className="py-2.5 px-3 text-right tabular-nums">{money(r.devir)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-[#009fe3] font-semibold">{money(r.sefer)} ₺</td>
@@ -212,13 +238,14 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold">
               <tr>
-                <th className="py-2 px-3">Tarih</th>
-                <th className="py-2 px-3">İşlem</th>
-                <th className="py-2 px-3">Firma</th>
-                <th className="py-2 px-3">Plaka</th>
-                <th className="py-2 px-3">Açıklama</th>
-                <th className="py-2 px-3 text-right">Sefer</th>
-                <th className="py-2 px-3 text-right">Nakit</th>
+                <th className={thSort} onClick={() => setMoveSort(s => toggleSort(s, 'date'))}>Tarih{sortMark(moveSort, 'date')}</th>
+                <th className={thSort} onClick={() => setMoveSort(s => toggleSort(s, 'kind'))}>İşlem{sortMark(moveSort, 'kind')}</th>
+                <th className={thSort} onClick={() => setMoveSort(s => toggleSort(s, 'firm'))}>Firma{sortMark(moveSort, 'firm')}</th>
+                <th className={thSort} onClick={() => setMoveSort(s => toggleSort(s, 'plate'))}>Plaka{sortMark(moveSort, 'plate')}</th>
+                <th className={thSort} onClick={() => setMoveSort(s => toggleSort(s, 'note'))}>Açıklama{sortMark(moveSort, 'note')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setMoveSort(s => toggleSort(s, 'sefer'))}>Sefer{sortMark(moveSort, 'sefer')}</th>
+                <th className="py-2 px-3 text-center">KDV</th>
+                <th className={`${thSort} text-right`} onClick={() => setMoveSort(s => toggleSort(s, 'collected'))}>Nakit{sortMark(moveSort, 'collected')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -228,16 +255,17 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
                   <tr key={e.id} className="hover:bg-slate-50">
                     <td className="py-2 px-3 whitespace-nowrap">{formatDateTR(e.entry_date)}</td>
                     <td className="py-2 px-3 font-bold">{e.kind === 'tahsilat' ? (isHalMerkezTahsil(e) ? 'Tahsilat · kasa' : 'Tahsilat') : 'Sefer'}</td>
-                    <td className="py-2 px-3 font-semibold">{e.firm_name}</td>
+                    <td className="py-2 px-3 font-semibold">{e.firm_name}{(firms || []).some((f: any) => f.name === e.firm_name && f.is_active === false) ? ' (pasif)' : ''}</td>
                     <td className="py-2 px-3 font-mono">{e.plate || '—'}</td>
                     <td className="py-2 px-3 text-slate-500">{cleanHalNote(e.notes) || '—'}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{tot ? `${money(tot)} ₺` : '—'}</td>
+                    <td className="py-2 px-3 text-center text-[10px] font-bold">{e.kind === 'sefer' && e.has_vat ? <span className="text-amber-700">%20</span> : '—'}</td>
                     <td className="py-2 px-3 text-right tabular-nums text-emerald-700 font-bold">{cleanNumber(e.collected) ? `${money(cleanNumber(e.collected))} ₺` : '—'}</td>
                   </tr>
                 );
               })}
               {!hareketler.length && (
-                <tr><td colSpan={7} className="py-8 text-center text-slate-400">Bu dönemde hareket yok.</td></tr>
+                <tr><td colSpan={8} className="py-8 text-center text-slate-400">Bu dönemde hareket yok.</td></tr>
               )}
             </tbody>
           </table>

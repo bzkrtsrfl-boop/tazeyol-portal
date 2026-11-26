@@ -15,8 +15,36 @@ export function isHalMerkezTahsil(e: any) {
   return /\[MERKEZ-TAHSIL\]/.test(String(e.notes || '')) || !!e.kasa_invoice_id;
 }
 
+/** Excel aktarımında 163.000 teslim 2026-01-11 yazılmış; fiili kasa girişi 12.11.2026. */
+export const HAL_TESLIM_163K_DATE = '2026-11-12';
+
+export function halHandoverBookDate(h: any) {
+  const amt = Math.round((Number(h?.amount) || 0) * 100) / 100;
+  const raw = String(h?.hand_date || h?.created_at || '').slice(0, 10);
+  if (amt === 163000 && raw !== HAL_TESLIM_163K_DATE) return HAL_TESLIM_163K_DATE;
+  return raw;
+}
+
 export function cleanHalNote(notes: any) {
   return String(notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim();
+}
+
+export type HalMoveSortField = 'date' | 'kind' | 'firm' | 'plate' | 'note' | 'sefer' | 'collected';
+
+export function halMoveKindLabel(e: any) {
+  if (e.kind === 'tahsilat') return isHalMerkezTahsil(e) ? 'Tahsilat · kasa' : 'Tahsilat';
+  return 'Sefer';
+}
+
+export function cmpHalMove(a: any, b: any, field: HalMoveSortField, cleanNumber: (v: any) => number) {
+  const seferOf = (e: any) => (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0);
+  if (field === 'kind') return halMoveKindLabel(a).localeCompare(halMoveKindLabel(b), 'tr');
+  if (field === 'firm') return String(a.firm_name || '').localeCompare(String(b.firm_name || ''), 'tr');
+  if (field === 'plate') return String(a.plate || '').localeCompare(String(b.plate || ''), 'tr');
+  if (field === 'note') return cleanHalNote(a.notes).localeCompare(cleanHalNote(b.notes), 'tr', { sensitivity: 'base' });
+  if (field === 'sefer') return seferOf(a) - seferOf(b);
+  if (field === 'collected') return cleanNumber(a.collected) - cleanNumber(b.collected);
+  return String(a.entry_date || '').localeCompare(String(b.entry_date || ''));
 }
 
 function pad2(n: number) {
@@ -112,15 +140,13 @@ export function isHalEntryShown(e: any, firms: any[] | Map<string, any>, from: s
 }
 
 export function buildHalCari(firms: any[], entries: any[], from: string, to: string, cleanNumber: (v: any) => number) {
-  const today = todayIso();
   const map = halFirmByName(firms);
-  const shown = (name: string) => isHalFirmShownInRange(map.get(name), from, to, today);
-  const book = (e: any) => !isHalKasaOnly(e) && shown(e.firm_name);
+  const book = (e: any) => !isHalKasaOnly(e);
   const rangeEntries = (entries || []).filter((e: any) => inHalRange(e.entry_date, from, to) && book(e));
   const activeFirms = (firms || []).filter((f: any) => isHalFirmActive(f));
   const names = activeFirms.map((f: any) => f.name);
-  const extra = rangeEntries.map((e: any) => e.firm_name).filter(Boolean);
-  const all = [...new Set([...names, ...extra])].filter(name => shown(name));
+  const extra = (entries || []).filter(book).map((e: any) => e.firm_name).filter(Boolean);
+  const all = [...new Set([...names, ...extra])];
   return all.map(name => {
     const firm = map.get(name);
     const shop = firm?.shop || '';
@@ -132,6 +158,14 @@ export function buildHalCari(firms: any[], entries: any[], from: string, to: str
     const tahsilat = now.reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
     const devir = prevSefer - prevTah;
     const kalan = devir + sefer - tahsilat;
-    return { name, shop, devir, sefer, tahsilat, kalan };
+    const inactive = !!(firm && !isHalFirmActive(firm));
+    return { name, shop, devir, sefer, tahsilat, kalan, inactive };
+  }).filter(r => {
+    const firm = map.get(r.name);
+    if (!firm || isHalFirmActive(firm)) return true;
+    return Math.abs(r.sefer) >= 0.005
+      || Math.abs(r.tahsilat) >= 0.005
+      || Math.abs(r.devir) >= 0.005
+      || Math.abs(r.kalan) >= 0.005;
   }).sort((a, b) => a.name.localeCompare(b.name, 'tr'));
 }

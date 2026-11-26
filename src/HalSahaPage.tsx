@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
 import { supabase } from './supabase';
 import { formatMoneyAmountTR } from './money';
-import { buildHalCari, isHalEntryShown, isHalFirmActive } from './halSaha';
+import PortalInput from './PortalInput';
+import { buildHalCari, cmpHalMove, halHandoverBookDate, isHalFirmActive, type HalMoveSortField } from './halSaha';
 
 function daysAgo(dateStr: string) {
   const d = new Date(`${dateStr}T00:00:00`);
@@ -46,7 +47,7 @@ type HalSahaPageProps = {
   onReload: () => Promise<void> | void;
 };
 
-export default function HalSahaPage({
+function HalSahaPage({
   firms,
   entries,
   handovers,
@@ -76,12 +77,12 @@ export default function HalSahaPage({
   const [newPlate, setNewPlate] = useState({ plate: '', note: '' });
   const [busy, setBusy] = useState(false);
   const [handoverAmt, setHandoverAmt] = useState('');
-  const [listSort, setListSort] = useState<{ field: 'date' | 'note' | 'amount'; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
-  const [kasaSort, setKasaSort] = useState<{ field: 'date' | 'note' | 'amount'; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
-  const toggleSort = (
-    cur: { field: 'date' | 'note' | 'amount'; dir: 'asc' | 'desc' },
-    field: 'date' | 'note' | 'amount'
-  ) => (cur.field === field ? { field, dir: (cur.dir === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' } : { field, dir: field === 'date' ? 'desc' as const : 'asc' as const });
+  const [listSort, setListSort] = useState<{ field: HalMoveSortField; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
+  const [kasaSort, setKasaSort] = useState<{ field: 'date' | 'kind' | 'who' | 'note' | 'inAmt' | 'outAmt'; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
+  const toggleSort = <F extends string>(
+    cur: { field: F; dir: 'asc' | 'desc' },
+    field: F
+  ) => (cur.field === field ? { field, dir: (cur.dir === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' } : { field, dir: (field === 'date' ? 'desc' : 'asc') as 'asc' | 'desc' });
   const sortMark = (cur: { field: string; dir: string }, field: string) =>
     cur.field !== field ? ' ↕' : cur.dir === 'asc' ? ' ↑' : ' ↓';
   const thSort = 'py-2 px-3 cursor-pointer select-none hover:text-blue-600';
@@ -91,6 +92,7 @@ export default function HalSahaPage({
 
   const money = (n: number) => formatMoneyAmountTR(n);
   const activeFirms = (firms || []).filter((f: any) => isHalFirmActive(f));
+  const listedFirms = [...(firms || [])].sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || ''), 'tr'));
   const inMonth = (d: string) => String(d || '').slice(0, 7) === ym;
 
   const monthEntries = useMemo(
@@ -102,18 +104,13 @@ export default function HalSahaPage({
     const rows = (firmFilter
       ? monthEntries.filter((e: any) => e.firm_name === firmFilter)
       : monthEntries
-    ).filter((e: any) => !isHalKasaOnly(e) && isHalEntryShown(e, firms, `${ym}-01`, `${ym}-31`));
-    const noteOf = (e: any) => String(e.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim();
-    const amtOf = (e: any) => (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0) + cleanNumber(e.collected);
+    ).filter((e: any) => !isHalKasaOnly(e));
     return [...rows].sort((a, b) => {
-      let cmp = 0;
-      if (listSort.field === 'note') cmp = noteOf(a).localeCompare(noteOf(b), 'tr', { sensitivity: 'base' });
-      else if (listSort.field === 'amount') cmp = amtOf(a) - amtOf(b);
-      else cmp = String(a.entry_date || '').localeCompare(String(b.entry_date || ''));
-      if (cmp === 0) cmp = String(a.entry_date || '').localeCompare(String(b.entry_date || ''));
+      let cmp = cmpHalMove(a, b, listSort.field, cleanNumber);
+      if (cmp === 0) cmp = String(a.id || '').localeCompare(String(b.id || ''));
       return listSort.dir === 'asc' ? cmp : -cmp;
     });
-  }, [monthEntries, firmFilter, listSort, cleanNumber, firms]);
+  }, [monthEntries, firmFilter, listSort, cleanNumber]);
 
   const kasaDefter = useMemo(() => {
     const nakit = (entries || [])
@@ -129,7 +126,8 @@ export default function HalSahaPage({
       }));
     const cikis = (handovers || []).map((h: any) => ({
       id: h.id,
-      date: String(h.hand_date).slice(0, 10),
+      invoice_id: h.invoice_id,
+      date: halHandoverBookDate(h),
       kind: 'teslim' as const,
       who: '',
       note: h.note || 'Merkeze teslim',
@@ -139,10 +137,13 @@ export default function HalSahaPage({
     const rows = [...nakit, ...cikis];
     return rows.sort((a, b) => {
       let cmp = 0;
-      if (kasaSort.field === 'note') cmp = String(a.note || '').localeCompare(String(b.note || ''), 'tr', { sensitivity: 'base' });
-      else if (kasaSort.field === 'amount') cmp = (a.inAmt || a.outAmt) - (b.inAmt || b.outAmt);
+      if (kasaSort.field === 'kind') cmp = (a.kind === 'teslim' ? 'Merkeze teslim' : 'Nakit').localeCompare(b.kind === 'teslim' ? 'Merkeze teslim' : 'Nakit', 'tr');
+      else if (kasaSort.field === 'who') cmp = String(a.who || '').localeCompare(String(b.who || ''), 'tr');
+      else if (kasaSort.field === 'note') cmp = String(a.note || '').localeCompare(String(b.note || ''), 'tr', { sensitivity: 'base' });
+      else if (kasaSort.field === 'inAmt') cmp = a.inAmt - b.inAmt;
+      else if (kasaSort.field === 'outAmt') cmp = a.outAmt - b.outAmt;
       else cmp = String(a.date || '').localeCompare(String(b.date || ''));
-      if (cmp === 0) cmp = String(a.date || '').localeCompare(String(b.date || ''));
+      if (cmp === 0) cmp = String(a.id || '').localeCompare(String(b.id || ''));
       return kasaSort.dir === 'asc' ? cmp : -cmp;
     });
   }, [entries, handovers, cleanNumber, kasaSort]);
@@ -386,6 +387,23 @@ export default function HalSahaPage({
     await onReload();
   };
 
+  const toggleVat = async (row: any) => {
+    if (!canTakeToCash || row.kind !== 'sefer') return;
+    const next = !row.has_vat;
+    const base = cleanNumber(row.bedel);
+    const withVat = seferTotal(base, true);
+    if (next && !window.confirm(`Bu sefere %20 KDV eklensin mi?\n${money(base)} ₺ → ${money(withVat)} ₺ cariye yazılır. Saha nakit kasası değişmez.`)) return;
+    if (!next && !window.confirm('KDV kaldırılsın mı? Cari sefer tutarı KDV’siz bedele döner.')) return;
+    setBusy(true);
+    const { error } = await supabase.from('hal_entries').update({ has_vat: next }).eq('id', row.id);
+    setBusy(false);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    await onReload();
+  };
+
   const startEdit = (row: any) => {
     if (locked(row)) {
       alert('2 günü geçmiş. Yalnızca yönetici değiştirir.');
@@ -465,6 +483,31 @@ export default function HalSahaPage({
     alert('Merkez kasaya alındı.');
   };
 
+  const setTeslimDate = async (row: any, date: string) => {
+    if (!canTakeToCash || row.kind !== 'teslim' || !date || date === row.date) return;
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.from('hal_handovers').update({ hand_date: date }).eq('id', row.id).select('id').maybeSingle();
+      if (error || !data) {
+        alert(
+          error?.message
+          || 'Tarih yazılamadı. Yönetici olarak SQL Editor’da hal_handovers UPDATE kuralını bir kez çalıştırın (setup_hal_saha.sql).'
+        );
+        return;
+      }
+      const invId = asUuidOrNull(row.invoice_id);
+      const invPatch = { issue_date: date, due_date: date };
+      if (invId) {
+        await supabase.from('invoices').update(invPatch).eq('id', invId);
+      } else {
+        await supabase.from('invoices').update(invPatch).eq('invoice_no', `Hal saha teslim ${row.date} ${row.outAmt}`);
+      }
+      await onReload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const tabBtn = (id: typeof tab, label: string) => (
     <button
       type="button"
@@ -498,17 +541,19 @@ export default function HalSahaPage({
         {canTakeToCash && tabBtn('tanim', 'Tanımlar')}
       </div>
 
-      {tab !== 'tanim' && (
+      {tab !== 'tanim' && tab !== 'form' && (
       <div className="flex flex-wrap gap-2 items-end">
         <label className="text-xs font-semibold text-slate-600">
           Firma
           <select
             value={firmFilter}
-            onChange={e => { setFirmFilter(e.target.value); setForm(f => ({ ...f, firm: e.target.value })); }}
+            onChange={e => setFirmFilter(e.target.value)}
             className="mt-1 block min-w-[220px] px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm font-bold"
           >
             <option value="">Tüm firmalar</option>
-            {activeFirms.map((f: any) => <option key={f.id} value={f.name}>{f.name}</option>)}
+            {listedFirms.map((f: any) => (
+              <option key={f.id} value={f.name}>{f.name}{isHalFirmActive(f) ? '' : ' (pasif)'}</option>
+            ))}
           </select>
         </label>
       </div>
@@ -544,7 +589,7 @@ export default function HalSahaPage({
                 </select>
               </label>
               <label className="block text-xs font-semibold">Sefer tutarı
-                <input value={form.bedel} onChange={e => setForm({ ...form, bedel: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg font-bold" inputMode="decimal" />
+                <PortalInput value={form.bedel} onChange={e => setForm({ ...form, bedel: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg font-bold" inputMode="decimal" />
               </label>
               <label className="flex items-center gap-2 text-xs font-semibold">
                 <input type="checkbox" checked={form.vat} onChange={e => setForm({ ...form, vat: e.target.checked })} />
@@ -553,10 +598,10 @@ export default function HalSahaPage({
             </>
           )}
           <label className="block text-xs font-semibold">Açıklama
-            <input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg" placeholder="Güzergah / nakit notu" />
+            <PortalInput value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg" placeholder="Güzergah / nakit notu" />
           </label>
           <label className="block text-xs font-semibold">Nakit tahsilat
-            <input value={form.collected} onChange={e => setForm({ ...form, collected: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg font-bold text-emerald-700" inputMode="decimal" />
+            <PortalInput value={form.collected} onChange={e => setForm({ ...form, collected: e.target.value })} className="mt-1 w-full px-3 py-2 border rounded-lg font-bold text-emerald-700" inputMode="decimal" />
             <span className="text-[10px] text-slate-400 font-normal">
               {canTakeToCash && kind === 'tahsilat'
                 ? 'Firma carisi düşer, şirket kasasına girer. Personelin sefer satırındaki nakit için burayı kullanmayın; Saha kasası → Merkeze al.'
@@ -578,12 +623,13 @@ export default function HalSahaPage({
             <thead className="bg-slate-50 text-slate-500 font-bold">
               <tr>
                 <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'date'))}>Tarih{sortMark(listSort, 'date')}</th>
-                <th className="py-2 px-3">İşlem</th>
-                <th className="py-2 px-3">Firma</th>
-                <th className="py-2 px-3">Plaka</th>
+                <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'kind'))}>İşlem{sortMark(listSort, 'kind')}</th>
+                <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'firm'))}>Firma{sortMark(listSort, 'firm')}</th>
+                <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'plate'))}>Plaka{sortMark(listSort, 'plate')}</th>
                 <th className={thSort} onClick={() => setListSort(s => toggleSort(s, 'note'))}>Açıklama{sortMark(listSort, 'note')}</th>
-                <th className={`${thSort} text-right`} onClick={() => setListSort(s => toggleSort(s, 'amount'))}>Sefer / nakit{sortMark(listSort, 'amount')}</th>
-                <th className="py-2 px-3 text-right">Nakit</th>
+                <th className={`${thSort} text-right`} onClick={() => setListSort(s => toggleSort(s, 'sefer'))}>Sefer{sortMark(listSort, 'sefer')}</th>
+                <th className="py-2 px-3 text-center">KDV</th>
+                <th className={`${thSort} text-right`} onClick={() => setListSort(s => toggleSort(s, 'collected'))}>Nakit{sortMark(listSort, 'collected')}</th>
                 {canEdit && <th className="py-2 px-3" />}
               </tr>
             </thead>
@@ -591,14 +637,28 @@ export default function HalSahaPage({
               {listed.map((e: any) => {
                 const tot = e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0;
                 const lock = locked(e);
+                const firmRow = (firms || []).find((x: any) => x.name === e.firm_name);
                 return (
                   <tr key={e.id} className="hover:bg-slate-50">
                     <td className="py-2 px-3 whitespace-nowrap">{formatDateTR(e.entry_date)}</td>
                     <td className="py-2 px-3 font-bold">{e.kind === 'tahsilat' ? (isHalMerkezTahsil(e) ? 'Tahsilat · kasa' : 'Tahsilat') : 'Sefer'}</td>
-                    <td className="py-2 px-3 font-semibold">{e.firm_name}</td>
+                    <td className="py-2 px-3 font-semibold">{e.firm_name}{firmRow && !isHalFirmActive(firmRow) ? ' (pasif)' : ''}</td>
                     <td className="py-2 px-3 font-mono">{e.plate || '—'}</td>
                     <td className="py-2 px-3 text-slate-500">{String(e.notes || '').replace(/\s*\[(DRIVE-GIRIS|KASA-TAHSIL|AKTARIM-KASA|AKTARIM-CARI|MERKEZ-TAHSIL)\]/g, '').trim() || '—'}</td>
                     <td className="py-2 px-3 text-right">{tot ? `${money(tot)} ₺` : '—'}</td>
+                    <td className="py-2 px-3 text-center">
+                      {e.kind === 'sefer' ? (
+                        <label className={`inline-flex items-center gap-1 ${canTakeToCash ? 'cursor-pointer' : 'opacity-70'}`} title="Fatura KDV: cariye %20 eklenir, saha kasasına yazılmaz">
+                          <input
+                            type="checkbox"
+                            disabled={!canTakeToCash || busy}
+                            checked={!!e.has_vat}
+                            onChange={() => toggleVat(e)}
+                          />
+                          <span className={`text-[10px] font-bold ${e.has_vat ? 'text-amber-700' : 'text-slate-400'}`}>%20</span>
+                        </label>
+                      ) : '—'}
+                    </td>
                     <td className="py-2 px-3 text-right text-emerald-700 font-bold">{cleanNumber(e.collected) ? `${money(cleanNumber(e.collected))} ₺` : '—'}</td>
                     {canEdit && (
                       <td className="py-2 px-3 text-right whitespace-nowrap">
@@ -613,7 +673,7 @@ export default function HalSahaPage({
                   </tr>
                 );
               })}
-              {!listed.length && <tr><td colSpan={8} className="py-8 text-center text-slate-400">Bu ayda kayıt yok.</td></tr>}
+              {!listed.length && <tr><td colSpan={9} className="py-8 text-center text-slate-400">Bu ayda kayıt yok.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -630,7 +690,7 @@ export default function HalSahaPage({
           {cari.map(r => (
             <div key={r.name} className="border border-slate-200 rounded-xl p-3 flex flex-wrap justify-between gap-2 text-xs">
               <div>
-                <div className="font-bold text-slate-900">{r.name}</div>
+                <div className="font-bold text-slate-900">{r.name}{r.inactive ? ' (pasif)' : ''}</div>
                 {r.shop ? <div className="text-slate-400">{r.shop}</div> : null}
               </div>
               <div className="flex gap-4 font-semibold">
@@ -648,7 +708,7 @@ export default function HalSahaPage({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-3">
             <h4 className="font-bold text-sm">Hal firmaları</h4>
-            <p className="text-[11px] text-slate-500">Pasif firma yeni girişte ve güncel tabloda yok. Geçmiş ay / raporda eski hareketler durur.</p>
+            <p className="text-[11px] text-slate-500">Pasif firmaya yeni sefer/tahsilat girilmez. Aylık caride o ayın sefer ve tahsilatı durur.</p>
             <div className="flex flex-wrap gap-2">
               <input value={newFirm.name} onChange={e => setNewFirm(f => ({ ...f, name: e.target.value }))} placeholder="Firma adı" className="flex-1 min-w-[140px] px-3 py-2 border rounded-lg text-xs" />
               <input value={newFirm.shop} onChange={e => setNewFirm(f => ({ ...f, shop: e.target.value }))} placeholder="Dükkan no" className="w-28 px-3 py-2 border rounded-lg text-xs" />
@@ -733,17 +793,27 @@ export default function HalSahaPage({
               <thead className="bg-slate-50 text-slate-500 font-bold">
                 <tr>
                   <th className={thSort} onClick={() => setKasaSort(s => toggleSort(s, 'date'))}>Tarih{sortMark(kasaSort, 'date')}</th>
-                  <th className="py-2 px-3">İşlem</th>
-                  <th className="py-2 px-3">Kim</th>
+                  <th className={thSort} onClick={() => setKasaSort(s => toggleSort(s, 'kind'))}>İşlem{sortMark(kasaSort, 'kind')}</th>
+                  <th className={thSort} onClick={() => setKasaSort(s => toggleSort(s, 'who'))}>Kim{sortMark(kasaSort, 'who')}</th>
                   <th className={thSort} onClick={() => setKasaSort(s => toggleSort(s, 'note'))}>Not{sortMark(kasaSort, 'note')}</th>
-                  <th className={`${thSort} text-right`} onClick={() => setKasaSort(s => toggleSort(s, 'amount'))}>Giren{sortMark(kasaSort, 'amount')}</th>
-                  <th className="py-2 px-3 text-right">Çıkan</th>
+                  <th className={`${thSort} text-right`} onClick={() => setKasaSort(s => toggleSort(s, 'inAmt'))}>Giren{sortMark(kasaSort, 'inAmt')}</th>
+                  <th className={`${thSort} text-right`} onClick={() => setKasaSort(s => toggleSort(s, 'outAmt'))}>Çıkan{sortMark(kasaSort, 'outAmt')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {kasaDefter.map(r => (
                   <tr key={r.id} className="hover:bg-slate-50">
-                    <td className="py-2 px-3 whitespace-nowrap">{formatDateTR(r.date)}</td>
+                    <td className="py-2 px-3 whitespace-nowrap">
+                      {canTakeToCash && r.kind === 'teslim' ? (
+                        <input
+                          type="date"
+                          disabled={busy}
+                          value={r.date}
+                          onChange={e => setTeslimDate(r, e.target.value)}
+                          className="border border-slate-200 rounded px-1 py-0.5 bg-white"
+                        />
+                      ) : formatDateTR(r.date)}
+                    </td>
                     <td className="py-2 px-3 font-bold">{r.kind === 'teslim' ? 'Merkeze teslim' : 'Nakit'}</td>
                     <td className="py-2 px-3">{r.who || '—'}</td>
                     <td className="py-2 px-3 text-slate-500">{r.note || '—'}</td>
@@ -760,3 +830,5 @@ export default function HalSahaPage({
     </div>
   );
 }
+
+export default React.memo(HalSahaPage);
