@@ -16,6 +16,11 @@ export function isAnonymousBankPay(desc: string) {
   return /banka\s*talimat/i.test(desc || '') && !/GIB|TRN|\(1 nci|\(2 nci|\(Tamam/i.test(desc || '');
 }
 
+/** Kasa tek kalem: cari kişiye bölünmez. */
+export function isBulkBankTalimatPay(desc: string) {
+  return /banka\s*talimat/i.test(desc || '') && /toplu\s*ödeme/i.test(desc || '');
+}
+
 export function isReconstructedHakedisPay(desc: string) {
   const d = desc || '';
   return /hakedi[sş].*ödem/i.test(d) && /vade/i.test(d) && !isBankTalimatDesc(d) && !/GIB|TRN/i.test(d);

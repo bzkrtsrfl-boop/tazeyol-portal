@@ -59,6 +59,7 @@ import {
   termPayLabel,
   payTermFromDesc,
   isAnonymousBankPay,
+  isBulkBankTalimatPay,
   isExplodedInvoiceTermPay,
   inSeptPayWave,
   normalizeSeptWavePays,
@@ -1648,8 +1649,8 @@ export default function App() {
   const [collectionSort, setCollectionSort] = useState<ColumnSort>({ field: 'date', dir: 'desc' });
   const [overdueInspectionAlertOpen, setOverdueInspectionAlertOpen] = useState(true);
   const [policyExpiryAlertOpen, setPolicyExpiryAlertOpen] = useState(true);
-  const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('due');
-  const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [cardSortField, setCardSortField] = useState<'due' | 'amount' | 'bank' | 'name'>('amount');
+  const [cardSortOrder, setCardSortOrder] = useState<'asc' | 'desc'>('desc');
   const [cardDueFilter, setCardDueFilter] = useState<'all' | 'week' | 'overdue' | 'clear'>('all');
   const [cardMenuId, setCardMenuId] = useState<string | number | null>(null);
   const getCurrentMonthRange = () => {
@@ -3313,26 +3314,20 @@ export default function App() {
   };
   const isBankCashIn = (inv: any) => {
     const cat = String(inv.category || '');
+    const no = String(inv.invoice_no || '');
     if (String(inv.id || '').startsWith('migros_bank_')) return true;
     if (cat === 'cash_deposit') return true;
     if (cat !== 'customer_collection' && cat !== 'customer_advance') return false;
-    const no = String(inv.invoice_no || '');
-    const invoiceLinked = isInvoiceLinkedReceiptTitle(no) || isSalesDocumentClone(inv);
-    if (invoiceLinked && (isMainMigrosName(no) || isAtifAltunisikName(no))) return false;
-    if (invoiceLinked && !isAppBankReceiptTitle(no)) return false;
-    if (isAppBankReceiptTitle(no)) {
-      if (isMainMigrosName(no)) {
-        const d = sanitizeDate(inv.issue_date);
-        if (d && d <= MIGROS_BANK_LOCK_UNTIL) return false;
+    if (isCrcSalesInvoiceDoc(inv) || looksLikeSalesInvoiceNo(no)) return false;
+    if (isSalesDocumentClone(inv) && !isAppBankReceiptTitle(no) && !isCrcTahsilatDoc(inv)) return false;
+    if (isEArchiveNoiseTitle(no) && !isAppBankReceiptTitle(no) && !isCrcTahsilatDoc(inv)) return false;
+    if (isMainMigrosName(no)) {
+      const d = sanitizeDate(inv.issue_date);
+      if (d && d <= MIGROS_BANK_LOCK_UNTIL) {
+        return MIGROS_BANK_TRANSFERS.some(t => t.date === d && amountsClose(cleanNumber(inv.total_amount), t.amount, 1));
       }
-      return true;
     }
-    if (isEArchiveNoiseTitle(inv.invoice_no)) return false;
-    const d = sanitizeDate(inv.issue_date);
-    if (d && d <= MIGROS_BANK_LOCK_UNTIL) {
-      return MIGROS_BANK_TRANSFERS.some(t => t.date === d && amountsClose(cleanNumber(inv.total_amount), t.amount, 1));
-    }
-    return false;
+    return true;
   };
 
   const totalOpenSalesAllTime = dbInvoices
@@ -3357,7 +3352,7 @@ export default function App() {
 
   // TEMEL DİĞER TEDARİK FATURALARI
   const totalGeneralCompanyExpensesDebt = dbInvoices
-    .filter(i => i.status !== 'paid' && !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'taxes_sgk', 'traffic_fines', 'salary_payroll', 'cash_deposit', 'customer_advance', 'subcontractor_advance_paid', 'subcontractor_paid_outflow', 'opening_balance', 'supplier_advance', 'employee_advance_paid'].includes(i.category))
+    .filter(i => i.status !== 'paid' && !['subcontractor_invoice', 'customer_collection', 'freight_sales', 'taxes_sgk', 'traffic_fines', 'salary_payroll', 'cash_deposit', 'customer_advance', 'subcontractor_advance_paid', 'subcontractor_paid_outflow', 'opening_balance', 'supplier_advance', 'employee_advance_paid', 'credit_card_payment'].includes(i.category))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
 
 // PERSONEL GELECEK ÖDEMESİ (Yeni cari defter ve net hakediş ile tam uyumlu)
@@ -3500,8 +3495,8 @@ export default function App() {
   const nakitOutRows = cashOutRows.filter((i: any) => !isBankaNakitDisiCikis(i));
   const bankaInRows = cashInRows.filter((i: any) => isBankaNakitDisiGiris(i));
   const bankaOutRows = cashOutRows.filter((i: any) => isBankaNakitDisiCikis(i));
-  const cashInflow = nakitInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-  const cashOutflow = nakitOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const cashInflow = cashInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const cashOutflow = cashOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const bankaInflow = bankaInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const bankaOutflow = bankaOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const openingMatchesStart = sanitizeDate(cashOpeningAsOf) === cashStartDate;
@@ -3509,12 +3504,12 @@ export default function App() {
   const currentRealCash = CASH_APPLY_AFTER_OPENING
     ? cashBookOpening + cashInflow - cashOutflow
     : cashBookOpening;
-  const totalCollectedCash = nakitInRows
+  const totalCollectedCash = cashInRows
     .filter((i: any) => isDateInRange(i.issue_date))
     .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-  const periodExpenseRows = nakitOutRows.filter((i: any) => isDateInRange(i.issue_date));
+  const periodExpenseRows = cashOutRows.filter((i: any) => isDateInRange(i.issue_date));
   const totalPeriodPaidExpenses = periodExpenseRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-  const periodIncomeRows = nakitInRows.filter((i: any) => isDateInRange(i.issue_date));
+  const periodIncomeRows = cashInRows.filter((i: any) => isDateInRange(i.issue_date));
 
   const cashLedgerView = useMemo(() => {
     const from = cashLedgerFrom || cashStartDate;
@@ -3523,6 +3518,7 @@ export default function App() {
       const cat = String(inv.category || '');
       const no = String(inv.invoice_no || '');
       const bank = inflow > 0 ? isBankaNakitDisiGiris(inv) : isBankaNakitDisiCikis(inv);
+      if (isBulkBankTalimatPay(no)) return 'Toplu banka talimatı';
       if (bank) return inflow > 0 ? 'Banka girişi' : 'Banka çıkışı';
       if (inflow > 0) {
         if (/^Hal saha teslim /i.test(no) || /^Hal tahsilat /i.test(no)) return 'Hal kasa aktarımı';
@@ -3563,9 +3559,8 @@ export default function App() {
     cashOutRows.forEach((inv: any) => pushInv(inv, 0, cleanNumber(inv.total_amount)));
 
     const live = txs.filter(t => t.kind === 'live' && t.date >= cashStartDate);
-    const liveNakit = live.filter(t => !t.bank);
     let startBal = cashBookOpening;
-    liveNakit.forEach(t => {
+    live.forEach(t => {
       if (t.date < from) startBal += t.inflow - t.outflow;
     });
 
@@ -3575,7 +3570,7 @@ export default function App() {
       id: 'open',
       date: from < cashStartDate ? cashStartDate : from,
       label: 'Kasa açılış',
-      title: `${formatDateTR(cashStartDate)} nakit kasa açılışı. Migros EFT ve banka ödemeleri bu bakiyeye yazılmaz.`,
+      title: `${formatDateTR(cashStartDate)} kasa açılışı. Tahsilat girer, ödeme çıkar.`,
       inflow: 0,
       outflow: 0,
       bank: false,
@@ -3590,11 +3585,10 @@ export default function App() {
       if (t.kind === 'open') {
         return { ...t, balance: run, isHist: false, isOpen: true };
       }
-      if (t.bank) return { ...t, balance: run, isHist: false, isOpen: false };
       run += t.inflow - t.outflow;
       return { ...t, balance: run, isHist: false, isOpen: false };
     }).reverse();
-    const liveInRange = liveNakit.filter(t => t.date >= from && t.date <= to);
+    const liveInRange = live.filter(t => t.date >= from && t.date <= to);
     const bankInRange = live.filter(t => t.bank && t.date >= from && t.date <= to);
     return {
       from,
@@ -4112,6 +4106,14 @@ export default function App() {
     });
   }, [selectedPayrollEmp, payrollMonthList, dbEmployeeTransactions, dbAdvances, dbInvoices]);
 
+  useEffect(() => {
+    if (!selectedPayrollEmp) return;
+    const from = (filterStartDate || '').slice(0, 7);
+    const to = (filterEndDate || '').slice(0, 7);
+    if (from) setPayrollFrom(from);
+    if (to) setPayrollTo(to < from ? from : to);
+  }, [filterStartDate, filterEndDate, selectedPayrollEmp]);
+
   const exportPayrollExcel = (emp: any, ledger: typeof selectedPayrollLedger) => {
     const header = [
       ['Tazeyol ERP Personel Hakediş Raporu'],
@@ -4142,13 +4144,10 @@ export default function App() {
   };
 
   const openPayrollReport = (emp: any) => {
-    let from = employeeBooksFromYm(emp);
-    const closed = personnelClosedYearMonth();
-    const current = currentPayYearMonth();
-    let to = current > closed ? current : closed;
-    if (to < from) to = from;
+    const from = (filterStartDate || '').slice(0, 7) || employeeBooksFromYm(emp);
+    const to = (filterEndDate || '').slice(0, 7) || from;
     setPayrollFrom(from);
-    setPayrollTo(to);
+    setPayrollTo(to < from ? from : to);
     setSelectedPayrollEmp(emp);
   };
 
@@ -4411,6 +4410,7 @@ export default function App() {
     (dbInvoices || []).forEach((inv: any) => {
       if (inv.category !== 'subcontractor_paid_outflow') return;
       const no = String(inv.invoice_no || '');
+      if (isBulkBankTalimatPay(no)) return;
       if (!matchesContractor(sub, extractContractorName(no), extractAdvanceContractorName(no))) return;
       const amt = cleanNumber(inv.total_amount);
       if (amt <= 0) return;
@@ -5049,12 +5049,32 @@ export default function App() {
     });
     return rows;
   }, [payableBankTermLines, bankPayMode, bankSortField, bankSortOrder, contractorAccountsBySubId, dbSubcontractors]);
+  const personnelViewMonths = useMemo(() => {
+    const fromYm = (filterStartDate || '').slice(0, 7) || currentPayYearMonth();
+    const toYm = (filterEndDate || '').slice(0, 7) || fromYm;
+    const start = fromYm <= toYm ? fromYm : toYm;
+    const end = fromYm <= toYm ? toYm : fromYm;
+    const months = yearMonthsBetween(start, end);
+    return months.length ? months : [currentPayYearMonth()];
+  }, [filterStartDate, filterEndDate]);
+
+  const personnelPeriodLabel = filterStartDate && filterEndDate
+    ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}`
+    : yearMonthTrLabel(personnelViewMonths[0] || currentPayYearMonth());
+
   // PERSONEL HESAPLAMA, ARAMA VE SIRALAMA MOTORU
   const processedEmployees = useMemo(() => {
-    const ym = currentPayYearMonth();
     return (dbEmployees || [])
       .map(emp => {
-        const extra = employeeManualMovementsForMonth(emp, ym);
+        const extra = personnelViewMonths.reduce(
+          (acc, ym) => {
+            const m = employeeManualMovementsForMonth(emp, ym);
+            acc.bonus += m.bonus;
+            acc.advanceCut += m.advanceCut;
+            return acc;
+          },
+          { bonus: 0, advanceCut: 0 }
+        );
         const books = employeeBooksBreakdown(emp);
         return {
           ...emp,
@@ -5089,7 +5109,7 @@ export default function App() {
         }
         return empSortOrder === 'asc' ? comp : -comp;
       });
-  }, [dbEmployees, dbAdvances, dbEmployeeTransactions, dbInvoices, empSearchTerm, empSortField, empSortOrder]);
+  }, [dbEmployees, dbAdvances, dbEmployeeTransactions, dbInvoices, empSearchTerm, empSortField, empSortOrder, personnelViewMonths]);
 
   // PERSONEL SAYFASI FİNANSAL ÖZET SAYAÇLARI
   const empSummary = useMemo(() => {
@@ -5305,7 +5325,7 @@ export default function App() {
       alert('Geçerli bir tarih girin. Örn. 24.11.2026');
       return;
     }
-    if (!window.confirm(`Banka bu partiyi ödedi.\n${formatDateTR(payDate)} · ${personCount} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺\n\nOnaylayınca carilere bir kez işlenir, kasadan net düşer, vadeler kapanır. Excel tekrar yüklenmez.`)) return;
+    if (!window.confirm(`Banka bu partiyi ödedi.\n${formatDateTR(payDate)} · ${personCount} kişi · ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺\n\nOnaylayınca cariye kişi kişi işlenir, kasadan Excel toplamı tek kalem düşer, vadeler kapanır. Excel tekrar yüklenmez.`)) return;
     setPayingBatchId(batch.id);
     const warn: string[] = [];
     try {
@@ -5361,40 +5381,33 @@ export default function App() {
           personCash.set(key, cur);
         });
       }
-      const cashRows = Array.from(personCash.values()).map(person => {
+      const cashTotalRounded = Math.round(cashTotal * 100) / 100;
+      const sameDayOut = existing.filter((i: any) => sanitizeDate(i.issue_date) === payDate);
+      const alreadyBulk = sameDayOut.some((i: any) =>
+        isBulkBankTalimatPay(String(i.invoice_no || '')) &&
+        amountsClose(cleanNumber(i.total_amount), cashTotalRounded, 1)
+      );
+      const personsAlreadyInCash = personCash.size > 0 && Array.from(personCash.values()).every(person => {
         const amt = Math.round(person.amount * 100) / 100;
-        if (amt <= 0.009) return null;
-        const invoiceNo = `ÖDEME - Banka talimatı - ${person.contractorName}`.slice(0, 180);
-        const sameDay = existing.filter((i: any) =>
-          sanitizeDate(i.issue_date) === payDate &&
-          contractorRecordsMatch(person.contractorName, extractContractorName(i.invoice_no || ''))
-        );
-        if (sameDay.some((i: any) => isAnonymousBankPay(String(i.invoice_no || '')) && amountsClose(cleanNumber(i.total_amount), amt, 0.51))) {
-          return null;
-        }
-        const explodedSum = Math.round(sameDay
-          .filter((i: any) => isExplodedInvoiceTermPay(String(i.invoice_no || '')))
-          .reduce((s: number, i: any) => s + cleanNumber(i.total_amount), 0) * 100) / 100;
-        if (explodedSum > 0.009 && amountsClose(explodedSum, amt, 1)) return null;
-        return {
-          invoice_no: invoiceNo,
+        return sameDayOut.some((i: any) => {
+          const no = String(i.invoice_no || '');
+          if (isBulkBankTalimatPay(no)) return false;
+          return contractorRecordsMatch(person.contractorName, extractContractorName(no)) &&
+            amountsClose(cleanNumber(i.total_amount), amt, 0.51);
+        });
+      });
+      if (cashTotalRounded > 0.009 && !alreadyBulk && !personsAlreadyInCash) {
+        const cashRow = {
+          invoice_no: `ÖDEME - Banka talimatı - Toplu ödeme (${personCount} kişi)`.slice(0, 180),
           direction: 'incoming',
           category: 'subcontractor_paid_outflow',
-          total_amount: amt,
+          total_amount: cashTotalRounded,
           issue_date: payDate,
           due_date: payDate,
           status: 'paid'
         };
-      }).filter(Boolean) as any[];
-      for (let i = 0; i < cashRows.length; i += 25) {
-        const chunk = cashRows.slice(i, i + 25);
-        const { error: cashErr } = await supabase.from('invoices').insert(chunk);
-        if (cashErr) {
-          for (const row of chunk) {
-            const one = await supabase.from('invoices').insert([row]);
-            if (one.error) warn.push('Kasa satırı: ' + one.error.message);
-          }
-        }
+        const { error: cashErr } = await supabase.from('invoices').insert([cashRow]);
+        if (cashErr) warn.push('Kasa satırı: ' + cashErr.message);
       }
       try {
         await applyAdvanceUsageToDb(activeLines.map((l: any) => ({ contractorName: l.contractorName, advanceCut: cleanNumber(l.advanceCut) })));
@@ -5413,7 +5426,7 @@ export default function App() {
         );
       }
       alert(
-        `Parti ödendi işlendi. Carilere yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ düşüldü.` +
+        `Parti ödendi işlendi. Cari kişi kişi yazıldı. Kasadan ${cashTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ tek kalem düşüldü.` +
         (warn.length ? `\n\nUyarı:\n${warn.slice(0, 4).join('\n')}` : '')
       );
       await loadPortalData();
@@ -7393,7 +7406,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => { setSalesSearchQuery(''); setSalesStatusFilter('all'); setActiveTab('sales_customers'); }}
-                  className="h-[5.5rem] bg-white p-3.5 rounded-xl border border-amber-200 shadow-xs text-left hover:bg-amber-50/50 transition">
+                  className="h-[6.75rem] bg-white p-4 rounded-2xl border border-amber-200 shadow-xs text-left hover:bg-amber-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-amber-900 flex items-center gap-1.5">
                       <PhoneCall className="w-4 h-4 text-amber-600" /> Geciken Müşteri Satışları
@@ -7413,7 +7426,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => { setExpenseStatusFilter('unpaid'); setActiveTab('general_expenses'); }}
-                  className="h-[5.5rem] bg-white p-3.5 rounded-xl border border-rose-200 shadow-xs text-left hover:bg-rose-50/50 transition">
+                  className="h-[6.75rem] bg-white p-4 rounded-2xl border border-rose-200 shadow-xs text-left hover:bg-rose-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-rose-900 flex items-center gap-1.5">
                       <AlertCircle className="w-4 h-4 text-rose-600" /> Yaklaşan tedarik borçları
@@ -7433,7 +7446,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setActiveTab('credit_cards')}
-                  className="h-[5.5rem] bg-white p-3.5 rounded-xl border border-purple-200 shadow-xs text-left hover:bg-purple-50/50 transition">
+                  className="h-[6.75rem] bg-white p-4 rounded-2xl border border-purple-200 shadow-xs text-left hover:bg-purple-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-purple-900 flex items-center gap-1.5">
                       <CreditCard className="w-4 h-4 text-purple-600" /> Yaklaşan Kredi Kartı Ödemesi
@@ -7471,7 +7484,7 @@ export default function App() {
               Dönem üst çubuktan: {filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'tüm dönem'}. Tahsilat ve Girdi−Çıktı bu aralığa göre. Kasa bakiyesi ve bekleyen alacak bugünkü gerçek rakamdır.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
-              <button type="button" onClick={() => setActiveTab('collections')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-emerald-300 hover:shadow-md transition cursor-pointer h-full">
+              <button type="button" onClick={() => setActiveTab('collections')} className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-emerald-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-[11px] text-emerald-600 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <Coins className="w-3.5 h-3.5" /> Alınan tahsilatlar
                 </span>
@@ -7483,7 +7496,7 @@ export default function App() {
                 </span>
               </button>
 
-              <button type="button" onClick={() => setActiveTab('customers')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-blue-300 hover:shadow-md transition cursor-pointer h-full">
+              <button type="button" onClick={() => setActiveTab('customers')} className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-blue-300 hover:shadow-md transition cursor-pointer">
                 <span className="text-[11px] text-blue-600 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <TrendingUp className="w-3.5 h-3.5" /> Bekleyen alacak
                 </span>
@@ -7495,7 +7508,7 @@ export default function App() {
                 </span>
           </button>
 
-              <div className="bg-[#009fe3] text-white p-4 rounded-2xl shadow-sm relative overflow-hidden h-full">
+              <div className="h-[6.75rem] bg-[#009fe3] text-white p-4 rounded-2xl shadow-sm relative overflow-hidden">
                 <div className="flex justify-between items-start gap-2">
           <button  
                     type="button"
@@ -7505,7 +7518,7 @@ export default function App() {
                       setIsCashLedgerOpen(true);
                     }}
                     className="flex-1 text-left hover:opacity-90 transition min-w-0"
-                    title={`Nakit kasa. Banka (çekmeceye yazılmaz) +${bankaInflow.toLocaleString('tr-TR')} / −${bankaOutflow.toLocaleString('tr-TR')}`}
+                    title={`Kasa: tahsilat +${cashInflow.toLocaleString('tr-TR')} / ödeme −${cashOutflow.toLocaleString('tr-TR')}`}
                   >
                     <span className="text-[11px] text-blue-100 font-semibold tracking-wider uppercase flex items-center gap-1">
                       <span className="text-sm font-black leading-none">₺</span> Güncel kasa
@@ -7514,7 +7527,7 @@ export default function App() {
                       {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </div>
                     <span className="text-[10px] text-blue-100/90 mt-1 block truncate">
-                      {formatDateTR(cashStartDate)} nakit açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatDateTR(cashStartDate)} açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
           </button>
                   {isAdmin && (
@@ -7524,7 +7537,7 @@ export default function App() {
                         e.stopPropagation();
                         const shown = roundMoney(cashBookOpening);
                         const raw = window.prompt(
-                          `${formatDateTR(cashStartDate)} açılış kasası (şu an kayıtlı)\nSonraki giriş/çıkış bu rakamın üstüne eklenir.`,
+                          `${formatDateTR(cashStartDate)} kasa açılışı (çekmece + banka)\nBu tarihten sonraki tüm tahsilat eklenir, tüm ödeme düşer.`,
                           String(shown)
                         );
                         if (raw === null) return;
@@ -7550,18 +7563,18 @@ export default function App() {
                       onClick={async (e) => {
                         e.stopPropagation();
                         const raw = window.prompt(
-                          `BUGÜN bankada gerçekte kaç TL var?\nBüyük mavi rakam buna gelir. 7 Ekim sonrası hareketler durur.`,
-                          '1215000'
+                          `BUGÜN çekmece + bankada gerçekte kaç TL var?\nMavi kasa buna gelir. 7 Ekim açılışı bu bakiyeye göre geri hesaplanır; tahsilat/ödeme satırları silinmez.`,
+                          String(roundMoney(currentRealCash))
                         );
                         if (raw === null) return;
                         const target = cleanNumber(raw);
-                        if (target <= 0) {
-                          alert('Bugünkü kasa sıfır veya eksi olamaz.');
+                        if (target < 0) {
+                          alert('Bugünkü kasa eksi olamaz.');
                           return;
                         }
                         const next = roundMoney(target - cashInflow + cashOutflow);
                         if (!window.confirm(
-                          `Güncel kasa ${target.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ olacak.\n7 Ekim sabah açılışı ${next.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ yazılacak.\nOnaylıyor musun?`
+                          `Güncel kasa ${target.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ olacak.\n${formatDateTR(cashStartDate)} açılışı ${next.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ yazılacak (tüm giren − tüm çıkan bu bakiyeye oturur).\nOnaylıyor musun?`
                         )) return;
                         const asOf = cashStartDate;
                         try {
@@ -7587,180 +7600,171 @@ export default function App() {
 </div>
               </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-stretch">
               <button
                 type="button"
                 onClick={() => setActiveTab('hal_saha')}
-                className="bg-white px-4 py-3.5 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-200 hover:shadow-md transition"
+                className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-200 hover:shadow-md transition"
               >
                 <span className="text-[11px] text-rose-700 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <Building2 className="w-3.5 h-3.5" /> Hal cari kalan
                 </span>
-                <div className="text-xl font-black text-rose-800 mt-1 tabular-nums">
+                <div className="text-xl font-bold text-rose-800 mt-1.5 tabular-nums">
                   {halCariKalanAll.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-0.5 block">Anlık hal alacağı · sefer − tahsilat</span>
+                <span className="text-[11px] text-slate-400 mt-1 block">Anlık hal alacağı · sefer − tahsilat</span>
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab('hal_saha')}
-                className="bg-amber-50 px-4 py-3.5 rounded-2xl border border-amber-100 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition"
+                className="h-[6.75rem] bg-amber-50 p-4 rounded-2xl border border-amber-100 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition"
               >
                 <span className="text-[11px] text-amber-900 font-semibold tracking-wider uppercase flex items-center gap-1">
                   <Wallet className="w-3.5 h-3.5" /> Personel kasa
                 </span>
-                <div className="text-xl font-black text-amber-950 mt-1 tabular-nums">
+                <div className="text-xl font-bold text-amber-950 mt-1.5 tabular-nums">
                   {personelKasaAll.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
               </div>
-                <span className="text-[11px] text-amber-800/70 mt-0.5 block">Saha üzerindeki nakit · merkeze henüz alınmadı</span>
+                <span className="text-[11px] text-amber-800/70 mt-1 block">Saha üzerindeki nakit · merkeze henüz alınmadı</span>
               </button>
-            </div>
-
             {(() => {
+              const book = cashStartDate;
+              const selFrom = filterStartDate || '';
+              const selTo = filterEndDate || '';
+              const flowFrom = !selFrom || selFrom < book ? book : selFrom;
+              const clipped = !!selFrom && selFrom < book;
               const girdi = Math.max(0, totalCollectedCash);
               const cikti = Math.max(0, totalPeriodPaidExpenses);
               const total = girdi + cikti;
               const girdiPct = total > 0 ? (girdi / total) * 100 : 50;
               const ciktiPct = total > 0 ? (cikti / total) * 100 : 50;
+              const rangeText = selTo
+                ? `${formatDateTR(flowFrom)} — ${formatDateTR(selTo)}`
+                : `${formatDateTR(flowFrom)} — bugün`;
               return (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 overflow-hidden">
-              <div className="px-5 pt-4 pb-3 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-                <div>
-                  <p className="text-[11px] font-bold tracking-widest uppercase text-slate-400">Seçilen dönemde nakit akışı</p>
-                  <p className="text-sm font-semibold text-slate-700 mt-0.5">{filterStartDate && filterEndDate ? `${formatDateTR(filterStartDate)} — ${formatDateTR(filterEndDate)}` : 'Tüm dönem'}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[11px] font-bold tracking-widest uppercase text-slate-400">Net</p>
-                  <p className={`text-2xl font-black tabular-nums ${periodProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+            <button
+              type="button"
+              onClick={() => setIsCashLedgerOpen(true)}
+              title={clipped
+                ? `Kasa defteri ${formatDateTR(book)} açılır; seçilen ayın önceki günleri bu şeritte yok.`
+                : 'Tahsilat kasaya, ödeme kasadan · kasa defterine git'}
+              className="md:col-span-2 h-[6.75rem] rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-left hover:border-slate-300 transition flex flex-col justify-between gap-2"
+            >
+              <div className="flex items-start justify-between gap-3 min-w-0">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold tracking-wider uppercase text-slate-500">Nakit kasa akışı</p>
+                  <p className={`text-xl font-bold tabular-nums mt-1.5 ${periodProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                     {periodProfit >= 0 ? '+' : ''}{periodProfit.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </p>
+                  <p className="text-[11px] text-slate-400 mt-1 truncate">{rangeText}</p>
+                </div>
+                <div className="text-right shrink-0 tabular-nums">
+                  <p className="text-[11px] text-emerald-700 font-bold">+{girdi.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  <p className="text-[11px] text-rose-700 font-bold">−{cikti.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                 </div>
               </div>
-              <div className="px-5">
-                <div className="h-3 rounded-full overflow-hidden flex bg-slate-200">
-                  <div className="h-full bg-emerald-500" style={{ width: `${girdiPct}%` }} />
-                  <div className="h-full bg-rose-400" style={{ width: `${ciktiPct}%` }} />
-                </div>
+              <div className="h-1 rounded-full overflow-hidden flex bg-slate-200">
+                <div className="h-full bg-emerald-500" style={{ width: `${girdiPct}%` }} />
+                <div className="h-full bg-rose-400" style={{ width: `${ciktiPct}%` }} />
               </div>
-              <div className="grid grid-cols-2 divide-x divide-slate-200">
-                <div className="p-5">
-                  <div className="flex items-center gap-2 text-emerald-700">
-                    <span className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
-                      <ArrowDownLeft className="w-4 h-4" />
-                </span>
-                    <span className="text-xs font-bold uppercase tracking-wider">Girdi</span>
-              </div>
-                  <p className="mt-2 text-xl font-black text-emerald-800 tabular-nums">
-                    {girdi.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-1">Kasaya giren tahsilat / para ekle</p>
-                </div>
-                <div className="p-5">
-                  <div className="flex items-center gap-2 text-rose-700">
-                    <span className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center">
-                      <ArrowUpRight className="w-4 h-4" />
-                  </span>
-                    <span className="text-xs font-bold uppercase tracking-wider">Çıktı</span>
-                </div>
-                  <p className="mt-2 text-xl font-black text-rose-800 tabular-nums">
-                    {cikti.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-1">Talimat, avans, maaş, gider, kart</p>
-                </div>
-              </div>
-            </div>
+            </button>
               );
             })()}
+            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <button type="button" onClick={() => { setSubStatusFilter('pending'); setSubSearchTerm(''); setActiveTab('subcontractors'); }} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
-                <span className="text-xs font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
-                  <AlertCircle className="w-3.5 h-3.5" /> Ödenecek borç · taşeron
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-stretch">
+              <button type="button" onClick={() => { setSubStatusFilter('pending'); setSubSearchTerm(''); setActiveTab('subcontractors'); }} className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
+                <span className="text-[11px] font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" /> Taşeron borçları
                 </span>
-                <div className="text-xl font-bold text-rose-600 mt-1.5">
+                <div className="text-xl font-bold text-rose-600 mt-1.5 tabular-nums">
                   {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Açık 1 nci / 2 nci ödeme · hakediş listesine git</span>
+                <span className="text-[11px] text-slate-400 mt-1 block">Açık 1 nci / 2 nci · hakediş</span>
               </button>
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left">
-                <span className="text-xs font-semibold text-amber-800 tracking-wider uppercase flex items-center gap-1">
-                  <AlertCircle className="w-3.5 h-3.5" /> Ödenecek borç · diğer
+              <button
+                type="button"
+                onClick={() => {
+                  setExpenseStatusFilter('unpaid');
+                  setExpenseCategoryFilter('all');
+                  setActiveTab('general_expenses');
+                }}
+                className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition cursor-pointer"
+              >
+                <span className="text-[11px] font-semibold text-amber-800 tracking-wider uppercase flex items-center gap-1">
+                  <Receipt className="w-3.5 h-3.5" /> Tedarik borçları
                 </span>
-                <div className="text-xl font-bold text-amber-800 mt-1.5">
-                  {payableOtherDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">
-                  Devlet + tedarik + personel (sağdaki kutular)
-                </span>
-              </div>
-              <button type="button" onClick={() => { setExpenseStatusFilter('unpaid'); setActiveTab('general_expenses'); }} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer">
-                <span className="text-xs font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
-                  <Building2 className="w-3.5 h-3.5" /> Devlet Ödemeleri
-                </span>
-                <div className="text-xl font-bold text-slate-900 mt-1.5">
-                  {totalGovernmentPaymentsDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Giderler menüsüne git</span>
-              </button>
-
-              <button type="button" onClick={() => { setExpenseStatusFilter('unpaid'); setActiveTab('general_expenses'); }} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-amber-300 hover:shadow-md transition cursor-pointer">
-                <span className="text-xs font-semibold text-amber-700 tracking-wider uppercase flex items-center gap-1">
-                  <Receipt className="w-3.5 h-3.5" /> Temel Diğer Faturalar
-                </span>
-                <div className="text-xl font-bold text-slate-900 mt-1.5">
+                <div className="text-xl font-bold text-amber-800 mt-1.5 tabular-nums">
                   {totalGeneralCompanyExpensesDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Açık tedarik borçları</span>
+                <span className="text-[11px] text-slate-400 mt-1 block">Ödenmemiş tedarik faturaları</span>
               </button>
-
-              <button type="button" onClick={() => setActiveTab('employees')} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-indigo-300 hover:shadow-md transition cursor-pointer">
-                <span className="text-xs font-semibold text-indigo-700 tracking-wider uppercase flex items-center gap-1">
-                  <UserCheck className="w-3.5 h-3.5" /> Personel Gelecek Ödemesi
+              <button
+                type="button"
+                onClick={() => {
+                  setExpenseStatusFilter('unpaid');
+                  setExpenseCategoryFilter('taxes_sgk');
+                  setActiveTab('general_expenses');
+                }}
+                className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-rose-300 hover:shadow-md transition cursor-pointer"
+              >
+                <span className="text-[11px] font-semibold text-rose-700 tracking-wider uppercase flex items-center gap-1">
+                  <Building2 className="w-3.5 h-3.5" /> Devlet ödemeleri
                 </span>
-                <div className="text-xl font-bold text-slate-900 mt-1.5">
+                <div className="text-xl font-bold text-slate-900 mt-1.5 tabular-nums">
+                  {totalGovernmentPaymentsDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Vergi, SGK, ceza</span>
+              </button>
+              <button type="button" onClick={() => setActiveTab('credit_cards')} className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-violet-300 hover:shadow-md transition cursor-pointer">
+                <span className="text-[11px] font-semibold text-violet-700 tracking-wider uppercase flex items-center gap-1">
+                  <CreditCard className="w-3.5 h-3.5" /> Kredi kartı borçları
+                </span>
+                <div className="text-xl font-bold text-slate-900 mt-1.5 tabular-nums">
+                  {creditCardPayable.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Açık ekstre bakiyesi</span>
+              </button>
+              <button type="button" onClick={() => setActiveTab('employees')} className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left hover:border-indigo-300 hover:shadow-md transition cursor-pointer">
+                <span className="text-[11px] font-semibold text-indigo-700 tracking-wider uppercase flex items-center gap-1">
+                  <UserCheck className="w-3.5 h-3.5" /> Personel ödemeleri
+                </span>
+                <div className="text-xl font-bold text-slate-900 mt-1.5 tabular-nums">
                   {totalEmployeeFutureDebt.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Personel & bordroya git</span>
+                <span className="text-[11px] text-slate-400 mt-1 block">Bordro carisi · personele git</span>
               </button>
-
-              <button type="button" onClick={() => { setExpenseStatusFilter('paid'); setActiveTab('general_expenses'); }} className="bg-white p-4 rounded-2xl border border-emerald-200 shadow-sm bg-emerald-50/20 text-left hover:border-emerald-400 hover:shadow-md transition cursor-pointer">
-                <span className="text-xs font-semibold text-emerald-800 tracking-wider flex items-center gap-1">
-                  <Coins className="w-3.5 h-3.5" /> DÖNEM İÇİ FİİLİ MASRAF
+              <div className="h-[6.75rem] bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left">
+                <span className="text-[11px] font-semibold text-slate-700 tracking-wider uppercase flex items-center gap-1">
+                  <Coins className="w-3.5 h-3.5" /> Ödenecek toplam
                 </span>
-                <div className="text-xl font-bold text-emerald-800 mt-1.5">
-                  {totalPeriodPaidExpenses.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                <div className="text-xl font-bold text-slate-900 mt-1.5 tabular-nums">
+                  {coverageLoad.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-emerald-600 mt-1 block">
-                  Seçilen ayda kasadan çıkan · ay neti {(totalCollectedCash - totalPeriodPaidExpenses).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                </span>
-              </button>
+                <span className="text-[11px] text-slate-400 mt-1 block">Beş kutunun açık borç toplamı</span>
+              </div>
 
-              <div className={`md:col-span-2 p-4 rounded-2xl border shadow-sm flex items-center gap-4 ${coverageGap >= 0 ? 'bg-sky-50/50 border-sky-200' : 'bg-rose-50/50 border-rose-200'}`}>
-                <div className="min-w-0 shrink-0 pr-3 border-r border-slate-200/80">
-                  <span className={`text-xs font-semibold tracking-wider uppercase flex items-center gap-1 ${coverageGap >= 0 ? 'text-sky-800' : 'text-rose-800'}`}>
-                    <Wallet className="w-3.5 h-3.5" /> Karşılama
-                  </span>
-                  <p className={`text-sm font-bold mt-1 ${coverageGap >= 0 ? 'text-sky-900' : 'text-rose-800'}`}>
-                    {coverageGap >= 0 ? 'Karşılar' : 'Yetmez'}
-                  </p>
-                </div>
-                <div className="flex-1 grid grid-cols-3 divide-x divide-slate-200/80 min-w-0">
-                  <div className="px-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Kaynak</p>
-                    <p className="text-lg font-black tabular-nums text-slate-800 truncate">
-                      {coverageSource.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₺
+              <div className={`md:col-span-2 h-[6.75rem] p-4 rounded-2xl border shadow-sm ${coverageGap >= 0 ? 'bg-sky-50/50 border-sky-200' : 'bg-rose-50/50 border-rose-200'}`}>
+                <span className={`text-[11px] font-semibold tracking-wider uppercase flex items-center gap-1 ${coverageGap >= 0 ? 'text-sky-800' : 'text-rose-800'}`}>
+                  <Wallet className="w-3.5 h-3.5" /> Karşılama · {coverageGap >= 0 ? 'Karşılar' : 'Yetmez'}
+                </span>
+                <div className="mt-1.5 grid grid-cols-3 divide-x divide-slate-200/80 min-w-0">
+                  <div className="pr-3">
+                    <p className="text-[11px] text-slate-400">Kaynak</p>
+                    <p className="text-xl font-bold tabular-nums text-slate-800 truncate">
+                      {coverageSource.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </p>
                   </div>
                   <div className="px-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Yük</p>
-                    <p className="text-lg font-black tabular-nums text-slate-800 truncate">
-                      {coverageLoad.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₺
+                    <p className="text-[11px] text-slate-400">Yük</p>
+                    <p className="text-xl font-bold tabular-nums text-slate-800 truncate">
+                      {coverageLoad.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </p>
                   </div>
-                  <div className="px-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Fark</p>
-                    <p className={`text-lg font-black tabular-nums truncate ${coverageGap >= 0 ? 'text-sky-800' : 'text-rose-700'}`}>
-                      {coverageGap >= 0 ? '+' : ''}{coverageGap.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₺
+                  <div className="pl-3">
+                    <p className="text-[11px] text-slate-400">Fark</p>
+                    <p className={`text-xl font-bold tabular-nums truncate ${coverageGap >= 0 ? 'text-sky-800' : 'text-rose-700'}`}>
+                      {coverageGap >= 0 ? '+' : ''}{coverageGap.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </p>
                   </div>
                 </div>
@@ -8871,7 +8875,7 @@ export default function App() {
               Personel & Maaş Yönetimi ({empSummary.count} Personel)
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Girişten önceki aya maaş yok. Giriş ayı: o ayın günü / ay günü × sabit maaş; 1’inde (ay kapanınca) caride açılır. Bu ay giren için bugün maaş 0’dır.
+              Prim, avans ve hareket listesi üst çubuktaki döneme göre: {personnelPeriodLabel}. Cari bakiye tüm defterdir. Giriş ayı maaşı 1’inde (ay kapanınca) açılır.
             </p>
           </div>
           {isAdmin && (
@@ -8907,14 +8911,14 @@ export default function App() {
           </div>
 
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
-            <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Açık ay sefer primi</span>
+            <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block">Dönem sefer primi</span>
             <span className="text-base font-extrabold text-emerald-800 mt-0.5 block">
               +{empSummary.totalBonus.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
           </div>
 
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-            <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Açık ay avansı</span>
+            <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">Dönem avansı</span>
             <span className="text-base font-extrabold text-amber-800 mt-0.5 block">
               -{empSummary.totalAdv.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
             </span>
@@ -9014,8 +9018,8 @@ export default function App() {
                   </div>
                 </th>
                 <th className="py-3 px-3 text-right">SGK işveren</th>
-                <th className="py-3 px-3 text-right">Açık ay prim</th>
-                <th className="py-3 px-3 text-right">Açık ay avans</th>
+                <th className="py-3 px-3 text-right">Dönem prim</th>
+                <th className="py-3 px-3 text-right">Dönem avans</th>
                 <th 
                   className="py-3 px-3 text-right cursor-pointer hover:bg-slate-100 transition group"
                   onClick={() => {
@@ -10450,7 +10454,7 @@ export default function App() {
                   <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                     <div>
                       <span className="font-bold text-slate-800 text-xs block">Personel Cari & Hakediş Defteri</span>
-                      <span className="text-[10px] text-slate-500">Liste en yeni üstte. Ayın 1’inde oluşan maaş otomatik satırdır (silinmez). Prim/avans buradan, ödeme Öde ile.</span>
+                      <span className="text-[10px] text-slate-500">Üst dönem: {personnelPeriodLabel}. Liste en yeni üstte. Sözleşmeli maaş kapanan ayın 1’inde görünür (silinmez).</span>
                     </div>
                   </div>
                   {(() => {
@@ -10670,12 +10674,13 @@ export default function App() {
                       });
                     });
                     lines.sort((a, b) => (b.date || '').localeCompare(a.date || '') || a.key.localeCompare(b.key));
-                    if (!lines.length) {
-                      return <p className="text-[11px] text-slate-400 italic py-1 text-center bg-white rounded-lg border border-dashed border-slate-200">Henüz girilmiş bir cari hareket bulunmuyor.</p>;
+                    const periodLines = lines.filter(line => isDateInRange(line.date));
+                    if (!periodLines.length) {
+                      return <p className="text-[11px] text-slate-400 italic py-1 text-center bg-white rounded-lg border border-dashed border-slate-200">Bu dönemde cari hareket yok. Üst çubuktan tarihi değiştirin.</p>;
                     }
                     return (
                       <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                        {lines.map(line => {
+                        {periodLines.map(line => {
                           const badge =
                             line.kind === 'salary' ? 'bg-sky-100 text-sky-800' :
                             line.kind === 'pay' ? 'bg-emerald-100 text-emerald-800' :
@@ -11814,7 +11819,7 @@ export default function App() {
             <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-lg">Kasa / banka hareketleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{formatDateTR(cashStartDate)} nakit açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺. Banka satırları görünür, nakit bakiyeyi değiştirmez.</p>
+                <p className="text-xs text-slate-500 mt-0.5">{formatDateTR(cashStartDate)} açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺. Tahsilat girer, ödeme çıkar.</p>
               </div>
               <div className="flex items-center gap-2">
                 <label className="text-[11px] font-semibold text-slate-500">Başlangıç
