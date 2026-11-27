@@ -3,7 +3,7 @@ import { Plus, Trash2, Edit2 } from 'lucide-react';
 import { supabase } from './supabase';
 import { formatMoneyAmountTR } from './money';
 import PortalInput from './PortalInput';
-import { buildHalCari, cmpHalMove, halHandoverBookDate, isHalFirmActive, type HalMoveSortField } from './halSaha';
+import { buildHalCari, cmpHalMove, halHandoverBookDate, isHalCariOnly, isHalFirmActive, isHalKasaOnly, isHalMerkezTahsil, personelKasaFrom, seferTotal, type HalMoveSortField } from './halSaha';
 
 function daysAgo(dateStr: string) {
   const d = new Date(`${dateStr}T00:00:00`);
@@ -11,23 +11,6 @@ function daysAgo(dateStr: string) {
   t.setHours(0, 0, 0, 0);
   d.setHours(0, 0, 0, 0);
   return Math.round((t.getTime() - d.getTime()) / 86400000);
-}
-
-function seferTotal(bedel: number, vat: boolean) {
-  const b = Number(bedel) || 0;
-  return vat ? Math.round(b * 1.2 * 100) / 100 : b;
-}
-
-function isHalKasaOnly(e: any) {
-  return /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
-}
-
-function isHalCariOnly(e: any) {
-  return /\[(AKTARIM-CARI|DRIVE-GIRIS|MERKEZ-TAHSIL)\]/.test(String(e.notes || ''));
-}
-
-function isHalMerkezTahsil(e: any) {
-  return /\[MERKEZ-TAHSIL\]/.test(String(e.notes || '')) || !!e.kasa_invoice_id;
 }
 
 function asUuidOrNull(id: any) {
@@ -156,13 +139,12 @@ function HalSahaPage({
   const genel = cari.reduce((a, r) => ({
     devir: a.devir + r.devir,
     sefer: a.sefer + r.sefer,
+    kdv: a.kdv + r.kdv,
     tahsilat: a.tahsilat + r.tahsilat,
     kalan: a.kalan + r.kalan
-  }), { devir: 0, sefer: 0, tahsilat: 0, kalan: 0 });
+  }), { devir: 0, sefer: 0, kdv: 0, tahsilat: 0, kalan: 0 });
 
-  const nakitToplanan = (entries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
-  const teslim = (handovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
-  const personelKasa = Math.round((nakitToplanan - teslim) * 100) / 100;
+  const personelKasa = personelKasaFrom(entries, handovers, cleanNumber);
   const aySefer = monthEntries.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
 
   const locked = (row: any) => !canTakeToCash && daysAgo(String(row.entry_date).slice(0, 10)) > 2;
@@ -681,9 +663,10 @@ function HalSahaPage({
 
       {tab === 'cari' && (
         <div className="space-y-3">
-          <div className="rounded-2xl bg-slate-900 text-white p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="rounded-2xl bg-slate-900 text-white p-4 grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
             <div>Devir<div className="text-lg font-black">{money(genel.devir)} ₺</div></div>
             <div>Sefer<div className="text-lg font-black">{money(genel.sefer)} ₺</div></div>
+            <div>KDV %20<div className="text-lg font-black text-amber-200">{money(genel.kdv)} ₺</div><div className="text-[10px] text-slate-400 font-normal">Cariye dahil · kasaya yazılmaz</div></div>
             <div>Tahsilat<div className="text-lg font-black text-emerald-300">{money(genel.tahsilat)} ₺</div></div>
             <div>Kalan<div className="text-lg font-black text-rose-300">{money(genel.kalan)} ₺</div></div>
           </div>
@@ -696,6 +679,7 @@ function HalSahaPage({
               <div className="flex gap-4 font-semibold">
                 <span>Devir {money(r.devir)}</span>
                 <span className="text-[#009fe3]">Sefer {money(r.sefer)}</span>
+                <span className="text-amber-800">KDV {money(r.kdv)}</span>
                 <span className="text-emerald-700">Tahsilat {money(r.tahsilat)}</span>
                 <span className="text-rose-700">Kalan {money(r.kalan)} ₺</span>
               </div>

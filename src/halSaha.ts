@@ -3,6 +3,17 @@ export function seferTotal(bedel: number, vat: boolean) {
   return vat ? Math.round(b * 1.2 * 100) / 100 : b;
 }
 
+export function seferVat(bedel: number, vat: boolean) {
+  const b = Number(bedel) || 0;
+  return vat ? Math.round(b * 0.2 * 100) / 100 : 0;
+}
+
+export function personelKasaFrom(entries: any[], handovers: any[], cleanNumber: (v: any) => number) {
+  const nakit = (entries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
+  const teslim = (handovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
+  return Math.round((nakit - teslim) * 100) / 100;
+}
+
 export function isHalKasaOnly(e: any) {
   return /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
 }
@@ -21,7 +32,8 @@ export const HAL_TESLIM_163K_DATE = '2026-11-12';
 export function halHandoverBookDate(h: any) {
   const amt = Math.round((Number(h?.amount) || 0) * 100) / 100;
   const raw = String(h?.hand_date || h?.created_at || '').slice(0, 10);
-  if (amt === 163000 && raw !== HAL_TESLIM_163K_DATE) return HAL_TESLIM_163K_DATE;
+  const aktarimBozuk = raw === '2026-01-11' || raw === '2026-11-01' || (raw && raw < '2026-10-07');
+  if (amt === 163000 && aktarimBozuk) return HAL_TESLIM_163K_DATE;
   return raw;
 }
 
@@ -155,11 +167,12 @@ export function buildHalCari(firms: any[], entries: any[], from: string, to: str
     const prevSefer = prev.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
     const prevTah = prev.reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
     const sefer = now.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferTotal(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
+    const kdv = now.reduce((s: number, e: any) => s + (e.kind === 'sefer' ? seferVat(cleanNumber(e.bedel), !!e.has_vat) : 0), 0);
     const tahsilat = now.reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
     const devir = prevSefer - prevTah;
     const kalan = devir + sefer - tahsilat;
     const inactive = !!(firm && !isHalFirmActive(firm));
-    return { name, shop, devir, sefer, tahsilat, kalan, inactive };
+    return { name, shop, devir, sefer, kdv, tahsilat, kalan, inactive };
   }).filter(r => {
     const firm = map.get(r.name);
     if (!firm || isHalFirmActive(firm)) return true;

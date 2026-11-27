@@ -9,10 +9,10 @@ import {
   cmpHalMove,
   halReportRange,
   inHalRange,
-  isHalCariOnly,
   isHalKasaOnly,
   isHalMerkezTahsil,
   halHandoverBookDate,
+  personelKasaFrom,
   seferTotal,
   type HalMoveSortField,
   type HalReportPreset
@@ -30,7 +30,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
   const [preset, setPreset] = useState<HalReportPreset>('bu_ay');
   const [firmFilter, setFirmFilter] = useState('');
   const [moveSort, setMoveSort] = useState<{ field: HalMoveSortField; dir: 'asc' | 'desc' }>({ field: 'date', dir: 'desc' });
-  const [cariSort, setCariSort] = useState<{ field: 'name' | 'shop' | 'devir' | 'sefer' | 'tahsilat' | 'kalan'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
+  const [cariSort, setCariSort] = useState<{ field: 'name' | 'shop' | 'devir' | 'sefer' | 'kdv' | 'tahsilat' | 'kalan'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
   const range = useMemo(() => halReportRange(preset), [preset]);
   const toggleSort = <F extends string>(cur: { field: F; dir: 'asc' | 'desc' }, field: F) =>
     cur.field === field ? { field, dir: (cur.dir === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' } : { field, dir: (field === 'date' ? 'desc' : 'asc') as 'asc' | 'desc' };
@@ -54,6 +54,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
         if (cariSort.field === 'shop') cmp = String(a.shop || '').localeCompare(String(b.shop || ''), 'tr');
         else if (cariSort.field === 'devir') cmp = a.devir - b.devir;
         else if (cariSort.field === 'sefer') cmp = a.sefer - b.sefer;
+        else if (cariSort.field === 'kdv') cmp = a.kdv - b.kdv;
         else if (cariSort.field === 'tahsilat') cmp = a.tahsilat - b.tahsilat;
         else if (cariSort.field === 'kalan') cmp = a.kalan - b.kalan;
         else cmp = a.name.localeCompare(b.name, 'tr');
@@ -66,9 +67,10 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
   const genel = cari.reduce((a, r) => ({
     devir: roundMoney(a.devir + r.devir),
     sefer: roundMoney(a.sefer + r.sefer),
+    kdv: roundMoney(a.kdv + r.kdv),
     tahsilat: roundMoney(a.tahsilat + r.tahsilat),
     kalan: roundMoney(a.kalan + r.kalan)
-  }), { devir: 0, sefer: 0, tahsilat: 0, kalan: 0 });
+  }), { devir: 0, sefer: 0, kdv: 0, tahsilat: 0, kalan: 0 });
 
   const hareketler = useMemo(() => {
     return rangeEntries
@@ -82,9 +84,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
       });
   }, [rangeEntries, firmFilter, moveSort, cleanNumber]);
 
-  const nakitToplanan = (entries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
-  const teslim = (handovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
-  const personelKasa = roundMoney(nakitToplanan - teslim);
+  const personelKasa = personelKasaFrom(entries, handovers, cleanNumber);
 
   const rangeHandovers = (handovers || []).filter((h: any) => inHalRange(halHandoverBookDate(h), range.from, range.to));
 
@@ -96,14 +96,15 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
       ['Özet'],
       ['Devir', excelKeepNumber(genel.devir)],
       ['Sefer', excelKeepNumber(genel.sefer)],
+      ['KDV %20 (cari, kasa değil)', excelKeepNumber(genel.kdv)],
       ['Tahsilat', excelKeepNumber(genel.tahsilat)],
       ['Kalan alacak', excelKeepNumber(genel.kalan)],
       ['Personel kasa (tüm zaman)', excelKeepNumber(personelKasa)],
       ['Dönemde merkeze teslim', excelKeepNumber(rangeHandovers.reduce((s: number, h: any) => s + cleanNumber(h.amount), 0))],
       [],
       ['Firma cari'],
-      ['Firma', 'Dükkan', 'Devir', 'Sefer', 'Tahsilat', 'Kalan'],
-      ...cari.map(r => [r.name, r.shop || '', excelKeepNumber(r.devir), excelKeepNumber(r.sefer), excelKeepNumber(r.tahsilat), excelKeepNumber(r.kalan)]),
+      ['Firma', 'Dükkan', 'Devir', 'Sefer', 'KDV', 'Tahsilat', 'Kalan'],
+      ...cari.map(r => [r.name, r.shop || '', excelKeepNumber(r.devir), excelKeepNumber(r.sefer), excelKeepNumber(r.kdv), excelKeepNumber(r.tahsilat), excelKeepNumber(r.kalan)]),
       [],
       ['Hareketler'],
       ['Tarih', 'İşlem', 'Firma', 'Plaka', 'Açıklama', 'Sefer', 'KDV', 'Nakit'],
@@ -159,7 +160,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
           </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-2">
           <div className="bg-slate-50 rounded-xl border border-slate-200 px-4 py-3">
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Devir</div>
             <div className="text-lg font-black tabular-nums text-slate-900">{money(genel.devir)} ₺</div>
@@ -167,6 +168,11 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
           <div className="bg-slate-50 rounded-xl border border-slate-200 px-4 py-3">
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Sefer</div>
             <div className="text-lg font-black tabular-nums text-slate-900">{money(genel.sefer)} ₺</div>
+          </div>
+          <div className="bg-amber-50 rounded-xl border border-amber-100 px-4 py-3">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-amber-800">KDV %20</div>
+            <div className="text-lg font-black tabular-nums text-amber-900">{money(genel.kdv)} ₺</div>
+            <div className="text-[10px] text-amber-700">Cariye dahil · kasaya yazılmaz</div>
           </div>
           <div className="bg-emerald-50 rounded-xl border border-emerald-100 px-4 py-3">
             <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Tahsilat</div>
@@ -196,6 +202,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
                 <th className={thSort} onClick={() => setCariSort(s => toggleSort(s, 'shop'))}>Dükkan{sortMark(cariSort, 'shop')}</th>
                 <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'devir'))}>Devir{sortMark(cariSort, 'devir')}</th>
                 <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'sefer'))}>Sefer{sortMark(cariSort, 'sefer')}</th>
+                <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'kdv'))}>KDV{sortMark(cariSort, 'kdv')}</th>
                 <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'tahsilat'))}>Tahsilat{sortMark(cariSort, 'tahsilat')}</th>
                 <th className={`${thSort} text-right`} onClick={() => setCariSort(s => toggleSort(s, 'kalan'))}>Kalan{sortMark(cariSort, 'kalan')}</th>
               </tr>
@@ -207,12 +214,13 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
                   <td className="py-2.5 px-3 text-slate-500">{r.shop || '—'}</td>
                   <td className="py-2.5 px-3 text-right tabular-nums">{money(r.devir)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-[#009fe3] font-semibold">{money(r.sefer)} ₺</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-amber-800">{money(r.kdv)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-emerald-700 font-semibold">{money(r.tahsilat)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums font-black text-rose-700">{money(r.kalan)} ₺</td>
                 </tr>
               ))}
               {!cari.length && (
-                <tr><td colSpan={6} className="py-8 text-center text-slate-400">Bu dönemde cari yok.</td></tr>
+                <tr><td colSpan={7} className="py-8 text-center text-slate-400">Bu dönemde cari yok.</td></tr>
               )}
             </tbody>
             {cari.length > 0 && (
@@ -221,6 +229,7 @@ export default function HalSahaReportPage({ firms, entries, handovers, formatDat
                   <td className="py-2.5 px-3" colSpan={2}>Toplam</td>
                   <td className="py-2.5 px-3 text-right tabular-nums">{money(genel.devir)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums">{money(genel.sefer)} ₺</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{money(genel.kdv)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums">{money(genel.tahsilat)} ₺</td>
                   <td className="py-2.5 px-3 text-right tabular-nums text-rose-700">{money(genel.kalan)} ₺</td>
                 </tr>

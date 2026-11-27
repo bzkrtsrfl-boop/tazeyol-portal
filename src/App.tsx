@@ -93,7 +93,20 @@ import PortalInput from './PortalInput';
 import PortalMenu from './PortalMenu';
 import PortalPeriodMenu from './PortalPeriodMenu';
 import HalSahaReportPage from './HalSahaReportPage';
-import { buildHalCari, halHandoverBookDate, isHalMerkezTahsil } from './halSaha';
+import { buildHalCari, halHandoverBookDate, isHalMerkezTahsil, personelKasaFrom } from './halSaha';
+import {
+  CASH_APPLY_AFTER_OPENING,
+  CASH_BOOK_OPENING,
+  CASH_BOOK_START,
+  MIGROS_BANK_LOCK_UNTIL,
+  MIGROS_BANK_TRANSFERS,
+  isAppBankReceiptTitle,
+  isBankaNakitDisiCikis,
+  isBankaNakitDisiGiris,
+  isEArchiveNoiseTitle,
+  isInvoiceLinkedReceiptTitle,
+  isMainMigrosName
+} from './cashBook';
 import TripSettlementsPage from './TripSettlementsPage';
 import DisAlimPage from './DisAlimPage';
 import { alkanFiloPlateKeys, filoVisibleDepots, filoWorkDepots, mergeFiloDepots, plateKey as filoPlateKey, type FiloDepotId } from './tripFilo';
@@ -282,51 +295,23 @@ function invoiceMonthForSelectedPeriod(filterStart: string) {
 
 const TR_MONTH_NAMES = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
-const CASH_BOOK_START = '2026-10-07';
-const CASH_BOOK_OPENING = 1020622.64;
-/** 7 Ekim sabahı açılış + o günden sonraki kasa giriş/çıkış. */
-const CASH_APPLY_AFTER_OPENING = true;
-
-/** Banka ekstre: Ekim parası Eylül faturasına, 3.11 avansı Ekim faturasına. */
-const MIGROS_BANK_LOCK_UNTIL = '2026-11-03';
-const MIGROS_BANK_TRANSFERS: { date: string; amount: number; label: string }[] = [
-  { date: '2026-10-06', amount: 9764000, label: 'Eylül 2026 avans' },
-  { date: '2026-10-20', amount: 13205597.05, label: 'Eylül fatura ödemesi' },
-  { date: '2026-10-23', amount: 1323456.87, label: 'Eylül kapanış' },
-  { date: '2026-11-03', amount: 10100000, label: 'Ekim 2026 avans' }
-];
-
-function isMainMigrosName(name: string) {
-  const n = String(name || '').toLocaleUpperCase('tr-TR');
-  if (/DI[ŞS] ALIM/.test(n)) return false;
-  return n.includes('MIGROS') || n.includes('MİGROS');
-}
-
 function isAtifAltunisikName(name: string) {
   const n = String(name || '').toLocaleUpperCase('tr-TR').replace(/İ/g, 'I');
   return n.includes('ATIF') && n.includes('ALTUN');
 }
 
-const MIGROS_EYLUL_BANK_TOTAL = Math.round(
-  MIGROS_BANK_TRANSFERS.filter(t => t.date.startsWith('2026-10')).reduce((s, t) => s + t.amount, 0) * 100
-) / 100;
-
-function isAppBankReceiptTitle(no: string) {
-  const s = String(no || '');
-  if (/^\s*THS\s*-.+\s-\s\d{12,}\s*$/i.test(s)) return true;
-  if (/^\s*THS\s*-\s*(CARI-|AVANS-)/i.test(s)) return true;
-  return false;
+function isAnadoluHasatName(name: string) {
+  const n = String(name || '').toLocaleUpperCase('tr-TR').replace(/İ/g, 'I');
+  return n.includes('ANADOLU') && n.includes('HASAT');
 }
 
-/** Fatura no gömülü THS (EF/EA/GIB) = kapama, kasa parası değil. */
-function isInvoiceLinkedReceiptTitle(no: string) {
-  const s = String(no || '').toUpperCase().replace(/\s+/g, '');
-  return /(?:THS-)*(?:EA|EF|GIB)\d{8,}/.test(s);
-}
-
-function isEArchiveNoiseTitle(no: string) {
-  if (isAppBankReceiptTitle(no)) return false;
-  return /(?:THS\s*-\s*)?EA\d{10,}/i.test(String(no || ''));
+function firmMatchesCustomerName(firmName: string, customerName: string) {
+  if (isAnadoluHasatName(firmName) && isAnadoluHasatName(customerName)) return true;
+  const fold = (s: string) => String(s || '').toLocaleUpperCase('tr-TR').replace(/İ/g, 'I').replace(/[^A-Z0-9]/g, '');
+  const a = fold(firmName);
+  const b = fold(customerName);
+  if (a.length < 8 || b.length < 8) return false;
+  return a.includes(b) || b.includes(a);
 }
 
 function yearMonthTrLabel(ym: string) {
@@ -3506,35 +3491,30 @@ export default function App() {
     }
     return rows;
   })();
-  const totalCollectedCash = cashInRows
-    .filter((i: any) => isDateInRange(i.issue_date))
-    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const cashOutCandidates = (dbInvoices || []).filter((i: any) => isCashOutRow(i) && inCashBook(i));
   const cashOutRows = [
     ...cashOutCandidates.filter((i: any) => i.category !== 'subcontractor_paid_outflow'),
     ...pickUniqueContractorOutflows(cashOutCandidates.filter((i: any) => i.category === 'subcontractor_paid_outflow'))
   ];
-  const cashInflow = cashInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-  const cashOutflow = cashOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const nakitInRows = cashInRows.filter((i: any) => !isBankaNakitDisiGiris(i));
+  const nakitOutRows = cashOutRows.filter((i: any) => !isBankaNakitDisiCikis(i));
+  const bankaInRows = cashInRows.filter((i: any) => isBankaNakitDisiGiris(i));
+  const bankaOutRows = cashOutRows.filter((i: any) => isBankaNakitDisiCikis(i));
+  const cashInflow = nakitInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const cashOutflow = nakitOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const bankaInflow = bankaInRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const bankaOutflow = bankaOutRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
   const openingMatchesStart = sanitizeDate(cashOpeningAsOf) === cashStartDate;
   const cashBookOpening = openingMatchesStart ? cashOpening : CASH_BOOK_OPENING;
   const currentRealCash = CASH_APPLY_AFTER_OPENING
     ? cashBookOpening + cashInflow - cashOutflow
     : cashBookOpening;
-
-  const periodCashOutCandidates = (dbInvoices || []).filter((i: any) =>
-    i.status === 'paid' &&
-    !skipCashOut.has(String(i.category || '')) &&
-    i.direction !== 'outgoing' &&
-    isDateInRange(i.issue_date) &&
-    !isExpensePaidByCard(i)
-  );
-  const periodExpenseRows = [
-    ...periodCashOutCandidates.filter((i: any) => i.category !== 'subcontractor_paid_outflow'),
-    ...pickUniqueContractorOutflows(periodCashOutCandidates.filter((i: any) => i.category === 'subcontractor_paid_outflow'))
-  ];
+  const totalCollectedCash = nakitInRows
+    .filter((i: any) => isDateInRange(i.issue_date))
+    .reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
+  const periodExpenseRows = nakitOutRows.filter((i: any) => isDateInRange(i.issue_date));
   const totalPeriodPaidExpenses = periodExpenseRows.reduce((sum, i) => sum + cleanNumber(i.total_amount), 0);
-  const periodIncomeRows = cashInRows.filter((i: any) => isDateInRange(i.issue_date));
+  const periodIncomeRows = nakitInRows.filter((i: any) => isDateInRange(i.issue_date));
 
   const cashLedgerView = useMemo(() => {
     const from = cashLedgerFrom || cashStartDate;
@@ -3542,6 +3522,8 @@ export default function App() {
     const labelOf = (inv: any, inflow: number) => {
       const cat = String(inv.category || '');
       const no = String(inv.invoice_no || '');
+      const bank = inflow > 0 ? isBankaNakitDisiGiris(inv) : isBankaNakitDisiCikis(inv);
+      if (bank) return inflow > 0 ? 'Banka girişi' : 'Banka çıkışı';
       if (inflow > 0) {
         if (/^Hal saha teslim /i.test(no) || /^Hal tahsilat /i.test(no)) return 'Hal kasa aktarımı';
         if (cat === 'cash_deposit') return 'Kasaya para ekle';
@@ -3556,6 +3538,7 @@ export default function App() {
       title: string;
       inflow: number;
       outflow: number;
+      bank: boolean;
       kind: 'live' | 'ghost' | 'open';
     };
     const txs: CashLine[] = [];
@@ -3566,6 +3549,7 @@ export default function App() {
       const amt = inflow || outflow;
       if (amt <= 0) return;
       let title = String(inv.invoice_no || '');
+      const bank = inflow > 0 ? isBankaNakitDisiGiris(inv) : isBankaNakitDisiCikis(inv);
       const label = labelOf(inv, inflow);
       if (cat === 'credit_card_payment') {
         const no = title;
@@ -3573,14 +3557,15 @@ export default function App() {
         const last4 = String(card?.last_four_digits || '').replace(/\D/g, '').slice(-4);
         title = `${card?.card_name || no} · ${last4 ? `**** ${last4}` : 'kart no yok'} · Nakit ödeme yapıldı`;
       }
-      txs.push({ id: inv.id, date, label, title, inflow, outflow, kind: 'live' });
+      txs.push({ id: inv.id, date, label, title, inflow, outflow, bank, kind: 'live' });
     };
     cashInRows.forEach((inv: any) => pushInv(inv, cleanNumber(inv.total_amount), 0));
     cashOutRows.forEach((inv: any) => pushInv(inv, 0, cleanNumber(inv.total_amount)));
 
     const live = txs.filter(t => t.kind === 'live' && t.date >= cashStartDate);
+    const liveNakit = live.filter(t => !t.bank);
     let startBal = cashBookOpening;
-    live.forEach(t => {
+    liveNakit.forEach(t => {
       if (t.date < from) startBal += t.inflow - t.outflow;
     });
 
@@ -3590,9 +3575,10 @@ export default function App() {
       id: 'open',
       date: from < cashStartDate ? cashStartDate : from,
       label: 'Kasa açılış',
-      title: `${formatDateTR(cashStartDate)} kasa açılışı. Bu sabahki banka bakiyesi; o günden sonraki giriş eklenir, çıkış düşer.`,
+      title: `${formatDateTR(cashStartDate)} nakit kasa açılışı. Migros EFT ve banka ödemeleri bu bakiyeye yazılmaz.`,
       inflow: 0,
       outflow: 0,
+      bank: false,
       kind: 'open'
     });
     const rank = (k: CashLine['kind']) => (k === 'ghost' ? 0 : k === 'open' ? 1 : 2);
@@ -3604,10 +3590,12 @@ export default function App() {
       if (t.kind === 'open') {
         return { ...t, balance: run, isHist: false, isOpen: true };
       }
+      if (t.bank) return { ...t, balance: run, isHist: false, isOpen: false };
       run += t.inflow - t.outflow;
       return { ...t, balance: run, isHist: false, isOpen: false };
     }).reverse();
-    const liveInRange = live.filter(t => t.date >= from && t.date <= to);
+    const liveInRange = liveNakit.filter(t => t.date >= from && t.date <= to);
+    const bankInRange = live.filter(t => t.bank && t.date >= from && t.date <= to);
     return {
       from,
       to,
@@ -3615,6 +3603,8 @@ export default function App() {
       endBal: run,
       periodIn: liveInRange.reduce((s, t) => s + t.inflow, 0),
       periodOut: liveInRange.reduce((s, t) => s + t.outflow, 0),
+      periodBankIn: bankInRange.reduce((s, t) => s + t.inflow, 0),
+      periodBankOut: bankInRange.reduce((s, t) => s + t.outflow, 0),
       lines
     };
   }, [dbInvoices, dbCreditCards, cashLedgerFrom, cashLedgerTo, cashInRows, cashOutRows, cashBookOpening, cashStartDate]);
@@ -3743,8 +3733,7 @@ export default function App() {
       const collectionsLive = receiptsUnique.filter(i => i.category === 'customer_collection');
       const billedAll = sumAmt(sales);
       const receiptsAllTime = sumAmt(receiptsUnique);
-      let netLive = Math.round((billedAll - receiptsAllTime) * 100) / 100;
-      if (isAtifAltunisikName(customer.name)) netLive = 0;
+      const netLive = Math.round((billedAll - receiptsAllTime) * 100) / 100;
 
       const moneyYm = String(filterStartDate || '').slice(0, 7);
       const inSelectedYm = (list: any[]) =>
@@ -3803,6 +3792,16 @@ export default function App() {
       .reduce((s, r) => s + r.kalan, 0),
     [dbHalFirms, dbHalEntries]
   );
+  const personelKasaAll = useMemo(
+    () => personelKasaFrom(dbHalEntries, dbHalHandovers, cleanNumber),
+    [dbHalEntries, dbHalHandovers]
+  );
+  const halCariKalanPending = useMemo(() => {
+    const rows = buildHalCari(dbHalFirms, dbHalEntries, '1970-01-01', '2099-12-31', cleanNumber);
+    return rows
+      .filter(r => !(dbCustomers || []).some((c: any) => firmMatchesCustomerName(r.name, c.name)))
+      .reduce((s, r) => s + r.kalan, 0);
+  }, [dbHalFirms, dbHalEntries, dbCustomers]);
   const halCariPeriod = useMemo(() => {
     const from = filterStartDate || '1970-01-01';
     const to = filterEndDate || '2099-12-31';
@@ -3812,7 +3811,7 @@ export default function App() {
       tahsilat: rows.reduce((s, r) => s + r.tahsilat, 0)
     };
   }, [dbHalFirms, dbHalEntries, filterStartDate, filterEndDate]);
-  const pendingReceivablesAllTime = Math.round((bekleyenMusteriAlacaklari + Math.max(0, halCariKalanAll)) * 100) / 100;
+  const pendingReceivablesAllTime = Math.round((bekleyenMusteriAlacaklari + Math.max(0, halCariKalanPending)) * 100) / 100;
 
   const selectedCariLedger = useMemo(() => {
     if (!selectedCariCustomer) return [];
@@ -4301,6 +4300,7 @@ export default function App() {
       gross: number;
       net: number;
       paid: boolean;
+      statusPaid: boolean;
       remain?: number;
     };
     const slots: Slot[] = [];
@@ -4311,6 +4311,7 @@ export default function App() {
       const issueDate = sanitizeDate(inv.issue_date || inv.created_at);
       const add = (term: 'term1' | 'term2', gross: number) => {
         if (gross <= 0.009) return;
+        const statusPaid = inv.status === 'paid' || (term === 'term1' ? inv.term1_status === 'paid' : inv.term2_status === 'paid');
         slots.push({
           key: `${inv.id}-${term}`,
           invoiceId: inv.id,
@@ -4320,7 +4321,8 @@ export default function App() {
           dueDate: contractorTermPayDate(issueDate, term, sanitizeDate(term === 'term1' ? inv.term1_due_date : inv.term2_due_date)),
           gross,
           net: gross,
-          paid: false
+          paid: false,
+          statusPaid
         });
       };
       add('term1', t1);
@@ -4375,7 +4377,7 @@ export default function App() {
         });
       });
     });
-    // Peşin avans açık vadeye, ödemeler işlendikten sonra yazılır (ödenmiş 1 nciyi yemez).
+    // Peşin avans yalnız caride; açık 1 nci / 2 nci dilime yazılmaz. Taksit yalnızca 1 nci nete yansır.
 
     type Pay = { date: string; desc: string; amount: number; type: string; ledgerId?: any };
     const pays: Pay[] = [...divertedPays];
@@ -4463,39 +4465,9 @@ export default function App() {
     const visiblePays = normalizeSeptWavePays(collapsedPays, septTotal, pesinAdvanceTotal, septInstCut);
 
     slots.forEach(s => { s.remain = s.net; });
-    visiblePays.forEach(p => {
-      let left = Math.round(p.amount * 100) / 100;
-      const payD = String(p.date || '').slice(0, 10);
-      const septWave = inSeptPayWave(payD);
-      slots.forEach(s => {
-        const remain = s.remain || 0;
-        if (left <= 0.009 || remain <= 0.009) return;
-        if (septWave) {
-          if (!(s.issueDate || '').startsWith('2026-09')) return;
-        } else {
-          if (s.dueDate && payD && s.dueDate > payD) return;
-          if (!s.dueDate && s.issueDate && payD && s.issueDate > payD) return;
-        }
-        const take = Math.round(Math.min(remain, left) * 100) / 100;
-        s.remain = Math.round((remain - take) * 100) / 100;
-        left = Math.round((left - take) * 100) / 100;
-        if ((s.remain || 0) <= 0.009) s.paid = true;
-      });
-    });
-
-    let leftoverAdvance = 0;
-    [...advanceRows].filter(a => a.inst <= 1).sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(a => {
-      let left = Math.round(a.amount * 100) / 100;
-      slots.forEach(s => {
-        const remain = s.remain || 0;
-        if (left <= 0.009 || remain <= 0.009) return;
-        const cut = Math.round(Math.min(remain, left) * 100) / 100;
-        s.remain = Math.round((remain - cut) * 100) / 100;
-        left = Math.round((left - cut) * 100) / 100;
-        if ((s.remain || 0) <= 0.009) s.paid = true;
-      });
-      leftoverAdvance = Math.round((leftoverAdvance + left) * 100) / 100;
-    });
+    const leftoverAdvance = Math.round(
+      [...advanceRows].filter(a => a.inst <= 1).reduce((s, a) => s + a.amount, 0) * 100
+    ) / 100;
 
     visiblePays.forEach((p, idx) => {
       const term = payTermFromDesc(p.desc, p.type);
@@ -4529,7 +4501,7 @@ export default function App() {
     const iban = findContractorIban(contractorName);
     const invoiceIds = new Set(invoices.map((inv: any) => String(inv.id)));
     const openTerms = slots
-      .filter(s => ((s as Slot & { remain?: number }).remain ?? s.net) > 0.009)
+      .filter(s => !s.statusPaid && ((s.remain ?? s.net) > 0.009))
       .map(s => {
         const remain = (s as Slot & { remain?: number }).remain ?? s.net;
         return {
@@ -4721,57 +4693,6 @@ export default function App() {
     [bankTermLines]
   );
 
-  const contractorPayableNow = useMemo(
-    () => Math.round(allDecoratedBankLines.reduce((s, l) => s + (l.netAmount || 0), 0) * 100) / 100,
-    [allDecoratedBankLines]
-  );
-  const todayIso = new Date().toISOString().split('T')[0];
-  const daysUntilIso = (raw: any) => {
-    const d = sanitizeDate(raw);
-    if (!d) return null;
-    const today = new Date(`${todayIso}T12:00:00`);
-    const exp = new Date(`${d}T12:00:00`);
-    if (Number.isNaN(exp.getTime())) return null;
-    return Math.round((exp.getTime() - today.getTime()) / 86400000);
-  };
-  const overdueInspections = useMemo(
-    () =>
-      (dbVehicles || [])
-        .filter(v => {
-          if (v.is_active === false) return false;
-          const d = daysUntilIso(v.next_inspection_date);
-          return d != null && d <= 30;
-        })
-        .sort((a, b) => String(a.next_inspection_date).localeCompare(String(b.next_inspection_date))),
-    [dbVehicles, todayIso]
-  );
-  const policyExpiryAlerts = useMemo(() => {
-    const rows: { id: string; plate: string; driver: string; kind: string; date: string; days: number }[] = [];
-    (dbVehicles || []).forEach(v => {
-      if (v.is_active === false) return;
-      const plate = String(v.plate_number || '').trim() || 'Plaka yok';
-      const driver = v.driver_name || 'Atanmadı';
-      const push = (kind: string, raw: any, key: string) => {
-        const days = daysUntilIso(raw);
-        if (days == null || days > 30) return;
-        rows.push({ id: `${v.id || plate}-${key}`, plate, driver, kind, date: sanitizeDate(raw), days });
-      };
-      push('Muayene', v.next_inspection_date, 'muayene');
-      push('Sigorta', v.insurance_expiry_date, 'sigorta');
-      push('Kasko', v.kasko_expiry_date, 'kasko');
-    });
-    return rows.sort((a, b) => a.days - b.days || a.plate.localeCompare(b.plate, 'tr'));
-  }, [dbVehicles, todayIso]);
-  const payableOtherDebt = totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt + totalEmployeeFutureDebt;
-  const payableTotalDebt = contractorPayableNow + payableOtherDebt;
-  const periodProfit = totalCollectedCash - totalPeriodPaidExpenses;
-
-  const decoratedBankByLineId = useMemo(() => {
-    const m = new Map<string, (typeof allDecoratedBankLines)[number]>();
-    allDecoratedBankLines.forEach(l => m.set(l.lineId, l));
-    return m;
-  }, [allDecoratedBankLines]);
-
   const installmentCutForHakedis = (inv: any) => {
     const who = extractContractorName(String(inv.invoice_no || ''));
     const invYm = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
@@ -4811,8 +4732,13 @@ export default function App() {
     return Math.round(cut * 100) / 100;
   };
 
-  const visibleHakedisRows = useMemo(() => {
-    const term = subSearchTerm.toLocaleLowerCase('tr-TR').trim();
+  const buildHakedisView = (
+    search: string,
+    status: 'all' | 'pending' | 'paid',
+    sortField: typeof subSortField,
+    sortOrder: typeof subSortOrder
+  ) => {
+    const term = search.toLocaleLowerCase('tr-TR').trim();
     const parseDate = (d: any) => {
       if (!d) return 0;
       const str = String(d).trim();
@@ -4830,22 +4756,22 @@ export default function App() {
         const matchesSearch = !term || invTitle.includes(term);
         const isFullyPaid = inv.term1_status === 'paid' && inv.term2_status === 'paid';
         let matchesStatus = true;
-        if (subStatusFilter === 'pending') matchesStatus = !isFullyPaid;
-        else if (subStatusFilter === 'paid') matchesStatus = isFullyPaid;
+        if (status === 'pending') matchesStatus = !isFullyPaid;
+        else if (status === 'paid') matchesStatus = isFullyPaid;
         return matchesSearch && matchesStatus;
       })
       .sort((a: any, b: any) => {
-      let comparison = 0;
-        if (subSortField === 'invoice_no') {
+        let comparison = 0;
+        if (sortField === 'invoice_no') {
           const nameA = (a.invoice_no || '').split(' - ')[1] || a.invoice_no || '';
           const nameB = (b.invoice_no || '').split(' - ')[1] || b.invoice_no || '';
           comparison = nameA.trim().localeCompare(nameB.trim(), 'tr-TR', { sensitivity: 'base' });
-        } else if (subSortField === 'issue_date') {
+        } else if (sortField === 'issue_date') {
           comparison = parseDate(a.issue_date) - parseDate(b.issue_date);
         } else {
           comparison = cleanNumber(a.total_amount) - cleanNumber(b.total_amount);
         }
-        return subSortOrder === 'asc' ? comparison : -comparison;
+        return sortOrder === 'asc' ? comparison : -comparison;
       });
     const instPool = new Map<string, number>();
     list.forEach((inv: any) => {
@@ -4855,32 +4781,32 @@ export default function App() {
       if (!instPool.has(poolKey)) instPool.set(poolKey, installmentCutForHakedis(inv));
     });
     const rows = list.map((inv: any) => {
-        const total = cleanNumber(inv.total_amount);
-        const t1Gross = Math.round((total / 2) * 100) / 100;
-        const t2Gross = Math.round((total - t1Gross) * 100) / 100;
-        const whoKey = normalizeContractorKey(extractContractorName(String(inv.invoice_no || '')));
-        const ym = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
-        const poolKey = `${whoKey}|${ym}`;
-        const pool = instPool.get(poolKey) || 0;
-        const instCut = Math.round(Math.min(t1Gross, pool) * 100) / 100;
-        if (instCut > 0) instPool.set(poolKey, Math.round((pool - instCut) * 100) / 100);
-        const isT1Paid = inv.term1_status === 'paid';
-        const isT2Paid = inv.term2_status === 'paid';
-        const dynamicT1 = isT1Paid ? 0 : Math.round((t1Gross - instCut) * 100) / 100;
-        const dynamicT2 = isT2Paid ? 0 : t2Gross;
-        return {
-          inv,
-          t1: t1Gross,
-          t2: t2Gross,
-          isT1Paid,
-          isT2Paid,
-          deductedAdvAmt: instCut,
-          deductedAdvForT2: 0,
-          dynamicT1,
-          dynamicT2,
-          total
-        };
-      });
+      const total = cleanNumber(inv.total_amount);
+      const t1Gross = Math.round((total / 2) * 100) / 100;
+      const t2Gross = Math.round((total - t1Gross) * 100) / 100;
+      const whoKey = normalizeContractorKey(extractContractorName(String(inv.invoice_no || '')));
+      const ym = sanitizeDate(inv.issue_date || inv.created_at).slice(0, 7);
+      const poolKey = `${whoKey}|${ym}`;
+      const pool = instPool.get(poolKey) || 0;
+      const instCut = Math.round(Math.min(t1Gross, pool) * 100) / 100;
+      if (instCut > 0) instPool.set(poolKey, Math.round((pool - instCut) * 100) / 100);
+      const isT1Paid = inv.term1_status === 'paid';
+      const isT2Paid = inv.term2_status === 'paid';
+      const dynamicT1 = isT1Paid ? 0 : Math.round((t1Gross - instCut) * 100) / 100;
+      const dynamicT2 = isT2Paid ? 0 : t2Gross;
+      return {
+        inv,
+        t1: t1Gross,
+        t2: t2Gross,
+        isT1Paid,
+        isT2Paid,
+        deductedAdvAmt: instCut,
+        deductedAdvForT2: 0,
+        dynamicT1,
+        dynamicT2,
+        total
+      };
+    });
     const totals = rows.reduce(
       (s, r) => ({
         total: s.total + r.total,
@@ -4897,7 +4823,96 @@ export default function App() {
         term2: Math.round(totals.term2 * 100) / 100
       }
     };
-  }, [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder]);
+  };
+
+  const hakedisOpenView = useMemo(
+    () => buildHakedisView('', 'pending', 'issue_date', 'desc'),
+    [dbInvoices, dbAdvances]
+  );
+
+  const upcomingContractorPayables = useMemo(() => {
+    const map = new Map<string, { key: string; name: string; amount: number; has1: boolean; has2: boolean }>();
+    hakedisOpenView.rows.forEach(r => {
+      const amt = Math.round(((r.dynamicT1 || 0) + (r.dynamicT2 || 0)) * 100) / 100;
+      if (amt <= 0.009) return;
+      const name = extractContractorName(String(r.inv.invoice_no || '')) || String(r.inv.supplier_name || '').trim() || 'Taşeron';
+      const key = normalizeContractorKey(name) || name;
+      const cur = map.get(key) || { key, name, amount: 0, has1: false, has2: false };
+      cur.amount += amt;
+      if (name.length > (cur.name || '').length) cur.name = name;
+      if ((r.dynamicT1 || 0) > 0.009) cur.has1 = true;
+      if ((r.dynamicT2 || 0) > 0.009) cur.has2 = true;
+      map.set(key, cur);
+    });
+    return Array.from(map.values())
+      .map(r => ({
+        ...r,
+        amount: Math.round(r.amount * 100) / 100,
+        openLabel: r.has1 && r.has2 ? '1 nci ve 2 nci ödeme açık' : (r.has2 ? '2 nci ödeme açık' : '1 nci ödeme açık')
+      }))
+      .filter(r => r.amount > 0.009)
+      .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'tr-TR'));
+  }, [hakedisOpenView]);
+
+  const contractorPayableNow = useMemo(
+    () => Math.round((hakedisOpenView.totals.term1 + hakedisOpenView.totals.term2) * 100) / 100,
+    [hakedisOpenView]
+  );
+  const todayIso = new Date().toISOString().split('T')[0];
+  const daysUntilIso = (raw: any) => {
+    const d = sanitizeDate(raw);
+    if (!d) return null;
+    const today = new Date(`${todayIso}T12:00:00`);
+    const exp = new Date(`${d}T12:00:00`);
+    if (Number.isNaN(exp.getTime())) return null;
+    return Math.round((exp.getTime() - today.getTime()) / 86400000);
+  };
+  const overdueInspections = useMemo(
+    () =>
+      (dbVehicles || [])
+        .filter(v => {
+          if (v.is_active === false) return false;
+          const d = daysUntilIso(v.next_inspection_date);
+          return d != null && d <= 30;
+        })
+        .sort((a, b) => String(a.next_inspection_date).localeCompare(String(b.next_inspection_date))),
+    [dbVehicles, todayIso]
+  );
+  const policyExpiryAlerts = useMemo(() => {
+    const rows: { id: string; plate: string; driver: string; kind: string; date: string; days: number }[] = [];
+    (dbVehicles || []).forEach(v => {
+      if (v.is_active === false) return;
+      const plate = String(v.plate_number || '').trim() || 'Plaka yok';
+      const driver = v.driver_name || 'Atanmadı';
+      const push = (kind: string, raw: any, key: string) => {
+        const days = daysUntilIso(raw);
+        if (days == null || days > 30) return;
+        rows.push({ id: `${v.id || plate}-${key}`, plate, driver, kind, date: sanitizeDate(raw), days });
+      };
+      push('Muayene', v.next_inspection_date, 'muayene');
+      push('Sigorta', v.insurance_expiry_date, 'sigorta');
+      push('Kasko', v.kasko_expiry_date, 'kasko');
+    });
+    return rows.sort((a, b) => a.days - b.days || a.plate.localeCompare(b.plate, 'tr'));
+  }, [dbVehicles, todayIso]);
+  const payableOtherDebt = totalGovernmentPaymentsDebt + totalGeneralCompanyExpensesDebt + totalEmployeeFutureDebt;
+  const creditCardPayable = (dbCreditCards || []).reduce((s, c) => s + Math.max(0, cleanNumber(c.statement_amount)), 0);
+  const payableTotalDebt = contractorPayableNow + payableOtherDebt;
+  const coverageSource = Math.round((currentRealCash + bekleyenMusteriAlacaklari) * 100) / 100;
+  const coverageLoad = Math.round((contractorPayableNow + payableOtherDebt + creditCardPayable) * 100) / 100;
+  const coverageGap = Math.round((coverageSource - coverageLoad) * 100) / 100;
+  const periodProfit = totalCollectedCash - totalPeriodPaidExpenses;
+
+  const decoratedBankByLineId = useMemo(() => {
+    const m = new Map<string, (typeof allDecoratedBankLines)[number]>();
+    allDecoratedBankLines.forEach(l => m.set(l.lineId, l));
+    return m;
+  }, [allDecoratedBankLines]);
+
+  const visibleHakedisRows = useMemo(
+    () => buildHakedisView(subSearchTerm, subStatusFilter, subSortField, subSortOrder),
+    [dbInvoices, dbAdvances, subSearchTerm, subStatusFilter, subSortField, subSortOrder]
+  );
 
   const visibleGeneralExpenses = useMemo(() => {
     const skip = ['subcontractor_invoice', 'customer_collection', 'freight_sales', 'cash_deposit', 'customer_advance', 'credit_card_payment', 'salary_payroll', 'subcontractor_paid_outflow', 'subcontractor_advance_paid', 'employee_advance_paid'];
@@ -5813,7 +5828,7 @@ export default function App() {
 
     try {
       const migrosPay = isMainMigrosName(newReceiptFormData.customerName);
-      const closeOnly = isInvoiceKind && (migrosPay || isAtifAltunisikName(newReceiptFormData.customerName));
+      const closeOnly = isInvoiceKind && migrosPay;
       if (closeOnly) {
         if (!selectedInv) {
           alert('Açık faturayı seçiniz.');
@@ -5849,7 +5864,9 @@ export default function App() {
       }
 
       alert(isInvoiceKind
-        ? `Fatura tahsil edildi. ${formatDateTR(collectedOn)} tarihinde kasaya girdi.`
+        ? (isAtifAltunisikName(newReceiptFormData.customerName)
+          ? 'Fatura tahsil edildi. Cariye yazıldı; nakit kasaya girmez.'
+          : `Fatura tahsil edildi. ${formatDateTR(collectedOn)} tarihinde kasaya girdi.`)
         : `Tahsilat ${formatDateTR(collectedOn)} tarihinde kasaya ve cariye işlendi.`);
       setIsNewReceiptModalOpen(false);
       loadPortalData();
@@ -7372,10 +7389,11 @@ export default function App() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div 
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
+                <button
+                  type="button"
                   onClick={() => { setSalesSearchQuery(''); setSalesStatusFilter('all'); setActiveTab('sales_customers'); }}
-                  className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-xs cursor-pointer hover:bg-amber-50/50 transition">
+                  className="h-[5.5rem] bg-white p-3.5 rounded-xl border border-amber-200 shadow-xs text-left hover:bg-amber-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-amber-900 flex items-center gap-1.5">
                       <PhoneCall className="w-4 h-4 text-amber-600" /> Geciken Müşteri Satışları
@@ -7385,16 +7403,17 @@ export default function App() {
                     </span>
                   </div>
                   <div className="mt-2 flex justify-between items-baseline">
-                    <span className="text-[11px] text-slate-500">Müşteriyi arayınız</span>
-                    <span className="text-base font-bold text-amber-700">
+                    <span className="text-[11px] text-slate-500">Satışlara git</span>
+                    <span className="text-base font-bold text-amber-700 tabular-nums">
                       {alertAnalysis.overdueSales.reduce((s, i) => s + cleanNumber(i.total_amount), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </span>
                   </div>
-                </div>
+                </button>
 
-                <div 
+                <button
+                  type="button"
                   onClick={() => { setExpenseStatusFilter('unpaid'); setActiveTab('general_expenses'); }}
-                  className="bg-white p-3.5 rounded-xl border border-rose-200 shadow-xs cursor-pointer hover:bg-rose-50/50 transition">
+                  className="h-[5.5rem] bg-white p-3.5 rounded-xl border border-rose-200 shadow-xs text-left hover:bg-rose-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-rose-900 flex items-center gap-1.5">
                       <AlertCircle className="w-4 h-4 text-rose-600" /> Yaklaşan tedarik borçları
@@ -7403,34 +7422,18 @@ export default function App() {
                       {alertAnalysis.pendingDebts.length} kayıt
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1">Vadesi geçmiş veya 3 gün içinde (hakediş değil)</p>
-                  <div className="mt-1 flex justify-between items-baseline">
-                    <span className="text-[11px] text-slate-500">Genel giderlere git</span>
-                    <span className="text-base font-bold text-rose-700">
+                  <div className="mt-2 flex justify-between items-baseline">
+                    <span className="text-[11px] text-slate-500">Giderlere git</span>
+                    <span className="text-base font-bold text-rose-700 tabular-nums">
                       {alertAnalysis.pendingDebts.reduce((s, i) => s + cleanNumber(i.alertAmount ?? i.total_amount), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </span>
                   </div>
-                  {alertAnalysis.pendingDebts.length > 0 && (
-                    <ul className="mt-2 space-y-1 border-t border-rose-100 pt-2">
-                      {alertAnalysis.pendingDebts.slice(0, 4).map((d: any) => (
-                        <li key={d.id || d.invoice_no} className="flex justify-between gap-2 text-[11px]">
-                          <span className="text-slate-700 truncate">
-                            {(d.invoice_no || 'Gider').replace(/^\[KK\]\s*/i, '')}
-                          </span>
-                          <span className="shrink-0 font-semibold text-rose-800">
-                            {d.diffDays < 0 ? 'geçti' : d.diffDays === 0 ? 'bugün' : `${d.diffDays} gün`}
-                            {' · '}
-                            {cleanNumber(d.alertAmount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                </button>
 
-                <div 
+                <button
+                  type="button"
                   onClick={() => setActiveTab('credit_cards')}
-                  className="bg-white p-3.5 rounded-xl border border-purple-200 shadow-xs cursor-pointer hover:bg-purple-50/50 transition">
+                  className="h-[5.5rem] bg-white p-3.5 rounded-xl border border-purple-200 shadow-xs text-left hover:bg-purple-50/50 transition">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-purple-900 flex items-center gap-1.5">
                       <CreditCard className="w-4 h-4 text-purple-600" /> Yaklaşan Kredi Kartı Ödemesi
@@ -7439,45 +7442,28 @@ export default function App() {
                       {alertAnalysis.creditCardsAlerts.length} Kart
                     </span>
                   </div>
-                  <div className="mt-2 flex flex-col">
-                    <div className="flex justify-between items-baseline">
-                      <span className="text-[11px] text-slate-500">Vadesi yaklaşan kartlar</span>
-                      <span className="text-base font-bold text-purple-700">
-                        {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.cleanStmtAmt || i.statement_amount || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                      </span>
-                    </div>
-                    {alertAnalysis.creditCardsAlerts.some((i: any) => cleanNumber(i.min_payment_amount) > 0) && (
-                      <div className="flex justify-between items-baseline mt-0.5">
-                        <span className="text-[10px] text-slate-400">Toplam Asgari Ödeme:</span>
-                        <span className="text-[11px] font-bold text-amber-600">
-                          {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.min_payment_amount || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
-                        </span>
-                      </div>
-                    )}
-                </div>
-              </div>
+                  <div className="mt-2 flex justify-between items-baseline">
+                    <span className="text-[11px] text-slate-500">Kartlara git</span>
+                    <span className="text-base font-bold text-purple-700 tabular-nums">
+                      {alertAnalysis.creditCardsAlerts.reduce((s, i) => s + cleanNumber(i.cleanStmtAmt || i.statement_amount || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                    </span>
+                  </div>
+                </button>
             </div>
 
               {plateRenewalAlerts.length > 0 && (
-    <button
+                <button
                   type="button"
                   onClick={() => setActiveTab('plate_rentals')}
-                  className="w-full flex items-center gap-3 px-3.5 py-2 bg-white rounded-xl border border-rose-200 text-left hover:bg-rose-50/60 transition"
+                  className="w-full h-10 flex items-center gap-3 px-3.5 bg-white rounded-xl border border-rose-200 text-left hover:bg-rose-50/60 transition"
                 >
                   <Tag className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span className="text-xs font-bold text-rose-950 shrink-0">Plaka yenileme</span>
-                  <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0">
+                  <span className="text-xs font-bold text-rose-950">Plaka yenileme</span>
+                  <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded-full">
                     {plateRenewalAlerts.length} araç
                   </span>
-                  <span className="text-[11px] text-rose-800 truncate flex-1">
-                    {plateRenewalAlerts.slice(0, 3).map((r: any) => {
-                      const when = r.days === 0 ? 'bugün' : (r.days < 0 ? `${Math.abs(r.days)}g geçti` : `${r.days}g`);
-                      return `${r.plate} (${when})`;
-                    }).join(' · ')}
-                    {plateRenewalAlerts.length > 3 ? ` · +${plateRenewalAlerts.length - 3}` : ''}
-                  </span>
-                  <span className="text-[11px] font-semibold text-rose-600 shrink-0 hidden sm:inline">Belge plakalarına git →</span>
-    </button>
+                  <span className="ml-auto text-[11px] font-semibold text-rose-600">Belge plakalarına git →</span>
+                </button>
               )}
         </div>
 
@@ -7505,7 +7491,7 @@ export default function App() {
                   {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Müşteri {bekleyenMusteriAlacaklari.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} + hal {Math.max(0, halCariKalanAll).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  Müşteri {bekleyenMusteriAlacaklari.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} + hal {Math.max(0, halCariKalanPending).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
           </button>
 
@@ -7519,7 +7505,7 @@ export default function App() {
                       setIsCashLedgerOpen(true);
                     }}
                     className="flex-1 text-left hover:opacity-90 transition min-w-0"
-                    title="Kasa hareketleri"
+                    title={`Nakit kasa. Banka (çekmeceye yazılmaz) +${bankaInflow.toLocaleString('tr-TR')} / −${bankaOutflow.toLocaleString('tr-TR')}`}
                   >
                     <span className="text-[11px] text-blue-100 font-semibold tracking-wider uppercase flex items-center gap-1">
                       <span className="text-sm font-black leading-none">₺</span> Güncel kasa
@@ -7528,7 +7514,7 @@ export default function App() {
                       {currentRealCash.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                     </div>
                     <span className="text-[10px] text-blue-100/90 mt-1 block truncate">
-                      {formatDateTR(cashStartDate)} açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatDateTR(cashStartDate)} nakit açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · +{cashInflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / −{cashOutflow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
           </button>
                   {isAdmin && (
@@ -7601,20 +7587,6 @@ export default function App() {
 </div>
               </div>
 
-            {(() => {
-              const isHalKasaOpen = (e: any) => /\[(AKTARIM-KASA|KASA-TAHSIL)\]/.test(String(e.notes || '')) || e.firm_name === 'Saha kasa açılışı';
-              const isHalCariOnly = (e: any) => /\[(AKTARIM-CARI|DRIVE-GIRIS|MERKEZ-TAHSIL)\]/.test(String(e.notes || ''));
-              const seferTutari = (dbHalEntries || []).reduce((s: number, e: any) => {
-                if (e.kind !== 'sefer' || isHalKasaOpen(e)) return s;
-                const bedel = cleanNumber(e.bedel);
-                return s + (e.has_vat ? Math.round(bedel * 1.2 * 100) / 100 : bedel);
-              }, 0);
-              const nakitCari = (dbHalEntries || []).filter((e: any) => !isHalKasaOpen(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
-              const nakitKasa = (dbHalEntries || []).filter((e: any) => !isHalCariOnly(e)).reduce((s: number, e: any) => s + cleanNumber(e.collected), 0);
-              const teslim = (dbHalHandovers || []).reduce((s: number, h: any) => s + cleanNumber(h.amount), 0);
-              const halCariKalan = Math.round((seferTutari - nakitCari) * 100) / 100;
-              const personelKasa = Math.round((nakitKasa - teslim) * 100) / 100;
-              return (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
                 type="button"
@@ -7625,7 +7597,7 @@ export default function App() {
                   <Building2 className="w-3.5 h-3.5" /> Hal cari kalan
                 </span>
                 <div className="text-xl font-black text-rose-800 mt-1 tabular-nums">
-                  {halCariKalan.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  {halCariKalanAll.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
                 <span className="text-[11px] text-slate-400 mt-0.5 block">Anlık hal alacağı · sefer − tahsilat</span>
               </button>
@@ -7638,13 +7610,11 @@ export default function App() {
                   <Wallet className="w-3.5 h-3.5" /> Personel kasa
                 </span>
                 <div className="text-xl font-black text-amber-950 mt-1 tabular-nums">
-                  {personelKasa.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                  {personelKasaAll.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
               </div>
                 <span className="text-[11px] text-amber-800/70 mt-0.5 block">Saha üzerindeki nakit · merkeze henüz alınmadı</span>
               </button>
             </div>
-              );
-            })()}
 
             {(() => {
               const girdi = Math.max(0, totalCollectedCash);
@@ -7710,7 +7680,7 @@ export default function App() {
                 <div className="text-xl font-bold text-rose-600 mt-1.5">
                   {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <span className="text-[11px] text-slate-400 mt-1 block">Açık hakediş − avans · hakediş listesine git</span>
+                <span className="text-[11px] text-slate-400 mt-1 block">Açık 1 nci / 2 nci ödeme · hakediş listesine git</span>
               </button>
               <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-left">
                 <span className="text-xs font-semibold text-amber-800 tracking-wider uppercase flex items-center gap-1">
@@ -7764,6 +7734,37 @@ export default function App() {
                   Seçilen ayda kasadan çıkan · ay neti {(totalCollectedCash - totalPeriodPaidExpenses).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </span>
               </button>
+
+              <div className={`md:col-span-2 p-4 rounded-2xl border shadow-sm flex items-center gap-4 ${coverageGap >= 0 ? 'bg-sky-50/50 border-sky-200' : 'bg-rose-50/50 border-rose-200'}`}>
+                <div className="min-w-0 shrink-0 pr-3 border-r border-slate-200/80">
+                  <span className={`text-xs font-semibold tracking-wider uppercase flex items-center gap-1 ${coverageGap >= 0 ? 'text-sky-800' : 'text-rose-800'}`}>
+                    <Wallet className="w-3.5 h-3.5" /> Karşılama
+                  </span>
+                  <p className={`text-sm font-bold mt-1 ${coverageGap >= 0 ? 'text-sky-900' : 'text-rose-800'}`}>
+                    {coverageGap >= 0 ? 'Karşılar' : 'Yetmez'}
+                  </p>
+                </div>
+                <div className="flex-1 grid grid-cols-3 divide-x divide-slate-200/80 min-w-0">
+                  <div className="px-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Kaynak</p>
+                    <p className="text-lg font-black tabular-nums text-slate-800 truncate">
+                      {coverageSource.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₺
+                    </p>
+                  </div>
+                  <div className="px-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Yük</p>
+                    <p className="text-lg font-black tabular-nums text-slate-800 truncate">
+                      {coverageLoad.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₺
+                    </p>
+                  </div>
+                  <div className="px-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Fark</p>
+                    <p className={`text-lg font-black tabular-nums truncate ${coverageGap >= 0 ? 'text-sky-800' : 'text-rose-700'}`}>
+                      {coverageGap >= 0 ? '+' : ''}{coverageGap.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₺
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
@@ -7771,7 +7772,7 @@ export default function App() {
                 <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                   <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-rose-600" />
-                    <h3 className="font-bold text-slate-900 text-sm">Yaklaşan Kritik Taşeron Ödemeleri</h3>
+                    <h3 className="font-bold text-slate-900 text-sm">Alt yüklenici alacakları</h3>
                   </div>
                   <button 
                     onClick={() => setActiveTab('subcontractors')}
@@ -7781,22 +7782,18 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  {[...allDecoratedBankLines]
-                    .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
-                    .filter(l => l.netAmount > 0)
-                    .slice(0, 5)
-                    .map((line) => (
-                      <div key={line.lineId} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
+                  {upcomingContractorPayables.slice(0, 5).map((row) => (
+                      <div key={row.key} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs shadow-xs">
                         <div>
-                          <span className="font-bold text-slate-900 block truncate max-w-[200px]" title={line.invoiceNo}>
-                            {line.invoiceNo}
+                          <span className="font-bold text-slate-900 block truncate max-w-[220px]" title={row.name}>
+                            {row.name}
                           </span>
-                          <span className={`text-[11px] font-semibold mt-0.5 block ${line.dueDate && new Date(sanitizeDate(line.dueDate)) < new Date() ? 'text-rose-600' : 'text-slate-500'}`}>
-                            {line.termLabel}: {formatDateTR(line.dueDate)}
+                          <span className="text-[11px] font-semibold mt-0.5 block text-slate-500">
+                            {row.openLabel}
                           </span>
                         </div>
                         <span className="font-bold text-rose-600 text-sm">
-                          {line.netAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+                          {row.amount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                         </span>
                       </div>
                     ))}
@@ -7900,7 +7897,7 @@ export default function App() {
                     {pendingReceivablesAllTime.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                   </span>
                   <span className="text-[10px] text-slate-400 block mt-0.5">
-                    Müşteri {bekleyenMusteriAlacaklari.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · hal {Math.max(0, halCariKalanAll).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    Müşteri {bekleyenMusteriAlacaklari.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · hal {Math.max(0, halCariKalanPending).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
               </div>
@@ -8313,7 +8310,7 @@ export default function App() {
                 <div className="mt-1 text-lg font-black text-rose-800">
                   {contractorPayableNow.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
                 </div>
-                <div className="text-[10px] text-rose-600/80 mt-0.5">Açık vade − avans (ana ekranla aynı)</div>
+                <div className="text-[10px] text-rose-600/80 mt-0.5">Açık 1 nci + 2 nci (ana ekranla aynı)</div>
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Listelenen fatura</div>
@@ -11707,11 +11704,11 @@ export default function App() {
             </div>
             <form onSubmit={handleSaveNewReceipt} className="mt-4 space-y-3 text-xs">
               <p className="text-[11px] text-slate-500 bg-amber-50 border border-amber-100 rounded-lg p-2">
-                {newReceiptFormData.kind === 'invoice' && (isMainMigrosName(newReceiptFormData.customerName) || isAtifAltunisikName(newReceiptFormData.customerName))
-                  ? 'Bu caride fatura yalnızca kapanır. Gelen para ayrı tahsilat kaydındadır; kasa ikinci kez yazılmaz.'
+                {newReceiptFormData.kind === 'invoice' && isMainMigrosName(newReceiptFormData.customerName)
+                  ? 'Migros: fatura kapanır. Para banka ekstresindedir; nakit kasaya yazılmaz.'
                   : newReceiptFormData.kind === 'invoice'
-                  ? 'Fatura tahsilatı: seçilen fatura kapanır, tutar kasaya ve cariye bir kez girer.'
-                  : 'Gelen her para tahsilattır. Açıklama boşsa kayıt tahsilat olur; avans notu gerekirse açıklamaya yazın.'}
+                  ? 'Fatura tahsilatı: seçilen fatura kapanır, tutar cariye girer. Nakit tahsilat kasaya, banka/Migros kasaya yazılmaz.'
+                  : 'Gelen her para tahsilattır. Açıklama boşsa kayıt tahsilat olur; fazla ödeme cariyi eksi bırakır.'}
               </p>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">Kayıt türü</label>
@@ -11804,7 +11801,7 @@ export default function App() {
               </div>
               <div className="pt-2 flex gap-3">
                 <button type="button" onClick={() => setIsNewReceiptModalOpen(false)} className="w-1/2 py-2 rounded-lg border border-slate-200">İptal</button>
-                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-medium">{newReceiptFormData.kind === 'invoice' && (isMainMigrosName(newReceiptFormData.customerName) || isAtifAltunisikName(newReceiptFormData.customerName)) ? 'Faturayı kapat' : newReceiptFormData.kind === 'invoice' ? 'Tahsil et' : 'Tahsilatı kaydet'}</button>
+                <button type="submit" className="w-1/2 py-2 rounded-lg bg-emerald-600 text-white font-medium">{newReceiptFormData.kind === 'invoice' && isMainMigrosName(newReceiptFormData.customerName) ? 'Faturayı kapat' : newReceiptFormData.kind === 'invoice' ? 'Tahsil et' : 'Tahsilatı kaydet'}</button>
               </div>
             </form>
           </div>
@@ -11817,7 +11814,7 @@ export default function App() {
             <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-lg">Kasa / banka hareketleri</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{formatDateTR(cashStartDate)} açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺. Sonrası giriş eklenir, çıkış düşer.</p>
+                <p className="text-xs text-slate-500 mt-0.5">{formatDateTR(cashStartDate)} nakit açılış {cashBookOpening.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺. Banka satırları görünür, nakit bakiyeyi değiştirmez.</p>
               </div>
               <div className="flex items-center gap-2">
                 <label className="text-[11px] font-semibold text-slate-500">Başlangıç
@@ -11829,22 +11826,30 @@ export default function App() {
                 <button onClick={() => setIsCashLedgerOpen(false)} className="p-1.5 text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
               </div>
             </div>
-            <div className="px-5 py-3 grid grid-cols-2 sm:grid-cols-4 gap-2 border-b border-slate-100">
+            <div className="px-5 py-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 border-b border-slate-100">
               <div className="bg-slate-50 rounded-xl p-3">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Dönem başı</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Nakit dönem başı</span>
                 <span className="text-sm font-black text-slate-800">{cashLedgerView.startBal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-emerald-50 rounded-xl p-3">
-                <span className="text-[10px] font-bold text-emerald-600 uppercase block">Giriş</span>
+                <span className="text-[10px] font-bold text-emerald-600 uppercase block">Nakit giriş</span>
                 <span className="text-sm font-black text-emerald-700">+{cashLedgerView.periodIn.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-rose-50 rounded-xl p-3">
-                <span className="text-[10px] font-bold text-rose-600 uppercase block">Çıkış</span>
+                <span className="text-[10px] font-bold text-rose-600 uppercase block">Nakit çıkış</span>
                 <span className="text-sm font-black text-rose-700">−{cashLedgerView.periodOut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
               <div className="bg-blue-50 rounded-xl p-3">
-                <span className="text-[10px] font-bold text-blue-600 uppercase block">Dönem sonu</span>
+                <span className="text-[10px] font-bold text-blue-600 uppercase block">Nakit dönem sonu</span>
                 <span className="text-sm font-black text-blue-800">{cashLedgerView.endBal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-slate-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Banka giriş</span>
+                <span className="text-sm font-black text-slate-800">+{cashLedgerView.periodBankIn.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
+              </div>
+              <div className="bg-slate-50 rounded-xl p-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Banka çıkış</span>
+                <span className="text-sm font-black text-slate-800">−{cashLedgerView.periodBankOut.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</span>
               </div>
             </div>
             <div className="overflow-auto flex-1 p-5">
